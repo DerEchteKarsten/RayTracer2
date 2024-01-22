@@ -1,0 +1,1930 @@
+use std::{
+    borrow::BorrowMut,
+    ffi::{c_char, CStr},
+    mem::{align_of, size_of, size_of_val},
+    num,
+    ops::Sub,
+    os::raw::c_void,
+};
+
+use anyhow::Result;
+use ash::{
+    extensions::ext::DebugUtils,
+    extensions::khr,
+    vk::{self, FramebufferMixedSamplesCombinationNV},
+    Device, Entry, Instance,
+};
+use gpu_allocator::{
+    vulkan::{Allocation, AllocationCreateDesc, Allocator, AllocatorCreateDesc},
+    AllocatorDebugSettings, MemoryLocation,
+};
+use image::{GenericImageView, DynamicImage};
+use raw_window_handle::{RawDisplayHandle, RawWindowHandle};
+use simple_logger::SimpleLogger;
+use std::slice::from_ref;
+use winit::dpi::PhysicalSize;
+
+pub const FRAMES_IN_FLIGHT: u32 = 2;
+
+pub struct Context {
+    pub allocator: Allocator,
+    pub command_pool: vk::CommandPool,
+    pub ray_tracing: RayTracingContext,
+    pub graphics_queue: vk::Queue,
+    pub present_queue: vk::Queue,
+    pub device: ash::Device,
+    pub present_queue_family: QueueFamily,
+    pub graphics_queue_family: QueueFamily,
+    pub physical_device: PhysicalDevice,
+    pub ash_surface: khr::Surface,
+    pub vk_surface: vk::SurfaceKHR,
+    pub instance: Instance,
+    pub frames_in_flight: Vec<Frame>,
+    pub swapchain: Swapchain,
+    pub frame: u64,
+    pub cmd_buffs: Vec<vk::CommandBuffer>,
+    pub storage_images: Vec<(Image, vk::ImageView)>,
+    _entry: Entry,
+}
+
+impl Context {
+    pub fn new(
+        window_handle: RawWindowHandle,
+        display_handle: RawDisplayHandle,
+        app_name: &str,
+        required_extensions: &[&str],
+        required_device_features: DeviceFeatures,
+        window_size: PhysicalSize<u32>,
+    ) -> Result<Self> {
+        SimpleLogger::default().env().init().unwrap();
+        let entry = unsafe { Entry::load()? };
+
+        let app_info = vk::ApplicationInfo::builder().api_version(vk::API_VERSION_1_3);
+
+        let layer_names = unsafe {
+            [CStr::from_bytes_with_nul_unchecked(
+                b"VK_LAYER_KHRONOS_validation\0",
+            )]
+        };
+
+        let layers_names_raw: Vec<*const c_char> = layer_names
+            .iter()
+            .map(|raw_name| raw_name.as_ptr())
+            .collect();
+
+        let mut instance_extensions = ash_window::enumerate_required_extensions(display_handle)
+            .unwrap()
+            .to_vec();
+
+        //#[cfg(debug_assertions)]
+        instance_extensions.push(DebugUtils::name().as_ptr());
+
+        let mut validation_features = vk::ValidationFeaturesEXT::builder()
+            .enabled_validation_features(&[vk::ValidationFeatureEnableEXT::DEBUG_PRINTF])
+            .build();
+
+        let mut instance_info = vk::InstanceCreateInfo::builder()
+            .application_info(&app_info)
+            .enabled_extension_names(&instance_extensions);
+
+        //#[cfg(debug_assertions)]
+        {
+            instance_info = instance_info
+                .enabled_layer_names(&layers_names_raw)
+                .push_next(&mut validation_features);
+        }
+        
+
+        let mut instance = unsafe { entry.create_instance(&instance_info, None)? };
+
+        //#[cfg(debug_assertions)]
+        {
+            let debug_info = vk::DebugUtilsMessengerCreateInfoEXT::builder()
+                .message_severity(
+                    vk::DebugUtilsMessageSeverityFlagsEXT::ERROR
+                        | vk::DebugUtilsMessageSeverityFlagsEXT::WARNING
+                        | vk::DebugUtilsMessageSeverityFlagsEXT::INFO
+                        | vk::DebugUtilsMessageSeverityFlagsEXT::VERBOSE,
+                )
+                .message_type(
+                    vk::DebugUtilsMessageTypeFlagsEXT::GENERAL
+                        | vk::DebugUtilsMessageTypeFlagsEXT::VALIDATION
+                        | vk::DebugUtilsMessageTypeFlagsEXT::PERFORMANCE
+                        | vk::DebugUtilsMessageTypeFlagsEXT::DEVICE_ADDRESS_BINDING,
+                )
+                .pfn_user_callback(Some(vulkan_debug_callback));
+            let debug_utils_loader = DebugUtils::new(&entry, &instance);
+            let debug_call_back = unsafe {
+                debug_utils_loader
+                    .create_debug_utils_messenger(&debug_info, None)
+                    .unwrap()
+            };
+        }
+        let vk_surface = unsafe {
+            ash_window::create_surface(&entry, &instance, display_handle, window_handle, None)
+        }
+        .unwrap();
+        let ash_surface = khr::Surface::new(&entry, &instance);
+
+        let physical_devices =
+            unsafe { enumerate_physical_devices(&instance, &ash_surface, &vk_surface)? };
+        let (physical_device, graphics_queue_family, present_queue_family) =
+            select_suitable_physical_device(
+                physical_devices.as_slice(),
+                required_extensions,
+                &required_device_features,
+            )?;
+
+        let queue_families = [&graphics_queue_family, &present_queue_family];
+
+        let device = new_device(
+            &instance,
+            &physical_device,
+            &queue_families,
+            required_extensions,
+        )?;
+
+        let graphics_queue = get_queue(&device, &graphics_queue_family, 0);
+        let present_queue = get_queue(&device, &present_queue_family, 0);
+
+        let ray_tracing = {
+            let ray_tracing = RayTracingContext::new(&instance, &physical_device.handel, &device);
+            ray_tracing
+        };
+
+        let command_pool = new_command_pool(
+            &device,
+            &graphics_queue_family,
+            Some(
+                vk::CommandPoolCreateFlags::TRANSIENT
+                    | vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER,
+            ),
+        )?;
+
+        let mut allocator = Allocator::new(&AllocatorCreateDesc {
+            instance: instance.clone(),
+            device: device.clone(),
+            physical_device: physical_device.handel,
+            debug_settings: AllocatorDebugSettings {
+                log_allocations: false,
+                log_frees: false,
+                log_leaks_on_shutdown: false,
+                log_memory_information: false,
+                ..Default::default()
+            },
+            buffer_device_address: true,
+        })?;
+
+        let swapchain = Swapchain::new(
+            &instance,
+            &device,
+            vk_surface,
+            &ash_surface,
+            &physical_device,
+            window_size.width,
+            window_size.height,
+            &present_queue_family,
+            &graphics_queue_family,
+        )?;
+
+        let mut frames_in_flight = Vec::with_capacity(FRAMES_IN_FLIGHT as usize);
+        for _ in 0..FRAMES_IN_FLIGHT {
+            frames_in_flight.push(Frame::new(&device)?);
+        }
+        let mut cmd_buffs = Vec::with_capacity(swapchain.images.len());
+        let mut storage_images = Vec::with_capacity(swapchain.images.len());
+        for _ in &swapchain.images {
+            cmd_buffs.push(allocate_command_buffer(
+                &device,
+                &command_pool,
+                vk::CommandBufferLevel::PRIMARY,
+            )?);
+            let image = Image::new_2d(
+                &device,
+                &mut allocator,
+                vk::ImageUsageFlags::TRANSFER_SRC | vk::ImageUsageFlags::STORAGE,
+                MemoryLocation::GpuOnly,
+                swapchain.format,
+                swapchain.extent.width,
+                swapchain.extent.height,
+            )?;
+
+            let cmd = allocate_command_buffer(&device, &command_pool, vk::CommandBufferLevel::PRIMARY)?;
+
+            let barrier = vk::ImageMemoryBarrier2::builder()
+                .src_stage_mask(vk::PipelineStageFlags2::TOP_OF_PIPE)
+                .src_access_mask(vk::AccessFlags2::NONE)
+                .old_layout(vk::ImageLayout::UNDEFINED)
+                .dst_stage_mask(vk::PipelineStageFlags2::BOTTOM_OF_PIPE)
+                .dst_access_mask(vk::AccessFlags2::NONE)
+                .new_layout(vk::ImageLayout::GENERAL)
+                .image(image.inner)
+                .subresource_range(vk::ImageSubresourceRange {
+                    aspect_mask: vk::ImageAspectFlags::COLOR,
+                    base_mip_level: 0,
+                    level_count: 1,
+                    base_array_layer: 0,
+                    layer_count: 1,
+                })
+                .build();
+            unsafe { device.begin_command_buffer(cmd, &vk::CommandBufferBeginInfo::builder().flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT).build())? };
+            unsafe { device.cmd_pipeline_barrier2(cmd, &vk::DependencyInfo::builder().image_memory_barriers(&[barrier]).build()) };
+            unsafe { device.end_command_buffer(cmd)? };
+
+            let fence = Fence { handel: unsafe { device.create_fence(&vk::FenceCreateInfo::builder().build(), None)? } };
+            queue_submit(
+                &device,
+                &graphics_queue,
+                &cmd,
+                None,
+                None,
+                &fence,
+            )?;
+            fence.wait(&device, None)?;
+    
+            free_command_buffer(&command_pool, &device, cmd)?;
+
+            let view = create_image_view(&device, &image, &swapchain.format);
+
+            storage_images.push((image, view))
+        }
+
+        Ok(Self {
+            frame: 0,
+            allocator,
+            command_pool,
+            ray_tracing,
+            present_queue,
+            graphics_queue,
+            device,
+            present_queue_family,
+            graphics_queue_family,
+            physical_device,
+            vk_surface,
+            ash_surface,
+            instance,
+            frames_in_flight,
+            swapchain,
+            cmd_buffs,
+            storage_images,
+            _entry: entry,
+        })
+    }
+
+    pub fn copy_buffer_to_image(
+        &self,
+        cmd: &vk::CommandBuffer,
+        src: &Buffer,
+        dst: &Image,
+        layout: vk::ImageLayout,
+    ) {
+        let region = vk::BufferImageCopy::builder()
+            .image_subresource(vk::ImageSubresourceLayers {
+                aspect_mask: vk::ImageAspectFlags::COLOR,
+                mip_level: 0,
+                base_array_layer: 0,
+                layer_count: 1,
+            })
+            .image_extent(dst.extent);
+
+        unsafe {
+            self.device.cmd_copy_buffer_to_image(
+                *cmd,
+                src.inner,
+                dst.inner,
+                layout,
+                std::slice::from_ref(&region),
+            );
+        };
+    }
+
+    pub fn create_gpu_only_buffer_from_data_with_size<T: Copy>(
+        &mut self,
+        usage: vk::BufferUsageFlags,
+        data: &[T],
+        size: u64,
+        name: Option<&str>,
+    ) -> Result<Buffer> {
+        let staging_buffer = self.create_buffer(
+            vk::BufferUsageFlags::TRANSFER_SRC,
+            MemoryLocation::CpuToGpu,
+            size,
+            Some(format!("Staging Buffer for: {}", name.unwrap_or("Buffer")).as_str()),
+        )?;
+        staging_buffer.copy_data_to_buffer(data)?;
+
+        let buffer = self.create_buffer(
+            usage | vk::BufferUsageFlags::TRANSFER_DST,
+            MemoryLocation::GpuOnly,
+            size,
+            name,
+        )?;
+
+        self.execute_one_time_commands(|cmd_buffer| {
+            copy_buffer(&self.device, cmd_buffer, &staging_buffer, &buffer);
+        })?;
+
+        Ok(buffer)
+    }
+
+    pub fn create_gpu_only_buffer_from_data<T: Copy>(
+        &mut self,
+        usage: vk::BufferUsageFlags,
+        data: &[T],
+        name: Option<&str>,
+    ) -> Result<Buffer> {
+        let size = size_of_val(data) as _;
+        self.create_gpu_only_buffer_from_data_with_size(usage, data, size, name)
+    }
+
+    pub fn execute_one_time_commands<R, F: FnOnce(&vk::CommandBuffer) -> R>(
+        &self,
+        executor: F,
+    ) -> Result<R> {
+        let command_buffer = unsafe {
+            self.device.allocate_command_buffers(
+                &vk::CommandBufferAllocateInfo::builder()
+                    .command_buffer_count(1)
+                    .level(vk::CommandBufferLevel::PRIMARY)
+                    .command_pool(self.command_pool)
+                    .build(),
+            )?
+        }[0];
+
+        begin_command_buffer(
+            &command_buffer,
+            &self.device,
+            Some(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT),
+        )?;
+
+        let executor_result = executor(&command_buffer);
+
+        unsafe { self.device.end_command_buffer(command_buffer)? };
+
+        let fence = self.create_fence(None)?;
+        queue_submit(
+            &self.device,
+            &self.graphics_queue,
+            &command_buffer,
+            None,
+            None,
+            &fence,
+        )?;
+        fence.wait(&self.device, None)?;
+
+        free_command_buffer(&self.command_pool, &self.device, command_buffer)?;
+
+        Ok(executor_result)
+    }
+
+    pub fn create_fence(&self, flags: Option<vk::FenceCreateFlags>) -> Result<Fence> {
+        Fence::new(&self.device, flags)
+    }
+
+    pub fn create_image(
+        &mut self,
+        usage: vk::ImageUsageFlags,
+        memory_location: MemoryLocation,
+        format: vk::Format,
+        width: u32,
+        height: u32,
+    ) -> Result<Image> {
+        Image::new_2d(
+            &self.device,
+            &mut self.allocator,
+            usage,
+            memory_location,
+            format,
+            width,
+            height,
+        )
+    }
+
+    pub fn create_image_view(&self, image: &Image) -> Result<vk::ImageView> {
+        let view_info = vk::ImageViewCreateInfo::builder()
+            .image(image.inner)
+            .view_type(vk::ImageViewType::TYPE_2D)
+            .format(image.format)
+            .subresource_range(vk::ImageSubresourceRange {
+                aspect_mask: vk::ImageAspectFlags::COLOR,
+                base_mip_level: 0,
+                level_count: 1,
+                base_array_layer: 0,
+                layer_count: 1,
+            });
+
+        let res = unsafe { self.device.create_image_view(&view_info, None)? };
+
+        Ok(res)
+    }
+
+    pub fn create_descriptor_set_layout(
+        &self,
+        bindings: &[vk::DescriptorSetLayoutBinding],
+        flags: &[vk::DescriptorBindingFlags],
+    ) -> Result<vk::DescriptorSetLayout> {
+        create_descriptor_set_layout(&self.device, bindings, flags)
+    }
+
+    pub fn create_descriptor_pool(
+        &self,
+        max_sets: u32,
+        pool_sizes: &[vk::DescriptorPoolSize],
+    ) -> Result<vk::DescriptorPool> {
+        create_descriptor_pool(&self.device, max_sets, pool_sizes)
+    }
+
+    pub fn create_shader_binding_table(
+        &mut self,
+        pipeline: &RayTracingPipeline,
+    ) -> Result<ShaderBindingTable> {
+        ShaderBindingTable::new(self, pipeline)
+    }
+
+    pub fn create_shader_module(&self, code_path: String) -> vk::ShaderModule {
+        let mut code = std::fs::File::open(code_path).unwrap();
+        let decoded_code = ash::util::read_spv(&mut code).unwrap();
+        let create_info = vk::ShaderModuleCreateInfo::builder().code(&decoded_code);
+
+        unsafe { self.device.create_shader_module(&create_info, None) }.unwrap()
+    }
+
+    pub fn create_shader_stage(
+        &self,
+        stage: vk::ShaderStageFlags,
+        path: String,
+    ) -> (vk::PipelineShaderStageCreateInfo, vk::ShaderModule) {
+        let module = self.create_shader_module(path);
+        (
+            vk::PipelineShaderStageCreateInfo::builder()
+                .stage(stage)
+                .module(module)
+                .name(CStr::from_bytes_with_nul("main\0".as_bytes()).unwrap())
+                .build(),
+            module,
+        )
+    }
+
+    pub fn render<F>(&self, func: F) -> Result<u64>
+    where
+        F: FnOnce(u32),
+    {
+        let frame_index = (self.frame + 1) % FRAMES_IN_FLIGHT as u64;
+        let frame = &self.frames_in_flight[frame_index as usize];
+        frame.fence.wait(&self.device, None)?;
+
+        let image_index = unsafe {
+            self.swapchain.ash_swapchain.acquire_next_image(
+                self.swapchain.vk_swapchain,
+                u64::MAX,
+                frame.image_available,
+                vk::Fence::null(),
+            )
+        }
+        .unwrap()
+        .0;
+
+        let cmd = &self.cmd_buffs[image_index as usize];
+
+        begin_command_buffer(cmd, &self.device, None)?;
+
+        func(image_index);
+
+        unsafe { self.device.end_command_buffer(*cmd) }.unwrap();
+        let submit_info = vk::SubmitInfo2::builder()
+            .wait_semaphore_infos(from_ref(
+                &vk::SemaphoreSubmitInfo::builder()
+                    .stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT_KHR)
+                    .semaphore(frame.image_available)
+                    .build(),
+            ))
+            .command_buffer_infos(from_ref(
+                &vk::CommandBufferSubmitInfo::builder()
+                    .command_buffer(*cmd)
+                    .build(),
+            ))
+            .signal_semaphore_infos(from_ref(
+                &vk::SemaphoreSubmitInfo::builder()
+                    .stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS_KHR)
+                    .semaphore(frame.render_finished)
+                    .build(),
+            ))
+            .build();
+
+        unsafe {
+            frame.fence.reset(&self.device)?;
+            self.device
+                .queue_submit2(self.graphics_queue, &[submit_info], frame.fence.handel)?;
+        };
+
+        let rf = &[frame.render_finished];
+        let sc = &[self.swapchain.vk_swapchain];
+        let image_indices = vec![image_index];
+        let present_info = vk::PresentInfoKHR::builder()
+            .wait_semaphores(rf)
+            .swapchains(sc)
+            .image_indices(&image_indices);
+
+        let suboptimal = unsafe {
+            self.swapchain
+                .ash_swapchain
+                .queue_present(self.graphics_queue, &present_info)
+                .unwrap()
+        };
+        if suboptimal {
+            println!("suboptimal");
+        }
+
+        Ok(frame_index)
+    }
+
+    pub fn pipeline_image_barriers(&self, cmd: &vk::CommandBuffer, barriers: &[ImageBarrier]) {
+        let barriers = barriers
+            .iter()
+            .map(|b| {
+                vk::ImageMemoryBarrier2::builder()
+                    .src_stage_mask(b.src_stage_mask)
+                    .src_access_mask(b.src_access_mask)
+                    .old_layout(b.old_layout)
+                    .dst_stage_mask(b.dst_stage_mask)
+                    .dst_access_mask(b.dst_access_mask)
+                    .new_layout(b.new_layout)
+                    .image(b.image.inner)
+                    .subresource_range(vk::ImageSubresourceRange {
+                        aspect_mask: vk::ImageAspectFlags::COLOR,
+                        base_mip_level: 0,
+                        level_count: b.image.mip_levls,
+                        base_array_layer: 0,
+                        layer_count: 1,
+                    })
+                    .build()
+            })
+            .collect::<Vec<_>>();
+
+        let dependency_info = vk::DependencyInfo::builder().image_memory_barriers(&barriers);
+
+        unsafe { self.device.cmd_pipeline_barrier2(*cmd, &dependency_info) };
+    }
+
+    pub fn copy_image(
+        &self,
+        cmd: &vk::CommandBuffer,
+        src_image: &Image,
+        src_layout: vk::ImageLayout,
+        dst_image: &Image,
+        dst_layout: vk::ImageLayout,
+    ) {
+        let region = vk::ImageCopy::builder()
+            .src_subresource(vk::ImageSubresourceLayers {
+                aspect_mask: vk::ImageAspectFlags::COLOR,
+                base_array_layer: 0,
+                mip_level: 0,
+                layer_count: 1,
+            })
+            .dst_subresource(vk::ImageSubresourceLayers {
+                aspect_mask: vk::ImageAspectFlags::COLOR,
+                base_array_layer: 0,
+                mip_level: 0,
+                layer_count: 1,
+            })
+            .extent(vk::Extent3D {
+                width: src_image.extent.width,
+                height: src_image.extent.height,
+                depth: 1,
+            });
+
+        unsafe {
+            self.device.cmd_copy_image(
+                *cmd,
+                src_image.inner,
+                src_layout,
+                dst_image.inner,
+                dst_layout,
+                std::slice::from_ref(&region),
+            )
+        };
+    }
+
+    pub fn destroy(&self) {
+        unsafe {
+            self.device.device_wait_idle().unwrap();
+            self.device.destroy_device(None);
+            self.instance.destroy_instance(None);
+            todo!();
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct ImageBarrier<'a> {
+    pub image: &'a Image,
+    pub old_layout: vk::ImageLayout,
+    pub new_layout: vk::ImageLayout,
+    pub src_access_mask: vk::AccessFlags2,
+    pub dst_access_mask: vk::AccessFlags2,
+    pub src_stage_mask: vk::PipelineStageFlags2,
+    pub dst_stage_mask: vk::PipelineStageFlags2,
+}
+
+pub fn create_descriptor_set_layout(
+    device: &Device,
+    bindings: &[vk::DescriptorSetLayoutBinding],
+    flags: &[vk::DescriptorBindingFlags],
+) -> Result<vk::DescriptorSetLayout> {
+    let mut dsl_info = vk::DescriptorSetLayoutCreateInfo::builder().bindings(bindings);
+
+    let mut info = vk::DescriptorSetLayoutBindingFlagsCreateInfo::builder().binding_flags(flags);
+    dsl_info = dsl_info.push_next(&mut info);
+
+    let res = unsafe { device.create_descriptor_set_layout(&dsl_info, None)? };
+
+    Ok(res)
+}
+
+pub fn create_descriptor_pool(
+    device: &Device,
+    max_sets: u32,
+    pool_sizes: &[vk::DescriptorPoolSize],
+) -> Result<vk::DescriptorPool> {
+    let pool_info = vk::DescriptorPoolCreateInfo::builder()
+        .max_sets(max_sets)
+        .pool_sizes(pool_sizes);
+    let res = unsafe { device.create_descriptor_pool(&pool_info, None)? };
+
+    Ok(res)
+}
+
+pub fn allocate_descriptor_sets(
+    device: &Device,
+    pool: &vk::DescriptorPool,
+    layout: &vk::DescriptorSetLayout,
+    count: u32,
+) -> Result<Vec<vk::DescriptorSet>> {
+    let layouts = (0..count).map(|_| *layout).collect::<Vec<_>>();
+
+    let sets_alloc_info = vk::DescriptorSetAllocateInfo::builder()
+        .descriptor_pool(*pool)
+        .set_layouts(&layouts);
+    let res = unsafe { device.allocate_descriptor_sets(&sets_alloc_info)? };
+    Ok(res)
+}
+
+pub fn allocate_descriptor_set(
+    device: &Device,
+    pool: &vk::DescriptorPool,
+    layout: &vk::DescriptorSetLayout,
+) -> Result<vk::DescriptorSet> {
+    Ok(allocate_descriptor_sets(device, pool, layout, 1)?
+        .into_iter()
+        .next()
+        .unwrap())
+}
+
+pub fn update_descriptor_set_buffer(
+    ctx: &mut Context,
+    set: &vk::DescriptorSet,
+    buffer: &Buffer,
+    binding: u32,
+) {
+    // let mut data = vec![];
+    // for _ in 0..1003213 {
+    //     data.push(1 as u32);
+    // }
+    // let test_buffer = ctx.create_gpu_only_buffer_from_data::<u32>(vk::BufferUsageFlags::STORAGE_BUFFER, data.as_slice(), Some("TEst Buffer")).unwrap();
+    // log::debug!("{:?}, {:?}", test_buffer, buffer);
+    let buffer_info = vk::DescriptorBufferInfo::builder()
+        .buffer(buffer.inner)
+        .range(vk::WHOLE_SIZE)
+        .build();
+
+    let write = vk::WriteDescriptorSet::builder()
+        .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+        .dst_binding(binding)
+        .dst_set(set.clone())
+        .buffer_info(from_ref(&buffer_info))
+        .build();
+
+    unsafe { ctx.device.update_descriptor_sets(&[write], &[]) };
+}
+
+pub fn update_descriptor_sets(
+    ctx: &mut Context,
+    set: &vk::DescriptorSet,
+    writes: &[WriteDescriptorSet],
+) {
+    use WriteDescriptorSetKind::*;
+
+    let mut descriptor_writes = vec![];
+    let mut image_infos = vec![];
+    let mut buffer_infos = vec![];
+
+    for w in writes {
+        match w.kind {
+            StorageImage { view, layout } => {
+                let img_info = vk::DescriptorImageInfo::builder()
+                    .image_view(view.clone())
+                    .image_layout(layout)
+                    .build();
+
+                descriptor_writes.push(
+                    vk::WriteDescriptorSet::builder()
+                        .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
+                        .dst_binding(w.binding)
+                        .dst_set(set.clone())
+                        .image_info(&[img_info])
+                        .build(),
+                );
+            }
+            AccelerationStructure {
+                acceleration_structure,
+            } => {
+                let mut write_set_as = vk::WriteDescriptorSetAccelerationStructureKHR::builder()
+                    .acceleration_structures(std::slice::from_ref(&acceleration_structure));
+
+                let mut write = vk::WriteDescriptorSet::builder()
+                    .descriptor_type(vk::DescriptorType::ACCELERATION_STRUCTURE_KHR)
+                    .dst_binding(w.binding)
+                    .dst_set(set.clone())
+                    .push_next(write_set_as.borrow_mut())
+                    .build();
+                write.descriptor_count = 1;
+
+                descriptor_writes.push(write);
+            }
+            UniformBuffer { buffer } => {
+                let buffer_info = vk::DescriptorBufferInfo::builder()
+                    .buffer(buffer.inner)
+                    .range(vk::WHOLE_SIZE)
+                    .build();
+
+                descriptor_writes.push(
+                    vk::WriteDescriptorSet::builder()
+                        .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+                        .dst_binding(w.binding)
+                        .dst_set(set.clone())
+                        .buffer_info(&[buffer_info])
+                        .build(),
+                );
+                buffer_infos.push(buffer_info);
+            }
+            CombinedImageSampler {
+                view,
+                sampler,
+                layout,
+            } => {
+                let img_info = vk::DescriptorImageInfo::builder()
+                    .image_view(view.clone())
+                    .sampler(sampler.clone())
+                    .image_layout(layout);
+
+                descriptor_writes.push(
+                    vk::WriteDescriptorSet::builder()
+                        .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                        .dst_binding(w.binding)
+                        .dst_set(set.clone())
+                        .image_info(from_ref(&img_info))
+                        .build(),
+                );
+                image_infos.push(img_info);
+            }
+        }
+    }
+
+    unsafe { ctx.device.update_descriptor_sets(&descriptor_writes, &[]) };
+}
+
+#[derive(Clone, Copy)]
+pub struct WriteDescriptorSet<'a> {
+    pub binding: u32,
+    pub kind: WriteDescriptorSetKind<'a>,
+}
+
+#[derive(Clone, Copy)]
+pub enum WriteDescriptorSetKind<'a> {
+    StorageImage {
+        view: &'a vk::ImageView,
+        layout: vk::ImageLayout,
+    },
+    AccelerationStructure {
+        acceleration_structure: &'a vk::AccelerationStructureKHR,
+    },
+    UniformBuffer {
+        buffer: &'a Buffer,
+    },
+    CombinedImageSampler {
+        view: &'a vk::ImageView,
+        sampler: &'a vk::Sampler,
+        layout: vk::ImageLayout,
+    },
+}
+
+#[derive(Debug)]
+pub struct Image {
+    pub inner: vk::Image,
+    pub allocation: Option<Allocation>,
+    pub format: vk::Format,
+    pub extent: vk::Extent3D,
+    pub mip_levls: u32,
+}
+
+impl Image {
+    pub(crate) fn from_swapchain_image(
+        swapchain_image: vk::Image,
+        format: vk::Format,
+        extent: vk::Extent2D,
+    ) -> Self {
+        let extent = vk::Extent3D {
+            width: extent.width,
+            height: extent.height,
+            depth: 1,
+        };
+
+        Self {
+            inner: swapchain_image,
+            allocation: None,
+            format,
+            extent,
+            mip_levls: 1,
+        }
+    }
+
+    pub(crate) fn new_2d(
+        device: &Device,
+        allocator: &mut Allocator,
+        usage: vk::ImageUsageFlags,
+        memory_location: MemoryLocation,
+        format: vk::Format,
+        width: u32,
+        height: u32,
+    ) -> Result<Self> {
+        let extent = vk::Extent3D {
+            width,
+            height,
+            depth: 1,
+        };
+
+        let image_info = vk::ImageCreateInfo::builder()
+            .image_type(vk::ImageType::TYPE_2D)
+            .format(format)
+            .extent(extent)
+            .mip_levels(1)
+            .array_layers(1)
+            .samples(vk::SampleCountFlags::TYPE_1)
+            .tiling(vk::ImageTiling::OPTIMAL)
+            .usage(usage)
+            .initial_layout(vk::ImageLayout::UNDEFINED);
+
+        let inner = unsafe { device.create_image(&image_info, None)? };
+        let requirements = unsafe { device.get_image_memory_requirements(inner) };
+
+        let allocation = allocator.allocate(&AllocationCreateDesc {
+            name: "image",
+            requirements,
+            location: memory_location,
+            linear: true,
+        })?;
+
+        unsafe { device.bind_image_memory(inner, allocation.memory(), allocation.offset())? };
+
+        Ok(Self {
+            inner,
+            allocation: Some(allocation),
+            format,
+            extent,
+            mip_levls: 1,
+        })
+    }
+
+    pub fn new_from_data(ctx: &mut Context, image: DynamicImage) -> Result<(Self, vk::ImageView)> {
+        let (width, height) = image.dimensions();
+        let image_extent = vk::Extent2D { width, height };
+        let image_data = image.to_rgba8();
+        let image_data_raw = image_data.as_raw();
+
+        let image_buffer = ctx.create_buffer(
+            vk::BufferUsageFlags::TRANSFER_SRC,
+            MemoryLocation::CpuToGpu,
+            (size_of::<u8>() * image_data.len()) as u64,
+            Some("image buffer"),
+        )?;
+
+        image_buffer.copy_data_to_buffer(image_data_raw.as_slice())?;
+
+        log::debug!("TODO: Mip Levels");
+
+        let texture_image = Self::new_2d(
+            &ctx.device,
+            &mut ctx.allocator,
+            vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::SAMPLED,
+            MemoryLocation::GpuOnly,
+            vk::Format::R8G8B8A8_SRGB,
+            width,
+            height,
+        )?;
+
+        ctx.execute_one_time_commands(|cmd| {
+            let texture_barrier = ImageBarrier {
+                src_access_mask: vk::AccessFlags2::NONE,
+                src_stage_mask: vk::PipelineStageFlags2::TOP_OF_PIPE,
+                dst_access_mask: vk::AccessFlags2::TRANSFER_WRITE,
+                dst_stage_mask: vk::PipelineStageFlags2::TRANSFER_KHR,
+                old_layout: vk::ImageLayout::UNDEFINED,
+                new_layout: vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                image: &texture_image,
+            };
+            ctx.pipeline_image_barriers(cmd, &[texture_barrier]);
+
+            ctx.copy_buffer_to_image(
+                cmd,
+                &image_buffer,
+                &texture_image,
+                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+            );
+
+            let texture_barrier_end = ImageBarrier {
+                src_access_mask: vk::AccessFlags2::TRANSFER_WRITE,
+                src_stage_mask: vk::PipelineStageFlags2::TRANSFER_KHR,
+                dst_access_mask: vk::AccessFlags2::SHADER_READ,
+                dst_stage_mask: vk::PipelineStageFlags2::RAY_TRACING_SHADER_KHR,
+                old_layout: vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                new_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                image: &texture_image,
+            };
+            ctx.pipeline_image_barriers(cmd, &[texture_barrier_end]);
+        })?;
+
+        let image_view = create_image_view(&ctx.device, &texture_image, &vk::Format::R8G8B8A8_SRGB);
+        Ok((
+            Self {
+                allocation: texture_image.allocation,
+                extent: vk::Extent3D {
+                    width,
+                    depth: 1,
+                    height,
+                },
+                format: vk::Format::R8G8B8A8_SRGB,
+                inner: texture_image.inner,
+                mip_levls: 1,
+            },
+            image_view,
+        ))
+    }
+}
+
+fn copy_buffer(device: &Device, cmd: &vk::CommandBuffer, src_buffer: &Buffer, dst_buffer: &Buffer) {
+    unsafe {
+        let region = vk::BufferCopy::builder().size(src_buffer.size);
+        device.cmd_copy_buffer(
+            *cmd,
+            src_buffer.inner,
+            dst_buffer.inner,
+            std::slice::from_ref(&region),
+        )
+    };
+}
+
+pub fn alinged_size_u64(size: u64, alignment: u64) -> u64 {
+    (size + (alignment - 1)) & !(alignment - 1)
+}
+
+pub fn alinged_size(size: u32, alignment: u32) -> u32 {
+    (size + (alignment - 1)) & !(alignment - 1)
+}
+
+#[derive(Clone)]
+pub struct QueueFamily {
+    index: u32,
+    handel: vk::QueueFamilyProperties,
+    supports_present: bool,
+}
+
+impl QueueFamily {
+    pub fn supports_compute(&self) -> bool {
+        self.handel.queue_flags.contains(vk::QueueFlags::COMPUTE)
+    }
+
+    pub fn supports_graphics(&self) -> bool {
+        self.handel.queue_flags.contains(vk::QueueFlags::GRAPHICS)
+    }
+
+    pub fn supports_present(&self) -> bool {
+        self.supports_present
+    }
+
+    pub fn has_queues(&self) -> bool {
+        self.handel.queue_count > 0
+    }
+
+    pub fn supports_timestamp_queries(&self) -> bool {
+        self.handel.timestamp_valid_bits > 0
+    }
+}
+
+#[derive(Clone)]
+pub struct DeviceFeatures {
+    pub ray_tracing_pipeline: bool,
+    pub acceleration_structure: bool,
+    pub runtime_descriptor_array: bool,
+    pub buffer_device_address: bool,
+    pub dynamic_rendering: bool,
+    pub synchronization2: bool,
+}
+
+impl DeviceFeatures {
+    pub fn is_compatible_with(&self, requirements: &Self) -> bool {
+        (!requirements.ray_tracing_pipeline || self.ray_tracing_pipeline)
+            && (!requirements.acceleration_structure || self.acceleration_structure)
+            && (!requirements.runtime_descriptor_array || self.runtime_descriptor_array)
+            && (!requirements.buffer_device_address || self.buffer_device_address)
+            && (!requirements.dynamic_rendering || self.dynamic_rendering)
+            && (!requirements.synchronization2 || self.synchronization2)
+    }
+}
+
+#[derive(Clone)]
+pub struct PhysicalDevice {
+    pub handel: vk::PhysicalDevice,
+    pub name: String,
+    pub device_type: vk::PhysicalDeviceType,
+    pub limits: vk::PhysicalDeviceLimits,
+    pub queue_families: Vec<QueueFamily>,
+    pub supported_extensions: Vec<String>,
+    pub supported_surface_formats: Vec<vk::SurfaceFormatKHR>,
+    pub supported_present_modes: Vec<vk::PresentModeKHR>,
+    pub supported_device_features: DeviceFeatures,
+}
+
+impl PhysicalDevice {
+    fn new(
+        instance: &Instance,
+        ash_surface: &khr::Surface,
+        vk_surface: &vk::SurfaceKHR,
+        physical_device: vk::PhysicalDevice,
+    ) -> Result<Self> {
+        let props = unsafe { instance.get_physical_device_properties(physical_device) };
+
+        let name = unsafe {
+            CStr::from_ptr(props.device_name.as_ptr())
+                .to_str()?
+                .to_owned()
+        };
+
+        let device_type = props.device_type;
+        let limits = props.limits;
+
+        let queue_family_properties =
+            unsafe { instance.get_physical_device_queue_family_properties(physical_device) };
+        let queue_families = queue_family_properties
+            .into_iter()
+            .enumerate()
+            .map(|(index, p)| {
+                let present_support = unsafe {
+                    ash_surface
+                        .get_physical_device_surface_support(
+                            physical_device,
+                            index as _,
+                            *vk_surface,
+                        )
+                        .unwrap()
+                };
+
+                QueueFamily {
+                    index: index as _,
+                    handel: p,
+                    supports_present: present_support,
+                }
+            })
+            .collect::<Vec<_>>();
+
+        let extension_properties =
+            unsafe { instance.enumerate_device_extension_properties(physical_device)? };
+        let supported_extensions = extension_properties
+            .into_iter()
+            .map(|p| {
+                let name = unsafe { CStr::from_ptr(p.extension_name.as_ptr()) };
+                name.to_str().unwrap().to_owned()
+            })
+            .collect();
+
+        let supported_surface_formats = unsafe {
+            ash_surface.get_physical_device_surface_formats(physical_device, *vk_surface)?
+        };
+
+        let supported_present_modes = unsafe {
+            ash_surface.get_physical_device_surface_present_modes(physical_device, *vk_surface)?
+        };
+
+        let mut ray_tracing_feature = vk::PhysicalDeviceRayTracingPipelineFeaturesKHR::default();
+        let mut acceleration_struct_feature =
+            vk::PhysicalDeviceAccelerationStructureFeaturesKHR::default();
+        let mut features12 = vk::PhysicalDeviceVulkan12Features::builder()
+            .runtime_descriptor_array(true)
+            .buffer_device_address(true);
+        let mut features13 = vk::PhysicalDeviceVulkan13Features::default();
+        let mut features = vk::PhysicalDeviceFeatures2::builder()
+            .push_next(&mut ray_tracing_feature)
+            .push_next(&mut acceleration_struct_feature)
+            .push_next(&mut features12)
+            .push_next(&mut features13);
+        unsafe { instance.get_physical_device_features2(physical_device, &mut features) };
+        let supported_device_features = DeviceFeatures {
+            ray_tracing_pipeline: ray_tracing_feature.ray_tracing_pipeline == vk::TRUE,
+            acceleration_structure: acceleration_struct_feature.acceleration_structure == vk::TRUE,
+            runtime_descriptor_array: features12.runtime_descriptor_array == vk::TRUE,
+            buffer_device_address: features12.buffer_device_address == vk::TRUE,
+            dynamic_rendering: features13.dynamic_rendering == vk::TRUE,
+            synchronization2: features13.synchronization2 == vk::TRUE,
+        };
+
+        Ok(Self {
+            handel: physical_device,
+            name,
+            device_type,
+            limits,
+            queue_families,
+            supported_extensions,
+            supported_surface_formats,
+            supported_present_modes,
+            supported_device_features,
+        })
+    }
+
+    pub fn supports_extensions(&self, extensions: &[&str]) -> bool {
+        let supported_extensions = self
+            .supported_extensions
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        extensions.iter().all(|e| supported_extensions.contains(e))
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct RayTracingShaderGroupInfo {
+    pub group_count: u32,
+    pub raygen_shader_count: u32,
+    pub miss_shader_count: u32,
+    pub hit_shader_count: u32,
+}
+
+pub struct RayTracingPipeline {
+    pub descriptor_set_layout: vk::DescriptorSetLayout,
+    pub storage_image_set_layout: vk::DescriptorSetLayout,
+    pub layout: vk::PipelineLayout,
+    pub handle: vk::Pipeline,
+    pub shader_group_info: RayTracingShaderGroupInfo,
+}
+
+pub struct ShaderBindingTable {
+    pub _buffer: Buffer,
+    pub raygen_region: vk::StridedDeviceAddressRegionKHR,
+    pub miss_region: vk::StridedDeviceAddressRegionKHR,
+    pub hit_region: vk::StridedDeviceAddressRegionKHR,
+}
+
+impl ShaderBindingTable {
+    pub fn new(ctx: &mut Context, pipeline: &RayTracingPipeline) -> Result<Self> {
+        let desc = pipeline.shader_group_info;
+
+        let handle_size = ctx.ray_tracing.pipeline_properties.shader_group_handle_size;
+        let handle_alignment = ctx
+            .ray_tracing
+            .pipeline_properties
+            .shader_group_handle_alignment;
+        let aligned_handle_size = alinged_size(handle_size, handle_alignment);
+        let handle_pad = aligned_handle_size - handle_size;
+
+        let group_alignment = ctx
+            .ray_tracing
+            .pipeline_properties
+            .shader_group_base_alignment;
+
+        let data_size = desc.group_count * handle_size;
+        let handles = unsafe {
+            ctx.ray_tracing
+                .pipeline_fn
+                .get_ray_tracing_shader_group_handles(
+                    pipeline.handle,
+                    0,
+                    desc.group_count,
+                    data_size as _,
+                )?
+        };
+
+        let raygen_region_size = alinged_size(
+            desc.raygen_shader_count * aligned_handle_size,
+            group_alignment,
+        );
+
+        let miss_region_size = alinged_size(
+            desc.miss_shader_count * aligned_handle_size,
+            group_alignment,
+        );
+        let hit_region_size =
+            alinged_size(desc.hit_shader_count * aligned_handle_size, group_alignment);
+
+        let buffer_size = raygen_region_size + miss_region_size + hit_region_size;
+        let mut stb_data = Vec::<u8>::with_capacity(buffer_size as _);
+        let groups_shader_count = [
+            desc.raygen_shader_count,
+            desc.miss_shader_count,
+            desc.hit_shader_count,
+        ];
+
+        let buffer_usage = vk::BufferUsageFlags::SHADER_BINDING_TABLE_KHR
+            | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS;
+        let memory_location = MemoryLocation::CpuToGpu;
+
+        let buffer = ctx.create_aligned_buffer(
+            buffer_usage,
+            memory_location,
+            buffer_size as _,
+            Some("Shader Binding Table"),
+            ctx.ray_tracing
+                .pipeline_properties
+                .shader_group_base_alignment
+                .into(),
+        )?;
+
+        let address = ctx.get_buffer_address(&buffer);
+
+        let mut offset = 0;
+        for group_shader_count in groups_shader_count {
+            let group_size = group_shader_count * aligned_handle_size;
+            let aligned_group_size = alinged_size(group_size, group_alignment);
+            let group_pad = aligned_group_size - group_size;
+
+            for _ in 0..group_shader_count {
+                for _ in 0..handle_size as usize {
+                    stb_data.push(handles[offset]);
+                    offset += 1;
+                }
+
+                for _ in 0..handle_pad {
+                    stb_data.push(0x0);
+                }
+            }
+
+            for _ in 0..group_pad {
+                stb_data.push(0x0);
+            }
+        }
+
+        buffer.copy_data_to_buffer(&stb_data)?;
+
+        let raygen_region = vk::StridedDeviceAddressRegionKHR::builder()
+            .device_address(address)
+            .size(raygen_region_size as _)
+            .stride(raygen_region_size as _)
+            .build();
+
+        let miss_region = vk::StridedDeviceAddressRegionKHR::builder()
+            .device_address(address + raygen_region.size)
+            .size(miss_region_size as _)
+            .stride(aligned_handle_size as _)
+            .build();
+
+        let hit_region = vk::StridedDeviceAddressRegionKHR::builder()
+            .device_address(address + raygen_region.size + miss_region.size)
+            .size(hit_region_size as _)
+            .stride(aligned_handle_size as _)
+            .build();
+
+        Ok(Self {
+            _buffer: buffer,
+            raygen_region,
+            miss_region,
+            hit_region,
+        })
+    }
+}
+
+#[derive(Debug)]
+pub struct AccelerationStructure {
+    pub handle: vk::AccelerationStructureKHR,
+    pub device_address: u64,
+    pub buffer: Buffer,
+}
+
+pub struct Frame {
+    pub fence: Fence,
+    pub image_available: vk::Semaphore,
+    pub render_finished: vk::Semaphore,
+}
+
+impl Frame {
+    fn new(device: &Device) -> Result<Self> {
+        let fence = Fence::new(device, Some(vk::FenceCreateFlags::SIGNALED))?;
+
+        let image_available =
+            unsafe { device.create_semaphore(&vk::SemaphoreCreateInfo::builder().build(), None)? };
+        let render_finished =
+            unsafe { device.create_semaphore(&vk::SemaphoreCreateInfo::builder().build(), None)? };
+
+        Ok(Self {
+            fence,
+            image_available,
+            render_finished,
+        })
+    }
+}
+
+impl Context {
+    fn create_frame(&mut self, size: PhysicalSize<u32>) -> Result<Frame> {
+        Frame::new(&self.device)
+    }
+}
+
+pub struct Swapchain {
+    pub ash_swapchain: khr::Swapchain,
+    pub vk_swapchain: vk::SwapchainKHR,
+    pub extent: vk::Extent2D,
+    pub format: vk::Format,
+    pub color_space: vk::ColorSpaceKHR,
+    pub present_mode: vk::PresentModeKHR,
+    pub images: Vec<(Image, vk::ImageView)>,
+}
+
+impl Swapchain {
+    fn new(
+        instance: &Instance,
+        device: &Device,
+        vk_surface: vk::SurfaceKHR,
+        ash_surface: &khr::Surface,
+        physical_device: &PhysicalDevice,
+        width: u32,
+        height: u32,
+        present_queue_family: &QueueFamily,
+        graphics_queue_family: &QueueFamily,
+    ) -> Result<Self> {
+        let format = {
+            let formats = unsafe {
+                ash_surface
+                    .get_physical_device_surface_formats(physical_device.handel, vk_surface)?
+            };
+            if formats.len() == 1 && formats[0].format == vk::Format::UNDEFINED {
+                vk::SurfaceFormatKHR {
+                    format: vk::Format::B8G8R8A8_UNORM,
+                    color_space: vk::ColorSpaceKHR::SRGB_NONLINEAR,
+                }
+            } else {
+                *formats
+                    .iter()
+                    .find(|format| {
+                        format.format == vk::Format::B8G8R8A8_UNORM
+                            && format.color_space == vk::ColorSpaceKHR::SRGB_NONLINEAR
+                    })
+                    .unwrap_or(&formats[0])
+            }
+        };
+
+        let present_mode = {
+            let present_modes = unsafe {
+                ash_surface
+                    .get_physical_device_surface_present_modes(physical_device.handel, vk_surface)?
+            };
+            if present_modes.contains(&vk::PresentModeKHR::IMMEDIATE) {
+                vk::PresentModeKHR::IMMEDIATE
+            } else {
+                vk::PresentModeKHR::FIFO
+            }
+        };
+
+        let capabilities = unsafe {
+            ash_surface
+                .get_physical_device_surface_capabilities(physical_device.handel, vk_surface)?
+        };
+
+        let extent = {
+            if capabilities.current_extent.width != std::u32::MAX {
+                capabilities.current_extent
+            } else {
+                let min = capabilities.min_image_extent;
+                let max = capabilities.max_image_extent;
+                let width = width.min(max.width).max(min.width);
+                let height = height.min(max.height).max(min.height);
+                vk::Extent2D { width, height }
+            }
+        };
+
+        let image_count = capabilities.min_image_count + 1;
+
+        let families_indices = [graphics_queue_family.index, present_queue_family.index];
+
+        let create_info = {
+            let mut builder = vk::SwapchainCreateInfoKHR::builder()
+                .surface(vk_surface)
+                .min_image_count(image_count)
+                .image_format(format.format)
+                .image_color_space(format.color_space)
+                .image_extent(extent)
+                .image_array_layers(1)
+                .image_usage(
+                    vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::TRANSFER_DST,
+                );
+
+            builder = if graphics_queue_family.index != present_queue_family.index {
+                builder
+                    .image_sharing_mode(vk::SharingMode::CONCURRENT)
+                    .queue_family_indices(&families_indices)
+            } else {
+                builder.image_sharing_mode(vk::SharingMode::EXCLUSIVE)
+            };
+
+            builder
+                .pre_transform(capabilities.current_transform)
+                .composite_alpha(vk::CompositeAlphaFlagsKHR::OPAQUE)
+                .present_mode(present_mode)
+                .clipped(true)
+        };
+
+        let ash_swapchain = khr::Swapchain::new(&instance, &device);
+        let vk_swapchain = unsafe { ash_swapchain.create_swapchain(&create_info, None).unwrap() };
+
+        let images = unsafe { ash_swapchain.get_swapchain_images(vk_swapchain).unwrap() };
+
+        let images = images
+            .into_iter()
+            .map(|i| Image::from_swapchain_image(i, format.format, extent))
+            .collect::<Vec<_>>();
+
+        let views = images
+            .iter()
+            .map(|i| create_image_view(device, &i, &format.format))
+            .collect::<Vec<_>>();
+
+        let images_and_views = images
+            .into_iter()
+            .zip(views)
+            .collect::<Vec<(Image, vk::ImageView)>>();
+        Ok(Self {
+            ash_swapchain,
+            vk_swapchain,
+            extent,
+            format: format.format,
+            color_space: format.color_space,
+            present_mode,
+            images: images_and_views,
+        })
+    }
+}
+
+pub fn create_image_view(device: &Device, image: &Image, format: &vk::Format) -> vk::ImageView {
+    let image_view_info = vk::ImageViewCreateInfo::builder()
+        .image(image.inner)
+        .view_type(vk::ImageViewType::TYPE_2D)
+        .format(*format)
+        .components(vk::ComponentMapping {
+            r: vk::ComponentSwizzle::IDENTITY,
+            g: vk::ComponentSwizzle::IDENTITY,
+            b: vk::ComponentSwizzle::IDENTITY,
+            a: vk::ComponentSwizzle::IDENTITY,
+        })
+        .subresource_range(
+            vk::ImageSubresourceRange::builder()
+                .aspect_mask(vk::ImageAspectFlags::COLOR)
+                .base_mip_level(0)
+                .level_count(image.mip_levls)
+                .base_array_layer(0)
+                .layer_count(1)
+                .build(),
+        );
+    unsafe { device.create_image_view(&image_view_info, None) }.unwrap()
+}
+
+pub fn new_command_pool(
+    device: &Device,
+    queue_family: &QueueFamily,
+    flags: Option<vk::CommandPoolCreateFlags>,
+) -> Result<vk::CommandPool> {
+    let flags = flags.unwrap_or_else(vk::CommandPoolCreateFlags::empty);
+
+    let command_pool_info = vk::CommandPoolCreateInfo::builder()
+        .queue_family_index(queue_family.index)
+        .flags(flags);
+    let ret = unsafe { device.create_command_pool(&command_pool_info, None)? };
+    Ok(ret)
+}
+
+pub fn allocate_command_buffers(
+    pool: &vk::CommandPool,
+    device: &Device,
+    level: vk::CommandBufferLevel,
+    count: u32,
+) -> Result<Vec<vk::CommandBuffer>> {
+    let allocate_info = vk::CommandBufferAllocateInfo::builder()
+        .command_pool(*pool)
+        .level(level)
+        .command_buffer_count(count);
+
+    let buffers = unsafe { device.allocate_command_buffers(&allocate_info)? };
+    let buffers = buffers.into_iter().collect();
+
+    Ok(buffers)
+}
+
+pub fn allocate_command_buffer(
+    device: &Device,
+    pool: &vk::CommandPool,
+    level: vk::CommandBufferLevel,
+) -> Result<vk::CommandBuffer> {
+    let buffers = allocate_command_buffers(pool, device, level, 1)?;
+    let buffer = buffers.into_iter().next().unwrap();
+
+    Ok(buffer)
+}
+
+pub fn free_command_buffers(pool: &vk::CommandPool, device: &Device, buffer: &[vk::CommandBuffer]) {
+    unsafe { device.free_command_buffers(*pool, &buffer) };
+}
+
+pub fn free_command_buffer(
+    pool: &vk::CommandPool,
+    device: &Device,
+    buffer: vk::CommandBuffer,
+) -> Result<()> {
+    let buffs = [buffer];
+    unsafe { device.free_command_buffers(*pool, &buffs) };
+
+    Ok(())
+}
+
+pub struct Fence {
+    pub(crate) handel: vk::Fence,
+}
+
+impl Fence {
+    pub(crate) fn new(device: &ash::Device, flags: Option<vk::FenceCreateFlags>) -> Result<Self> {
+        let flags = flags.unwrap_or_else(vk::FenceCreateFlags::empty);
+
+        let fence_info = vk::FenceCreateInfo::builder().flags(flags);
+        let handel = unsafe { device.create_fence(&fence_info, None)? };
+
+        Ok(Self { handel })
+    }
+
+    pub fn wait(&self, device: &Device, timeout: Option<u64>) -> Result<()> {
+        let timeout = timeout.unwrap_or(std::u64::MAX);
+
+        unsafe { device.wait_for_fences(from_ref(&self.handel), true, timeout)? };
+
+        Ok(())
+    }
+
+    pub fn reset(&self, device: &Device) -> Result<()> {
+        unsafe { device.reset_fences(&[self.handel])? };
+
+        Ok(())
+    }
+    pub fn destroy(&self, device: &Device) {
+        unsafe {
+            device.destroy_fence(self.handel, None);
+        }
+    }
+}
+
+pub struct RayTracingContext {
+    pub pipeline_properties: vk::PhysicalDeviceRayTracingPipelinePropertiesKHR,
+    pub pipeline_fn: khr::RayTracingPipeline,
+    pub acceleration_structure_properties: vk::PhysicalDeviceAccelerationStructurePropertiesKHR,
+    pub acceleration_structure_fn: khr::AccelerationStructure,
+}
+
+impl RayTracingContext {
+    pub(crate) fn new(instance: &Instance, pdevice: &vk::PhysicalDevice, device: &Device) -> Self {
+        let pipeline_properties =
+            unsafe { khr::RayTracingPipeline::get_properties(&instance, *pdevice) };
+        let pipeline_fn = khr::RayTracingPipeline::new(&instance, &device);
+
+        let acceleration_structure_properties =
+            unsafe { khr::AccelerationStructure::get_properties(&instance, *pdevice) };
+        let acceleration_structure_fn = khr::AccelerationStructure::new(&instance, &device);
+
+        Self {
+            pipeline_properties,
+            pipeline_fn,
+            acceleration_structure_properties,
+            acceleration_structure_fn,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct Buffer {
+    pub inner: vk::Buffer,
+    pub allocation: Option<Allocation>,
+    pub size: vk::DeviceSize,
+}
+
+impl Buffer {
+    pub fn new(
+        device: &Device,
+        allocator: &mut Allocator,
+        usage: vk::BufferUsageFlags,
+        memory_location: MemoryLocation,
+        size: vk::DeviceSize,
+        name: Option<&str>,
+        alignment: Option<u64>,
+    ) -> Result<Self> {
+        let create_info = vk::BufferCreateInfo::builder().size(size).usage(usage);
+        let inner = unsafe { device.create_buffer(&create_info, None)? };
+        let mut requirements = unsafe { device.get_buffer_memory_requirements(inner) };
+        if let Some(a) = alignment {
+            requirements.alignment = a;
+        }
+
+        let allocation = allocator.allocate(&AllocationCreateDesc {
+            name: name.unwrap_or("buffer"),
+            requirements,
+            location: memory_location,
+            linear: true,
+        })?;
+
+        unsafe { device.bind_buffer_memory(inner, allocation.memory(), allocation.offset())? };
+
+        Ok(Self {
+            inner,
+            allocation: Some(allocation),
+            size,
+        })
+    }
+
+    pub fn copy_data_to_buffer<T: Copy>(&self, data: &[T]) -> Result<()> {
+        unsafe {
+            let data_ptr = self
+                .allocation
+                .as_ref()
+                .unwrap()
+                .mapped_ptr()
+                .unwrap()
+                .as_ptr();
+            let mut align =
+                ash::util::Align::new(data_ptr, align_of::<T>() as _, size_of_val(data) as _);
+            align.copy_from_slice(data);
+        };
+
+        Ok(())
+    }
+
+    pub fn get_device_address(&self, device: &Device) -> u64 {
+        let addr_info = vk::BufferDeviceAddressInfo::builder().buffer(self.inner);
+        unsafe { device.get_buffer_device_address(&addr_info) }
+    }
+
+    pub fn destroy(&mut self, device: &Device, allocator: &mut Allocator) -> Result<()> {
+        unsafe { device.destroy_buffer(self.inner, None) };
+        allocator.free(self.allocation.take().unwrap()).unwrap();
+        Ok(())
+    }
+}
+
+impl Context {
+    pub fn create_buffer(
+        &mut self,
+        usage: vk::BufferUsageFlags,
+        memory_location: MemoryLocation,
+        size: vk::DeviceSize,
+        name: Option<&str>,
+    ) -> Result<Buffer> {
+        Buffer::new(
+            &self.device,
+            &mut self.allocator,
+            usage,
+            memory_location,
+            size,
+            name,
+            None,
+        )
+    }
+
+    pub fn create_aligned_buffer(
+        &mut self,
+        usage: vk::BufferUsageFlags,
+        memory_location: MemoryLocation,
+        size: vk::DeviceSize,
+        name: Option<&str>,
+        alignment: u64,
+    ) -> Result<Buffer> {
+        Buffer::new(
+            &self.device,
+            &mut self.allocator,
+            usage,
+            memory_location,
+            size,
+            name,
+            Some(alignment),
+        )
+    }
+
+    pub fn get_buffer_address(&self, buffer: &Buffer) -> u64 {
+        buffer.get_device_address(&self.device)
+    }
+}
+
+fn new_device(
+    instance: &Instance,
+    physical_device: &PhysicalDevice,
+    queue_families: &[&QueueFamily; 2],
+    required_extensions: &[&str],
+) -> Result<Device> {
+    let queue_priorities = [1.0f32];
+
+    let queue_create_infos = {
+        let mut indices = queue_families.iter().map(|f| f.index).collect::<Vec<_>>();
+        indices.dedup();
+
+        indices
+            .iter()
+            .map(|index| {
+                vk::DeviceQueueCreateInfo::builder()
+                    .queue_family_index(*index)
+                    .queue_priorities(&queue_priorities)
+                    .build()
+            })
+            .collect::<Vec<_>>()
+    };
+
+    let mut ray_tracing_feature = vk::PhysicalDeviceRayTracingPipelineFeaturesKHR::builder()
+        .ray_tracing_pipeline(true)
+        .build();
+    let mut acceleration_struct_feature =
+        vk::PhysicalDeviceAccelerationStructureFeaturesKHR::builder()
+            .acceleration_structure(true)
+            .build();
+    let mut vulkan_12_features = vk::PhysicalDeviceVulkan12Features::builder()
+        .runtime_descriptor_array(true)
+        .buffer_device_address(true)
+        .descriptor_indexing(true)
+        .shader_sampled_image_array_non_uniform_indexing(true)
+        .build();
+    let mut vulkan_13_features = vk::PhysicalDeviceVulkan13Features::builder()
+        .dynamic_rendering(true)
+        .synchronization2(true)
+        .build();
+
+    let mut features = vk::PhysicalDeviceFeatures2::builder()
+        .features(vk::PhysicalDeviceFeatures::default())
+        .push_next(&mut acceleration_struct_feature)
+        .push_next(&mut ray_tracing_feature)
+        .push_next(&mut vulkan_12_features)
+        .push_next(&mut vulkan_13_features)
+        .build();
+
+    let device_extensions_as_ptr = required_extensions
+        .into_iter()
+        .map(|e| e.as_ptr() as *const i8)
+        .collect::<Vec<_>>();
+
+    let device_create_info = vk::DeviceCreateInfo::builder()
+        .queue_create_infos(&queue_create_infos)
+        .enabled_extension_names(device_extensions_as_ptr.as_slice())
+        .push_next(&mut features);
+
+    let device = unsafe {
+        instance
+            .create_device(physical_device.handel, &device_create_info, None)
+            .unwrap()
+    };
+
+    Ok(device)
+}
+
+fn enumerate_physical_devices(
+    instance: &Instance,
+    ash_surface: &khr::Surface,
+    vk_surface: &vk::SurfaceKHR,
+) -> Result<Vec<PhysicalDevice>> {
+    let physical_devices = unsafe { instance.enumerate_physical_devices()? };
+
+    let mut physical_devices = physical_devices
+        .into_iter()
+        .map(|pd| PhysicalDevice::new(&instance, ash_surface, vk_surface, pd))
+        .collect::<Result<Vec<PhysicalDevice>>>()?;
+
+    physical_devices.sort_by_key(|pd| match pd.device_type {
+        vk::PhysicalDeviceType::DISCRETE_GPU => 0,
+        vk::PhysicalDeviceType::INTEGRATED_GPU => 1,
+        _ => 2,
+    });
+    Ok(physical_devices)
+}
+
+fn get_queue(device: &Device, queue_family: &QueueFamily, queue_index: u32) -> vk::Queue {
+    unsafe { device.get_device_queue(queue_family.index, queue_index) }
+}
+
+fn select_suitable_physical_device(
+    devices: &[PhysicalDevice],
+    required_extensions: &[&str],
+    required_device_features: &DeviceFeatures,
+) -> Result<(PhysicalDevice, QueueFamily, QueueFamily)> {
+    let mut graphics = None;
+    let mut present = None;
+
+    let device = devices
+        .iter()
+        .find(|device| {
+            for family in device.queue_families.iter().filter(|f| f.has_queues()) {
+                if family.supports_graphics()
+                    && family.supports_compute()
+                    && family.supports_timestamp_queries()
+                    && graphics.is_none()
+                {
+                    graphics = Some(family.clone());
+                }
+
+                if family.supports_present() && present.is_none() {
+                    present = Some(family.clone());
+                }
+
+                if graphics.is_some() && present.is_some() {
+                    break;
+                }
+            }
+
+            let extention_support = device.supports_extensions(required_extensions);
+
+            graphics.is_some()
+                && present.is_some()
+                && extention_support
+                && !device.supported_surface_formats.is_empty()
+                && !device.supported_present_modes.is_empty()
+                && device
+                    .supported_device_features
+                    .is_compatible_with(required_device_features)
+        })
+        .ok_or_else(|| anyhow::anyhow!("Could not find a suitable device"))?;
+
+    Ok((device.clone(), graphics.unwrap(), present.unwrap()))
+}
+
+fn begin_command_buffer(
+    cmd: &vk::CommandBuffer,
+    device: &Device,
+    flags: Option<vk::CommandBufferUsageFlags>,
+) -> Result<()> {
+    let begin_info = vk::CommandBufferBeginInfo::builder()
+        .flags(flags.unwrap_or(vk::CommandBufferUsageFlags::empty()));
+    unsafe { device.begin_command_buffer(*cmd, &begin_info)? };
+    Ok(())
+}
+
+//#[cfg(debug_assertions)]
+unsafe extern "system" fn vulkan_debug_callback(
+    flag: vk::DebugUtilsMessageSeverityFlagsEXT,
+    typ: vk::DebugUtilsMessageTypeFlagsEXT,
+    p_callback_data: *const vk::DebugUtilsMessengerCallbackDataEXT,
+    _: *mut c_void,
+) -> vk::Bool32 {
+    use vk::DebugUtilsMessageSeverityFlagsEXT as Flag;
+
+    let message = CStr::from_ptr((*p_callback_data).p_message);
+    match flag {
+        Flag::VERBOSE => log::info!("{:?} - {:?}", typ, message),
+        Flag::INFO => log::info!("{:?} - {:?}", typ, message),
+        Flag::WARNING => log::warn!("{:?} - {:?}", typ, message),
+        _ => log::error!("{:?} - {:?}", typ, message),
+    }
+    vk::FALSE
+}
+
+pub fn queue_submit(
+    device: &Device,
+    queue: &vk::Queue,
+    command_buffer: &vk::CommandBuffer,
+    wait_semaphore: Option<vk::SemaphoreSubmitInfo>,
+    signal_semaphore: Option<vk::SemaphoreSubmitInfo>,
+    fence: &Fence,
+) -> Result<()> {
+    let wait_semaphore_submit_info = wait_semaphore.map(|s| {
+        vk::SemaphoreSubmitInfo::builder()
+            .semaphore(s.semaphore)
+            .stage_mask(s.stage_mask)
+    });
+
+    let signal_semaphore_submit_info = signal_semaphore.map(|s| {
+        vk::SemaphoreSubmitInfo::builder()
+            .semaphore(s.semaphore)
+            .stage_mask(s.stage_mask)
+    });
+
+    let cmd_buffer_submit_info =
+        vk::CommandBufferSubmitInfo::builder().command_buffer(*command_buffer);
+
+    let submit_info = vk::SubmitInfo2::builder()
+        .command_buffer_infos(std::slice::from_ref(&cmd_buffer_submit_info));
+
+    let submit_info = match wait_semaphore_submit_info.as_ref() {
+        Some(info) => submit_info.wait_semaphore_infos(std::slice::from_ref(info)),
+        None => submit_info,
+    };
+
+    let submit_info = match signal_semaphore_submit_info.as_ref() {
+        Some(info) => submit_info.signal_semaphore_infos(std::slice::from_ref(info)),
+        None => submit_info,
+    };
+
+    unsafe { device.queue_submit2(*queue, std::slice::from_ref(&submit_info), fence.handel)? };
+
+    Ok(())
+}
