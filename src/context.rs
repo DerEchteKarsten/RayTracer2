@@ -1172,7 +1172,6 @@ pub struct RayTracingShaderGroupInfo {
 pub struct RayTracingPipeline {
     pub descriptor_set_layout: vk::DescriptorSetLayout,
     pub storage_image_set_layout: vk::DescriptorSetLayout,
-    pub last_image_set_layout: vk::DescriptorSetLayout,
     pub layout: vk::PipelineLayout,
     pub handle: vk::Pipeline,
     pub shader_group_info: RayTracingShaderGroupInfo,

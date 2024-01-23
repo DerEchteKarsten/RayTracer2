@@ -4,6 +4,7 @@ use context::*;
 mod camera;
 use camera::*;
 mod gltf;
+// mod pipeline;
 
 mod model;
 use log::debug;
@@ -39,7 +40,7 @@ use winit::{
 
 fn main() {
     let model_thread = std::thread::spawn(|| {
-       gltf::load_file("./src/models/sponza_scene.glb").unwrap()
+       gltf::load_file("./src/models/box.glb").unwrap()
     });  
     let image_thread = std::thread::spawn(|| {
        image::open("./src/models/skybox.png").unwrap()
@@ -201,7 +202,7 @@ fn main() {
     let pipeline = create_ray_tracing_pipeline(&ctx, &model).unwrap();
     let shader_binding_table = ctx.create_shader_binding_table(&pipeline).unwrap();
 
-    let (descriptor_pool, static_set, dynamic_sets, last_image_sets) = create_descriptor_sets(
+    let (descriptor_pool, static_set, dynamic_sets) = create_descriptor_sets(
         &mut ctx,
         &pipeline,
         &tlas,
@@ -272,13 +273,11 @@ fn main() {
                             window_size,
                             &static_set,
                             &dynamic_sets[i as usize],
-                            &last_image_sets[ctx.last_frame as usize],
                             &frame,
                             &moved,
                         );
                     })
                     .unwrap();
-                ctx.last_frame = ctx.frame;
             }
             Event::LoopDestroyed => {
                 unsafe { ctx.device.destroy_descriptor_pool(descriptor_pool, None) };
@@ -299,7 +298,6 @@ fn create_descriptor_sets(
 ) -> Result<(
     vk::DescriptorPool,
     vk::DescriptorSet,
-    Vec<vk::DescriptorSet>,
     Vec<vk::DescriptorSet>,
 )> {
     let size = context.swapchain.images.len() as u32;
@@ -335,12 +333,6 @@ fn create_descriptor_sets(
         &context.device,
         &pool,
         &pipeline.storage_image_set_layout,
-        size,
-    )?;
-    let last_image_sets = allocate_descriptor_sets(
-        &context.device,
-        &pool,
-        &pipeline.last_image_set_layout,
         size,
     )?;
 
@@ -435,22 +427,7 @@ fn create_descriptor_sets(
         );
     });
 
-    last_image_sets.iter().enumerate().for_each(|(index, set)| {
-        let view = &context.storage_images[index].1.clone();
-        update_descriptor_sets(
-            context,
-            set,
-            &[WriteDescriptorSet {
-                binding: 1,
-                kind: WriteDescriptorSetKind::StorageImage {
-                    layout: vk::ImageLayout::GENERAL,
-                    view,
-                },
-            }],
-        );
-    });
-
-    Ok((pool, static_set, dynamic_sets, last_image_sets))
+    Ok((pool, static_set, dynamic_sets))
 }
 
 fn record_command_buffers(
@@ -461,12 +438,10 @@ fn record_command_buffers(
     window_size: PhysicalSize<u32>,
     static_set: &vk::DescriptorSet,
     dynamic_set: &vk::DescriptorSet,
-    last_set: &vk::DescriptorSet,
     frame: &u32,
     moved: &bool,
 ) {
     let swapchain_image = &ctx.swapchain.images[index as usize].0;
-
     let storage_image = &ctx.storage_images[index as usize];
     let cmd = &ctx.cmd_buffs[index as usize];
 
@@ -475,7 +450,8 @@ fn record_command_buffers(
             frame as *const u32 as *const u8,
             size_of::<u32>()
         );
-        let moved_c = &[if *moved == true { 1 as u8 } else {0 as u8}, 0, 0, 0];
+        let moved_c = &[ if *moved == true { 1 as u8 } else {0 as u8} , 0, 0, 0];
+
         ctx.device.cmd_push_constants(*cmd, pipeline.layout, vk::ShaderStageFlags::RAYGEN_KHR, 0, &frame_c);
         ctx.device.cmd_push_constants(*cmd, pipeline.layout, vk::ShaderStageFlags::RAYGEN_KHR, size_of::<u32>() as u32, moved_c);
 
@@ -490,7 +466,7 @@ fn record_command_buffers(
             vk::PipelineBindPoint::RAY_TRACING_KHR,
             pipeline.layout,
             0,
-            &[*static_set, *dynamic_set, *last_set],
+            &[*static_set, *dynamic_set],
             &[],
         );
 
@@ -772,14 +748,9 @@ fn create_ray_tracing_pipeline(ctx: &Context, model: &Model) -> Result<RayTracin
     let push_constants = &[
         vk::PushConstantRange::builder()
             .offset(0)
-            .size(size_of::<u32>() as u32)
+            .size((size_of::<u32>() * 2) as u32)
             .stage_flags(vk::ShaderStageFlags::RAYGEN_KHR)
             .build(),
-        vk::PushConstantRange::builder()
-            .offset(size_of::<u32>() as u32)
-            .size(4)
-            .stage_flags(vk::ShaderStageFlags::RAYGEN_KHR)
-            .build()
     ];
 
     let pipe_layout_info = vk::PipelineLayoutCreateInfo::builder().set_layouts(&dsls).push_constant_ranges(push_constants);
@@ -901,7 +872,6 @@ fn create_ray_tracing_pipeline(ctx: &Context, model: &Model) -> Result<RayTracin
         descriptor_set_layout: static_dsl,
         layout: pipeline_layout,
         shader_group_info,
-        last_image_set_layout: last_image_dsl,
         storage_image_set_layout: dynamic_dsl,
     })
 }
