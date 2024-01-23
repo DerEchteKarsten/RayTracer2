@@ -13,12 +13,12 @@ struct Vertex {
 struct GeometryInfo {
   mat4 transform;
   vec4 baseColor;
-  vec4 emission;
   int baseColorTextureIndex;
   float metallicFactor;
-  float roughness;
   uint indexOffset;
   uint vertexOffset;
+  vec4 emission;
+  float roughness;
 };
 
 layout(location = 0) rayPayloadInEXT Payload {
@@ -76,6 +76,7 @@ void main()
   p.metallicFactor = geometryInfo.metallicFactor;
   p.roughness = geometryInfo.roughness;
   p.hitPoint = origin;
+  p.hitNormal = normal;
   p.emission = geometryInfo.emission.xyz;
   p.color = color;
 }

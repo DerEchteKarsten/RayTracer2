@@ -20,13 +20,14 @@ use std::slice::from_ref;
 pub struct GeometryInfo {
     transform: Mat4,
     base_color: [f32; 4],
-    emission: [f32; 4],
     base_color_texture_index: i32,
     metallic_factor: f32,
-    roughness: f32,
-    vertex_offset: u32,
     index_offset: u32,
+    vertex_offset: u32,
+    emission: [f32; 4],
+    roughness: f32,
 }
+
 pub struct Model {
     pub images: Vec<Image>,
     pub views: Vec<vk::ImageView>,
@@ -186,6 +187,8 @@ impl Model {
     pub fn from_gltf(ctx: &mut Context, model: gltf::Model) -> Result<Self> {
         let vertices = model.vertices.as_slice();
         let indices = model.indices.as_slice();
+
+        log::debug!("{}", indices.len() / 3);
 
         let vertex_buffer = ctx.create_gpu_only_buffer_from_data(
             vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
@@ -406,6 +409,7 @@ impl Model {
             geometry_infos.push(GeometryInfo {
                 transform: Mat4::from_cols_array_2d(&node.transform),
                 base_color: mesh.material.base_color,
+                emission,
                 base_color_texture_index: mesh
                     .material
                     .base_color_texture_index
@@ -414,7 +418,6 @@ impl Model {
                 vertex_offset: mesh.vertex_offset,
                 index_offset: mesh.index_offset,
                 roughness: mesh.material.roughness,
-                emission,
             });
 
             as_geometries.push(

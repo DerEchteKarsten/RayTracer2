@@ -44,6 +44,7 @@ pub struct Context {
     pub frame: u64,
     pub cmd_buffs: Vec<vk::CommandBuffer>,
     pub storage_images: Vec<(Image, vk::ImageView)>,
+    pub last_frame: u64,
     _entry: Entry,
 }
 
@@ -250,6 +251,7 @@ impl Context {
         }
 
         Ok(Self {
+            last_frame: 0,
             frame: 0,
             allocator,
             command_pool,
@@ -534,7 +536,7 @@ impl Context {
         if suboptimal {
             println!("suboptimal");
         }
-
+        
         Ok(frame_index)
     }
 
@@ -1170,6 +1172,7 @@ pub struct RayTracingShaderGroupInfo {
 pub struct RayTracingPipeline {
     pub descriptor_set_layout: vk::DescriptorSetLayout,
     pub storage_image_set_layout: vk::DescriptorSetLayout,
+    pub last_image_set_layout: vk::DescriptorSetLayout,
     pub layout: vk::PipelineLayout,
     pub handle: vk::Pipeline,
     pub shader_group_info: RayTracingShaderGroupInfo,
