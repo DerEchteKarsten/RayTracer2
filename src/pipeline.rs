@@ -2,6 +2,7 @@ use std::{ffi::CString, io::{self, BufReader}, mem::size_of, path::Path};
 
 use anyhow::Result;
 use ash::vk;
+use gpu_allocator::MemoryLocation;
 
 use crate::{alinged_size, create_descriptor_set_layout, Buffer, Context};
 
@@ -119,24 +120,24 @@ fn module_from_path(device: &ash::Device, source: String) -> Result<vk::ShaderMo
     Ok(res)
 }
 
-fn hit_to_group(group: HitGroup, ctx: &Context, offset: u32) -> (Vec<vk::PipelineShaderStageCreateInfo>, vk::RayTracingShaderGroupCreateInfoKHR, Vec<vk::ShaderModule>) {
+fn hit_to_group(group: &HitGroup, ctx: &Context, offset: u32) -> (Vec<vk::PipelineShaderStageCreateInfo>, vk::RayTracingShaderGroupCreateInfoKHR, Vec<vk::ShaderModule>) {
     let entry_point_name = CString::new("main").unwrap();
     let mut modules = vec![];
     let mut stages = vec![vk::PipelineShaderStageCreateInfo::builder()
         .stage(vk::ShaderStageFlags::CLOSEST_HIT_KHR)
-        .module(module_from_path(&ctx.device, group.closest_hit_shader).unwrap())
+        .module(module_from_path(&ctx.device, group.closest_hit_shader.clone()).unwrap())
         .name(&entry_point_name)
         .build()
         ];
     
-    let g = vk::RayTracingShaderGroupCreateInfoKHR::builder()
+    let mut g = vk::RayTracingShaderGroupCreateInfoKHR::builder()
         .ty(if group.intersection_shader.is_some() { vk::RayTracingShaderGroupTypeKHR::PROCEDURAL_HIT_GROUP } else {vk::RayTracingShaderGroupTypeKHR::TRIANGLES_HIT_GROUP})
         .general_shader(vk::SHADER_UNUSED_KHR)
         .closest_hit_shader(offset)
         .any_hit_shader(vk::SHADER_UNUSED_KHR)
         .intersection_shader(vk::SHADER_UNUSED_KHR);
 
-    if let Some(intersection) = group.intersection_shader {
+    if let Some(intersection) = group.intersection_shader.clone() {
         let module = module_from_path(&ctx.device, intersection).unwrap();
         modules.push(module);
         let stage =vk::PipelineShaderStageCreateInfo::builder()
@@ -144,12 +145,12 @@ fn hit_to_group(group: HitGroup, ctx: &Context, offset: u32) -> (Vec<vk::Pipelin
             .module(module)
             .name(&entry_point_name)
             .build();
-        g.intersection_shader((stages.len() + 1) as u32);
+        g = g.intersection_shader(offset + (stages.len() + 1) as u32);
         stages.push(stage);
     }
 
 
-    if let Some(any) = group.any_hit_shader {
+    if let Some(any) = group.any_hit_shader.clone() {
         let module = module_from_path(&ctx.device, any).unwrap();
         modules.push(module);
         let stage =vk::PipelineShaderStageCreateInfo::builder()
@@ -157,7 +158,7 @@ fn hit_to_group(group: HitGroup, ctx: &Context, offset: u32) -> (Vec<vk::Pipelin
             .module(module)
             .name(&entry_point_name)
             .build();
-        g.any_hit_shader((stages.len() + 1) as u32);
+        g = g.any_hit_shader(offset + (stages.len() + 1) as u32);
         stages.push(stage);
     }
     (
@@ -265,7 +266,7 @@ impl RayTracingPipelineBuilder{
         self
     }
 
-    fn build(self, ctx: &Context) -> Result<RayTracingPipeline> {
+    fn build(self, ctx: &mut Context) -> Result<RayTracingPipeline> {
         
         let layouts = self.sets.into_iter().map(|d| {
             let bindings = d.bindings.into_iter().map(|b| {
@@ -285,14 +286,51 @@ impl RayTracingPipelineBuilder{
         let mut stages = vec![];
         let mut groups = vec![];
 
-        for h in self.hit_groups {
+        for h in self.hit_groups.iter() {
             let offset = stages.len();
-            let (s, g, m) = hit_to_group(h, ctx, offset as u32);
+            let (mut s, g, mut m) = hit_to_group(h, ctx, offset as u32);
             modules.append(&mut m);
             groups.push(g);
             stages.append(&mut s);
         }
-        
+
+        for r in self.raygen_groups.iter() {
+            let entry_point_name = CString::new("main").unwrap();
+            let module = module_from_path(&ctx.device, r.raygen_shader.clone()).unwrap();
+            let mut stage = vk::PipelineShaderStageCreateInfo::builder()
+                .stage(vk::ShaderStageFlags::RAYGEN_KHR)
+                .module(module)
+                .name(&entry_point_name)
+                .build();
+            
+            let g = vk::RayTracingShaderGroupCreateInfoKHR::builder()
+                .ty(vk::RayTracingShaderGroupTypeKHR::GENERAL)
+                .general_shader(stages.len() as u32)
+                .build();
+
+            modules.push(module);
+            groups.push(g);
+            stages.push(stage);
+        }
+
+        for m in self.miss_groups.iter() {
+            let entry_point_name = CString::new("main").unwrap();
+            let module = module_from_path(&ctx.device, m.miss_shader.clone()).unwrap();
+            let mut stage = vk::PipelineShaderStageCreateInfo::builder()
+                .stage(vk::ShaderStageFlags::MISS_KHR)
+                .module(module)
+                .name(&entry_point_name)
+                .build();
+            
+            let g = vk::RayTracingShaderGroupCreateInfoKHR::builder()
+                .ty(vk::RayTracingShaderGroupTypeKHR::GENERAL)
+                .general_shader(stages.len() as u32)
+                .build();
+
+            modules.push(module);
+            groups.push(g);
+            stages.push(stage);
+        }
        
         let pipe_info = vk::RayTracingPipelineCreateInfoKHR::builder()
             .layout(pipeline_layout)
@@ -300,28 +338,133 @@ impl RayTracingPipelineBuilder{
             .groups(groups.as_slice())
             .max_pipeline_ray_recursion_depth(1);
 
-        let inner = unsafe {
+        let handle = unsafe {
             ctx.ray_tracing.pipeline_fn.create_ray_tracing_pipelines(
                 vk::DeferredOperationKHR::null(),
                 vk::PipelineCache::null(),
                 std::slice::from_ref(&pipe_info),
                 None,
             )?[0]
+        }; 
+
+        
+        let hit_buffer = buffer_from_groups(ctx, self.hit_groups.len(), &handle, 0)?;
+        let raygen_buffer = buffer_from_groups(ctx, self.miss_groups.len(), &handle, self.hit_groups.len() as u32)?;
+        let miss_buffer = buffer_from_groups(ctx, self.raygen_groups.len(), &handle, self.miss_groups.len() as u32 + self. hit_groups.len() as u32)?;
+
+        let raygen_region = vk::StridedDeviceAddressRegionKHR::builder()
+            .device_address(raygen_buffer.get_device_address(&ctx.device))
+            .size(raygen_buffer.size)
+            .stride(raygen_buffer.size)
+            .build();
+
+        let miss_region = vk::StridedDeviceAddressRegionKHR::builder()
+            .device_address(hit_buffer.get_device_address(&ctx.device))
+            .size(hit_buffer.size)
+            .stride(hit_buffer.size)
+            .build();
+
+        let hit_region = vk::StridedDeviceAddressRegionKHR::builder()
+            .device_address(miss_buffer.get_device_address(&ctx.device))
+            .size(miss_buffer.size)
+            .stride(miss_buffer.size)
+            .build();
+
+        let shader_binding_table = ShaderBindingTable {
+            hit_buffer,
+            hit_region,
+            miss_buffer,
+            miss_region,
+            raygen_buffer,
+            raygen_region,
         };
 
         Ok(RayTracingPipeline {
-            handle: inner,
-            descriptor_set_layout: static_dsl,
+            handle,
             layout: pipeline_layout,
-            shader_group_info,
-            storage_image_set_layout: dynamic_dsl,
+            descriptor_set_layouts: layouts,
+            shader_binding_table,
         })
     }
 
+}
+
+fn buffer_from_groups(ctx: &mut Context, groups: usize, handle: &vk::Pipeline, offset: u32) -> Result<Buffer>{
+    let handle_size = ctx.ray_tracing.pipeline_properties.shader_group_handle_size;
+    let handle_alignment = ctx
+        .ray_tracing
+        .pipeline_properties
+        .shader_group_handle_alignment;
+    let aligned_handle_size = alinged_size(handle_size, handle_alignment);
+    let group_alignment = ctx
+        .ray_tracing
+        .pipeline_properties
+        .shader_group_base_alignment;
+    let handle_pad = aligned_handle_size - handle_size;
+
+    let size = alinged_size(
+        groups as u32 * aligned_handle_size as u32,
+        group_alignment,
+    );
+
+    let aligned_group_size = alinged_size(size, group_alignment);
+    let group_pad = aligned_group_size - size;
+
+    let buffer_usage = vk::BufferUsageFlags::SHADER_BINDING_TABLE_KHR
+        | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS;
+    let memory_location = MemoryLocation::CpuToGpu;
+
+    let handles = unsafe {
+        ctx.ray_tracing
+            .pipeline_fn
+            .get_ray_tracing_shader_group_handles(
+                *handle,
+                offset,
+                offset + groups as u32,
+                groups * handle_size as usize,
+            )?
+    };
+
+
+
+    let buffer = ctx.create_aligned_buffer(
+        buffer_usage,
+        memory_location,
+        size as _,
+        Some("Raygen Buffer"),
+        ctx.ray_tracing
+            .pipeline_properties
+            .shader_group_base_alignment
+            .into(),
+    )?;
+
+    let mut data = Vec::with_capacity(groups);
+
+    for g in 0..groups {
+        for _ in 0..handle_size as usize {
+            data.push(handles[g]);
+        }
+
+        for _ in 0..handle_pad {
+            data.push(0x0);
+        }
+    }
+
+    for _ in 0..group_pad {
+        data.push(0x0);
+    }
+
+    buffer.copy_data_to_buffer(&data);
+
+    Ok(buffer)
 }
 
 impl RayTracingPipeline {
     pub fn builder() -> RayTracingPipelineBuilder {
         RayTracingPipelineBuilder::default()
     }
+
+    pub fn create_descriptor_sets() -> Result<Vec<vk::DescriptorSet>> {
+
+    }  
 }

@@ -68,7 +68,7 @@ impl Model {
             instance_custom_index_and_mask: Packed24_8::new(0, 0xFF),
             instance_shader_binding_table_record_offset_and_flags: Packed24_8::new(
                 0,
-                vk::GeometryInstanceFlagsKHR::TRIANGLE_FRONT_COUNTERCLOCKWISE.as_raw() as _,
+                vk::GeometryInstanceFlagsKHR::TRIANGLE_CULL_DISABLE_NV.as_raw() as _,
             ),
             acceleration_structure_reference: vk::AccelerationStructureReferenceKHR {
                 device_handle: self.blas.device_address,
@@ -354,7 +354,7 @@ impl Model {
                 border_color: vk::BorderColor::FLOAT_OPAQUE_WHITE,
                 compare_op: vk::CompareOp::NEVER,
                 ..Default::default()
-            };            
+            };
             let sampler = unsafe { ctx.device.create_sampler(&sampler_info, None) }.unwrap();
             samplers.push(sampler);
         }

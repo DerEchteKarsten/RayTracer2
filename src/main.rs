@@ -4,7 +4,7 @@ use context::*;
 mod camera;
 use camera::*;
 mod gltf;
-// mod pipeline;
+mod pipeline;
 
 mod model;
 use log::debug;
@@ -39,12 +39,8 @@ use winit::{
 };
 
 fn main() {
-    let model_thread = std::thread::spawn(|| {
-       gltf::load_file("./src/models/box.glb").unwrap()
-    });  
-    let image_thread = std::thread::spawn(|| {
-       image::open("./src/models/skybox.png").unwrap()
-    });  
+    let model_thread = std::thread::spawn(|| gltf::load_file("./src/models/box2.glb").unwrap());
+    let image_thread = std::thread::spawn(|| image::open("./src/models/skybox.png").unwrap());
 
     let device_extensions = [
         khr::Swapchain::name(),
@@ -78,10 +74,7 @@ fn main() {
     let event_loop = EventLoop::new();
     let window = WindowBuilder::new()
         .with_title("TEst")
-        .with_inner_size(winit::dpi::LogicalSize::new(
-            f64::from(2000),
-            f64::from(1000),
-        ))
+        .with_inner_size(PhysicalSize{width: 2560, height: 1440})
         .build(&event_loop)
         .unwrap();
     let window_size = window.inner_size();
@@ -98,7 +91,7 @@ fn main() {
     let mut camera = Camera::new(
         vec3(0.0, 0.0, 10.0),
         vec3(0.0, 0.0, -1.0),
-        60.0,
+        40.0,
         window_size.width as f32 / window_size.height as f32,
         0.1,
         1000.0,
@@ -117,10 +110,53 @@ fn main() {
         ..Default::default()
     };
 
-
     let mut controles = Controls {
         ..Default::default()
     };
+
+    let set_layout = create_descriptor_set_layout(&ctx.device, &[
+        vk::DescriptorSetLayoutBinding {
+            binding: 0,
+            descriptor_count: 1,
+            descriptor_type: vk::DescriptorType::STORAGE_IMAGE,
+            stage_flags: vk::ShaderStageFlags::COMPUTE,
+            ..Default::default()
+        },
+        vk::DescriptorSetLayoutBinding {
+            binding: 1,
+            descriptor_count: 1,
+            descriptor_type: vk::DescriptorType::STORAGE_IMAGE,
+            stage_flags: vk::ShaderStageFlags::COMPUTE,
+            ..Default::default()
+        } 
+    ], &[]).unwrap();
+
+    let compute_layout = unsafe { ctx.device.create_pipeline_layout(&vk::PipelineLayoutCreateInfo::builder().set_layouts(&[set_layout]).build(), None).unwrap() };
+    let entry_point_name = CString::new("main").unwrap();
+    let compute_module = module_from_bytes(&ctx.device, &include_bytes!("./shaders/post_processing.comp.spv")[..]).unwrap();
+    let compute_stage = vk::PipelineShaderStageCreateInfo::builder().module(compute_module).name(&entry_point_name).stage(vk::ShaderStageFlags::COMPUTE).build();
+    let create_info = vk::ComputePipelineCreateInfo::builder()
+        .stage(compute_stage)
+        .layout(compute_layout)
+        .build();
+    let compute_pipeline = unsafe { ctx.device.create_compute_pipelines(vk::PipelineCache::null(), &[create_info], None).unwrap() }[0];
+    let compute_pool = create_descriptor_pool(&ctx.device, 1, &[vk::DescriptorPoolSize::builder().descriptor_count(2).ty(vk::DescriptorType::STORAGE_IMAGE).build()]).unwrap();
+    let compute_set = allocate_descriptor_set(&ctx.device, &compute_pool, &set_layout).unwrap();
+    
+    let view = ctx.storage_image.1.clone();
+    update_descriptor_sets(&mut ctx, &compute_set, &[
+        WriteDescriptorSet {
+            binding: 0,
+            kind: WriteDescriptorSetKind::StorageImage { view: &view, layout: vk::ImageLayout::GENERAL }
+        }
+    ]);
+    let view = ctx.post_processing_image.1.clone();
+    update_descriptor_sets(&mut ctx, &compute_set, &[
+        WriteDescriptorSet {
+            binding: 1,
+            kind: WriteDescriptorSetKind::StorageImage { view: &view, layout: vk::ImageLayout::GENERAL }
+        }
+    ]);
 
     log::trace!("Starting Image Load");
     let image = image_thread.join().unwrap();
@@ -147,7 +183,6 @@ fn main() {
         .copy_data_to_buffer(std::slice::from_ref(&uniform_data))
         .unwrap();
 
-
     let tlas = {
         #[rustfmt::skip]
         let transform_matrix = vk::TransformMatrixKHR { matrix: [
@@ -155,7 +190,6 @@ fn main() {
             0.0, 1.0, 0.0, 0.0,
             0.0, 0.0, 1.0, 0.0
         ]};
-
 
         let instaces = &[model.instance(Mat4::IDENTITY)];
 
@@ -199,10 +233,11 @@ fn main() {
         .unwrap()
     };
 
+
     let pipeline = create_ray_tracing_pipeline(&ctx, &model).unwrap();
     let shader_binding_table = ctx.create_shader_binding_table(&pipeline).unwrap();
 
-    let (descriptor_pool, static_set, dynamic_sets) = create_descriptor_sets(
+    let (descriptor_pool, static_set) = create_descriptor_sets(
         &mut ctx,
         &pipeline,
         &tlas,
@@ -270,9 +305,11 @@ fn main() {
                             i,
                             &pipeline,
                             &shader_binding_table,
+                            &compute_pipeline,
+                            &compute_layout,
+                            &compute_set,
                             window_size,
                             &static_set,
-                            &dynamic_sets[i as usize],
                             &frame,
                             &moved,
                         );
@@ -295,11 +332,7 @@ fn create_descriptor_sets(
     ubo_buffer: &Buffer,
     model: &Model,
     sky_box: (&vk::ImageView, &vk::Sampler),
-) -> Result<(
-    vk::DescriptorPool,
-    vk::DescriptorSet,
-    Vec<vk::DescriptorSet>,
-)> {
+) -> Result<(vk::DescriptorPool, vk::DescriptorSet)> {
     let size = context.swapchain.images.len() as u32;
     let pool_sizes = [
         vk::DescriptorPoolSize::builder()
@@ -308,7 +341,7 @@ fn create_descriptor_sets(
             .build(),
         vk::DescriptorPoolSize::builder()
             .ty(vk::DescriptorType::STORAGE_IMAGE)
-            .descriptor_count(size* 2)
+            .descriptor_count(size * 2)
             .build(),
         vk::DescriptorPoolSize::builder()
             .ty(vk::DescriptorType::UNIFORM_BUFFER)
@@ -329,16 +362,10 @@ fn create_descriptor_sets(
     ];
 
     let pool = context.create_descriptor_pool((size * 2) + 1, &pool_sizes)?;
-    let dynamic_sets = allocate_descriptor_sets(
-        &context.device,
-        &pool,
-        &pipeline.storage_image_set_layout,
-        size,
-    )?;
 
     let static_set =
         allocate_descriptor_set(&context.device, &pool, &pipeline.descriptor_set_layout)?;
-        
+
     update_descriptor_sets(
         context,
         &static_set,
@@ -412,22 +439,19 @@ fn create_descriptor_sets(
         };
     }
 
-    dynamic_sets.iter().enumerate().for_each(|(index, set)| {
-        let view = &context.storage_images[index].1.clone();
-        update_descriptor_sets(
-            context,
-            set,
-            &[WriteDescriptorSet {
-                binding: 1,
-                kind: WriteDescriptorSetKind::StorageImage {
-                    layout: vk::ImageLayout::GENERAL,
-                    view,
-                },
-            }],
-        );
-    });
+    update_descriptor_sets(
+        context,
+        &static_set,
+        &[WriteDescriptorSet {
+            binding: 1,
+            kind: WriteDescriptorSetKind::StorageImage {
+                layout: vk::ImageLayout::GENERAL,
+                view: &context.storage_image.1.clone(),
+            },
+        }],
+    );
 
-    Ok((pool, static_set, dynamic_sets))
+    Ok((pool, static_set))
 }
 
 fn record_command_buffers(
@@ -435,25 +459,37 @@ fn record_command_buffers(
     index: u32,
     pipeline: &RayTracingPipeline,
     shader_binding_table: &ShaderBindingTable,
+    compute_pipeline: &vk::Pipeline,
+    compute_layout: &vk::PipelineLayout,
+    compute_set: &vk::DescriptorSet,
     window_size: PhysicalSize<u32>,
     static_set: &vk::DescriptorSet,
-    dynamic_set: &vk::DescriptorSet,
     frame: &u32,
     moved: &bool,
 ) {
     let swapchain_image = &ctx.swapchain.images[index as usize].0;
-    let storage_image = &ctx.storage_images[index as usize];
+    let storage_image = &ctx.storage_image;
     let cmd = &ctx.cmd_buffs[index as usize];
 
     unsafe {
-        let frame_c = std::slice::from_raw_parts(
-            frame as *const u32 as *const u8,
-            size_of::<u32>()
-        );
-        let moved_c = &[ if *moved == true { 1 as u8 } else {0 as u8} , 0, 0, 0];
+        let frame_c =
+            std::slice::from_raw_parts(frame as *const u32 as *const u8, size_of::<u32>());
+        let moved_c = &[if *moved == true { 1 as u8 } else { 0 as u8 }, 0, 0, 0];
 
-        ctx.device.cmd_push_constants(*cmd, pipeline.layout, vk::ShaderStageFlags::RAYGEN_KHR, 0, &frame_c);
-        ctx.device.cmd_push_constants(*cmd, pipeline.layout, vk::ShaderStageFlags::RAYGEN_KHR, size_of::<u32>() as u32, moved_c);
+        ctx.device.cmd_push_constants(
+            *cmd,
+            pipeline.layout,
+            vk::ShaderStageFlags::RAYGEN_KHR,
+            0,
+            &frame_c,
+        );
+        ctx.device.cmd_push_constants(
+            *cmd,
+            pipeline.layout,
+            vk::ShaderStageFlags::RAYGEN_KHR,
+            size_of::<u32>() as u32,
+            moved_c,
+        );
 
         ctx.device.cmd_bind_pipeline(
             *cmd,
@@ -466,7 +502,15 @@ fn record_command_buffers(
             vk::PipelineBindPoint::RAY_TRACING_KHR,
             pipeline.layout,
             0,
-            &[*static_set, *dynamic_set],
+            &[*static_set],
+            &[],
+        );
+        ctx.device.cmd_bind_descriptor_sets(
+            *cmd,
+            vk::PipelineBindPoint::COMPUTE,
+            *compute_layout,
+            0,
+            &[*compute_set],
             &[],
         );
 
@@ -483,6 +527,14 @@ fn record_command_buffers(
             1,
         );
 
+        ctx.device.cmd_bind_pipeline(
+            *cmd,
+            vk::PipelineBindPoint::COMPUTE,
+            *compute_pipeline,
+        );
+
+        ctx.device.cmd_dispatch(*cmd, window_size.width, window_size.height, 1);
+
         ctx.pipeline_image_barriers(
             &cmd,
             &[
@@ -496,7 +548,7 @@ fn record_command_buffers(
                     dst_stage_mask: vk::PipelineStageFlags2::TRANSFER,
                 },
                 ImageBarrier {
-                    image: &storage_image.0,
+                    image: &ctx.post_processing_image.0,
                     old_layout: vk::ImageLayout::GENERAL,
                     new_layout: vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
                     src_access_mask: vk::AccessFlags2::SHADER_WRITE,
@@ -509,7 +561,7 @@ fn record_command_buffers(
 
         ctx.copy_image(
             &cmd,
-            &storage_image.0,
+            &ctx.post_processing_image.0,
             vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
             swapchain_image,
             vk::ImageLayout::TRANSFER_DST_OPTIMAL,
@@ -528,7 +580,7 @@ fn record_command_buffers(
                     dst_stage_mask: vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
                 },
                 ImageBarrier {
-                    image: &storage_image.0,
+                    image: &ctx.post_processing_image.0,
                     old_layout: vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
                     new_layout: vk::ImageLayout::GENERAL,
                     src_access_mask: vk::AccessFlags2::TRANSFER_READ,
@@ -680,6 +732,12 @@ fn create_ray_tracing_pipeline(ctx: &Context, model: &Model) -> Result<RayTracin
             .stage_flags(vk::ShaderStageFlags::RAYGEN_KHR | vk::ShaderStageFlags::CLOSEST_HIT_KHR)
             .build(),
         vk::DescriptorSetLayoutBinding::builder()
+            .binding(1)
+            .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
+            .descriptor_count(1)
+            .stage_flags(vk::ShaderStageFlags::RAYGEN_KHR)
+            .build(),
+        vk::DescriptorSetLayoutBinding::builder()
             .binding(2)
             .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
             .descriptor_count(1)
@@ -725,35 +783,27 @@ fn create_ray_tracing_pipeline(ctx: &Context, model: &Model) -> Result<RayTracin
             .build(),
     ];
 
-    let dynamic_layout_bindings = [vk::DescriptorSetLayoutBinding::builder()
-        .binding(1)
-        .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
-        .descriptor_count(1)
-        .stage_flags(vk::ShaderStageFlags::RAYGEN_KHR)
-        .build(),
-    ];
-    let last_image_layout_binding = [
-        vk::DescriptorSetLayoutBinding::builder()
-        .binding(1)
-        .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
-        .descriptor_count(1)
-        .stage_flags(vk::ShaderStageFlags::RAYGEN_KHR)
-        .build()
-    ];
+    // let dynamic_layout_bindings = [vk::DescriptorSetLayoutBinding::builder()
+    //     .binding(1)
+    //     .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
+    //     .descriptor_count(1)
+    //     .stage_flags(vk::ShaderStageFlags::RAYGEN_KHR)
+    //     .build(),
+    // ];
+
     let static_dsl = ctx.create_descriptor_set_layout(&static_layout_bindings, &[])?;
-    let dynamic_dsl = ctx.create_descriptor_set_layout(&dynamic_layout_bindings, &[])?;
-    let last_image_dsl = ctx.create_descriptor_set_layout(&last_image_layout_binding, &[])?;
-    let dsls = [static_dsl, dynamic_dsl, last_image_dsl];
+    // let dynamic_dsl = ctx.create_descriptor_set_layout(&dynamic_layout_bindings, &[])?;
+    let dsls = [static_dsl];
 
-    let push_constants = &[
-        vk::PushConstantRange::builder()
-            .offset(0)
-            .size((size_of::<u32>() * 2) as u32)
-            .stage_flags(vk::ShaderStageFlags::RAYGEN_KHR)
-            .build(),
-    ];
+    let push_constants = &[vk::PushConstantRange::builder()
+        .offset(0)
+        .size((size_of::<u32>() * 2) as u32)
+        .stage_flags(vk::ShaderStageFlags::RAYGEN_KHR)
+        .build()];
 
-    let pipe_layout_info = vk::PipelineLayoutCreateInfo::builder().set_layouts(&dsls).push_constant_ranges(push_constants);
+    let pipe_layout_info = vk::PipelineLayoutCreateInfo::builder()
+        .set_layouts(&dsls)
+        .push_constant_ranges(push_constants);
     let pipeline_layout = unsafe { ctx.device.create_pipeline_layout(&pipe_layout_info, None)? };
 
     let shaders_create_info = [
@@ -872,6 +922,5 @@ fn create_ray_tracing_pipeline(ctx: &Context, model: &Model) -> Result<RayTracin
         descriptor_set_layout: static_dsl,
         layout: pipeline_layout,
         shader_group_info,
-        storage_image_set_layout: dynamic_dsl,
     })
 }

@@ -1,0 +1,76 @@
+#version 460
+#extension GL_EXT_debug_printf : enable
+
+layout (binding = 0, set=0, rgba32f) uniform readonly image2D inputImage;
+layout (binding = 1, set=0, rgba8) uniform writeonly image2D outputImage;
+
+// const float ACESN_A = 2.51;
+// const float ACESN_B = 0.03;
+// const float ACESN_C = 2.43;
+// const float ACESN_D = 0.59;
+// const float ACESN_E = 0.14;
+// const float ACESN_Exp = 1.0;
+// const float ACESN_Gamma = 2.2;
+
+
+// void main() {
+//     vec3 texColor = imageLoad(inputImage, ivec2(gl_GlobalInvocationID.xy)).rgb;
+	
+// 	// Do inital de-gamma of the game image to ensure we're operating in the correct colour range.
+// 	if( ACESN_Gamma > 1.00 )
+// 		texColor = pow(texColor, vec3(ACESN_Gamma));
+		
+// 	texColor *= ACESN_Exp;  // Exposure Adjustment
+
+// 	// ACES
+// 	texColor = clamp((texColor*(ACESN_A*texColor+ACESN_B))/(texColor*(ACESN_C*texColor+ACESN_D)+ACESN_E), 0.0, 1.0);
+    
+// 	// Do the post-tonemapping gamma correction
+// 	if( ACESN_Gamma > 1.00 )
+// 		texColor = pow(texColor,vec3(1/ACESN_Gamma));
+	
+//     imageStore(outputImage, ivec2(gl_GlobalInvocationID.xy), vec4(texColor,1));
+// }
+
+
+
+// const float HPD_Exp = 1.0;
+// const float HPD_Gamma = 2.0;
+
+// void main() {
+//     vec3 texColor = imageLoad(inputImage, ivec2(gl_GlobalInvocationID.xy)).rgb;
+	
+// 	// Do inital de-gamma of the game image to ensure we're operating in the correct colour range.
+// 	if( HPD_Gamma > 1.00 )
+// 		texColor = pow(texColor,vec3(HPD_Gamma));
+		
+// 	texColor *= HPD_Exp;  // Exposure Adjustment
+
+// 	// HPD
+// 	vec3 x = max(vec3(0),texColor-0.004);
+// 	vec3 retColor = (x*(6.2*x+.5))/(x*(6.2*x+1.7)+0.06);
+	
+//     imageStore(outputImage, ivec2(gl_GlobalInvocationID.xy), vec4(retColor,1));
+// }
+
+vec3 uncharted2_tonemap_partial(vec3 x)
+{
+    float A = 0.15f;
+    float B = 0.50f;
+    float C = 0.10f;
+    float D = 0.20f;
+    float E = 0.02f;
+    float F = 0.30f;
+    return ((x*(A*x+C*B)+D*E)/(x*(A*x+B)+D*F))-E/F;
+}
+
+void main()
+{
+    vec3 texColor = imageLoad(inputImage, ivec2(gl_GlobalInvocationID.xy)).rgb;
+    float exposure_bias = 2.0f;
+    vec3 curr = uncharted2_tonemap_partial(texColor * exposure_bias);
+
+    vec3 W = vec3(11.2f);
+    vec3 white_scale = vec3(1.0f) / uncharted2_tonemap_partial(W);
+    imageStore(outputImage, ivec2(gl_GlobalInvocationID.xy), vec4(curr * white_scale, 1.0));
+}

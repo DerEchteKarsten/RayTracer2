@@ -18,7 +18,7 @@ use gpu_allocator::{
     vulkan::{Allocation, AllocationCreateDesc, Allocator, AllocatorCreateDesc},
     AllocatorDebugSettings, MemoryLocation,
 };
-use image::{GenericImageView, DynamicImage};
+use image::{DynamicImage, GenericImageView};
 use raw_window_handle::{RawDisplayHandle, RawWindowHandle};
 use simple_logger::SimpleLogger;
 use std::slice::from_ref;
@@ -43,7 +43,8 @@ pub struct Context {
     pub swapchain: Swapchain,
     pub frame: u64,
     pub cmd_buffs: Vec<vk::CommandBuffer>,
-    pub storage_images: Vec<(Image, vk::ImageView)>,
+    pub storage_image: (Image, vk::ImageView),
+    pub post_processing_image: (Image, vk::ImageView),
     pub last_frame: u64,
     _entry: Entry,
 }
@@ -94,7 +95,6 @@ impl Context {
                 .enabled_layer_names(&layers_names_raw)
                 .push_next(&mut validation_features);
         }
-        
 
         let mut instance = unsafe { entry.create_instance(&instance_info, None)? };
 
@@ -193,13 +193,33 @@ impl Context {
             frames_in_flight.push(Frame::new(&device)?);
         }
         let mut cmd_buffs = Vec::with_capacity(swapchain.images.len());
-        let mut storage_images = Vec::with_capacity(swapchain.images.len());
+
         for _ in &swapchain.images {
             cmd_buffs.push(allocate_command_buffer(
                 &device,
                 &command_pool,
                 vk::CommandBufferLevel::PRIMARY,
             )?);
+        }
+
+        let storage_image = {
+            let image = Image::new_2d(
+                &device,
+                &mut allocator,
+                vk::ImageUsageFlags::TRANSFER_SRC | vk::ImageUsageFlags::STORAGE,
+                MemoryLocation::GpuOnly,
+                vk::Format::R32G32B32A32_SFLOAT,
+                swapchain.extent.width,
+                swapchain.extent.height,
+            )?;
+
+            Self::transition_image_layout_to_general(&device, &command_pool, &image, &graphics_queue);
+
+            let view = create_image_view(&device, &image, &vk::Format::R32G32B32A32_SFLOAT);
+            (image, view)
+        };
+
+        let post_processing_image = {
             let image = Image::new_2d(
                 &device,
                 &mut allocator,
@@ -210,47 +230,14 @@ impl Context {
                 swapchain.extent.height,
             )?;
 
-            let cmd = allocate_command_buffer(&device, &command_pool, vk::CommandBufferLevel::PRIMARY)?;
-
-            let barrier = vk::ImageMemoryBarrier2::builder()
-                .src_stage_mask(vk::PipelineStageFlags2::TOP_OF_PIPE)
-                .src_access_mask(vk::AccessFlags2::NONE)
-                .old_layout(vk::ImageLayout::UNDEFINED)
-                .dst_stage_mask(vk::PipelineStageFlags2::BOTTOM_OF_PIPE)
-                .dst_access_mask(vk::AccessFlags2::NONE)
-                .new_layout(vk::ImageLayout::GENERAL)
-                .image(image.inner)
-                .subresource_range(vk::ImageSubresourceRange {
-                    aspect_mask: vk::ImageAspectFlags::COLOR,
-                    base_mip_level: 0,
-                    level_count: 1,
-                    base_array_layer: 0,
-                    layer_count: 1,
-                })
-                .build();
-            unsafe { device.begin_command_buffer(cmd, &vk::CommandBufferBeginInfo::builder().flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT).build())? };
-            unsafe { device.cmd_pipeline_barrier2(cmd, &vk::DependencyInfo::builder().image_memory_barriers(&[barrier]).build()) };
-            unsafe { device.end_command_buffer(cmd)? };
-
-            let fence = Fence { handel: unsafe { device.create_fence(&vk::FenceCreateInfo::builder().build(), None)? } };
-            queue_submit(
-                &device,
-                &graphics_queue,
-                &cmd,
-                None,
-                None,
-                &fence,
-            )?;
-            fence.wait(&device, None)?;
-    
-            free_command_buffer(&command_pool, &device, cmd)?;
+            Self::transition_image_layout_to_general(&device, &command_pool, &image, &graphics_queue);
 
             let view = create_image_view(&device, &image, &swapchain.format);
-
-            storage_images.push((image, view))
-        }
+            (image, view)
+        };
 
         Ok(Self {
+            post_processing_image,
             last_frame: 0,
             frame: 0,
             allocator,
@@ -268,9 +255,61 @@ impl Context {
             frames_in_flight,
             swapchain,
             cmd_buffs,
-            storage_images,
+            storage_image,
             _entry: entry,
         })
+    }
+
+    pub fn transition_image_layout_to_general(
+        device: &Device,
+        command_pool: &vk::CommandPool,
+        image: &Image,
+        queue: &vk::Queue,
+    ) -> Result<()> {
+        let cmd = allocate_command_buffer(&device, &command_pool, vk::CommandBufferLevel::PRIMARY)?;
+
+        let barrier = vk::ImageMemoryBarrier2::builder()
+            .src_stage_mask(vk::PipelineStageFlags2::TOP_OF_PIPE)
+            .src_access_mask(vk::AccessFlags2::NONE)
+            .old_layout(vk::ImageLayout::UNDEFINED)
+            .dst_stage_mask(vk::PipelineStageFlags2::BOTTOM_OF_PIPE)
+            .dst_access_mask(vk::AccessFlags2::NONE)
+            .new_layout(vk::ImageLayout::GENERAL)
+            .image(image.inner)
+            .subresource_range(vk::ImageSubresourceRange {
+                aspect_mask: vk::ImageAspectFlags::COLOR,
+                base_mip_level: 0,
+                level_count: 1,
+                base_array_layer: 0,
+                layer_count: 1,
+            })
+            .build();
+        unsafe {
+            device.begin_command_buffer(
+                cmd,
+                &vk::CommandBufferBeginInfo::builder()
+                    .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT)
+                    .build(),
+            )?
+        };
+        unsafe {
+            device.cmd_pipeline_barrier2(
+                cmd,
+                &vk::DependencyInfo::builder()
+                    .image_memory_barriers(&[barrier])
+                    .build(),
+            )
+        };
+        unsafe { device.end_command_buffer(cmd)? };
+
+        let fence = Fence {
+            handel: unsafe { device.create_fence(&vk::FenceCreateInfo::builder().build(), None)? },
+        };
+        queue_submit(&device, &queue, &cmd, None, None, &fence)?;
+        fence.wait(&device, None)?;
+
+        free_command_buffer(&command_pool, &device, cmd)?;
+        Ok(())
     }
 
     pub fn copy_buffer_to_image(
@@ -536,7 +575,7 @@ impl Context {
         if suboptimal {
             println!("suboptimal");
         }
-        
+
         Ok(frame_index)
     }
 
@@ -1171,7 +1210,6 @@ pub struct RayTracingShaderGroupInfo {
 
 pub struct RayTracingPipeline {
     pub descriptor_set_layout: vk::DescriptorSetLayout,
-    pub storage_image_set_layout: vk::DescriptorSetLayout,
     pub layout: vk::PipelineLayout,
     pub handle: vk::Pipeline,
     pub shader_group_info: RayTracingShaderGroupInfo,

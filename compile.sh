@@ -11,3 +11,4 @@ compile $base/src/shaders/raygen.rgen
 compile $base/src/shaders/rayhit.rchit
 compile $base/src/shaders/rayint.rint
 compile $base/src/shaders/shadow.rmiss
+compile $base/src/shaders/post_processing.comp
