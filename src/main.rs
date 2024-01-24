@@ -4,7 +4,7 @@ use context::*;
 mod camera;
 use camera::*;
 mod gltf;
-mod pipeline;
+// mod pipeline;
 
 mod model;
 use log::debug;
@@ -39,7 +39,7 @@ use winit::{
 };
 
 fn main() {
-    let model_thread = std::thread::spawn(|| gltf::load_file("./src/models/box2.glb").unwrap());
+    let model_thread = std::thread::spawn(|| gltf::load_file("./src/models/sponza_scene.glb").unwrap());
     let image_thread = std::thread::spawn(|| image::open("./src/models/skybox.png").unwrap());
 
     let device_extensions = [
@@ -160,7 +160,7 @@ fn main() {
 
     log::trace!("Starting Image Load");
     let image = image_thread.join().unwrap();
-    let sky_box = Image::new_from_data(&mut ctx, image).unwrap();
+    let sky_box = Image::new_from_data(&mut ctx, image, vk::Format::R8G8B8A8_SRGB).unwrap();
     let sky_box_sampler = unsafe { ctx.device.create_sampler(&sampler_info, None) }.unwrap();
     log::trace!("Starting Model");
     let model = model_thread.join().unwrap();
@@ -707,7 +707,6 @@ pub enum RayTracingShaderGroup {
     RayGen,
     Miss,
     Hit,
-    ProceduralHit,
 }
 
 pub fn read_shader_from_bytes(bytes: &[u8]) -> Result<Vec<u32>> {
@@ -835,6 +834,10 @@ fn create_ray_tracing_pipeline(ctx: &Context, model: &Model) -> Result<RayTracin
                     vk::ShaderStageFlags::CLOSEST_HIT_KHR,
                 ),
                 // (
+                //     &include_bytes!("./shaders/anyhit.rahit.spv")[..],
+                //     vk::ShaderStageFlags::ANY_HIT_KHR,
+                // ),
+                // (
                 //     &include_bytes!("./shaders/rayint.rint.spv")[..],
                 //     vk::ShaderStageFlags::INTERSECTION_KHR,
                 // ),
@@ -873,7 +876,6 @@ fn create_ray_tracing_pipeline(ctx: &Context, model: &Model) -> Result<RayTracin
             RayTracingShaderGroup::RayGen => shader_group_info.raygen_shader_count += 1,
             RayTracingShaderGroup::Miss => shader_group_info.miss_shader_count += 1,
             RayTracingShaderGroup::Hit => shader_group_info.hit_shader_count += 1,
-            RayTracingShaderGroup::ProceduralHit => shader_group_info.hit_shader_count += 1,
         };
 
         let shader_index = stages.len();
@@ -888,13 +890,24 @@ fn create_ray_tracing_pipeline(ctx: &Context, model: &Model) -> Result<RayTracin
             RayTracingShaderGroup::RayGen | RayTracingShaderGroup::Miss => {
                 group.general_shader(shader_index as _)
             }
-            RayTracingShaderGroup::Hit => group
-                .ty(vk::RayTracingShaderGroupTypeKHR::TRIANGLES_HIT_GROUP)
-                .closest_hit_shader(shader_index as _),
-            RayTracingShaderGroup::ProceduralHit => group
-                .ty(vk::RayTracingShaderGroupTypeKHR::PROCEDURAL_HIT_GROUP)
-                .closest_hit_shader(shader_index as _)
-                .intersection_shader((shader_index + 1) as _),
+            RayTracingShaderGroup::Hit => {
+                group = group
+                    .ty(vk::RayTracingShaderGroupTypeKHR::TRIANGLES_HIT_GROUP)
+                    .closest_hit_shader(shader_index as _);
+                if shader.source.len() >= 2 {
+                    group = group
+                        .ty(vk::RayTracingShaderGroupTypeKHR::TRIANGLES_HIT_GROUP)
+                        .any_hit_shader((shader_index as u32) +1 );
+                }
+                if shader.source.len() >= 3 {
+                    group = group
+                        .ty(vk::RayTracingShaderGroupTypeKHR::PROCEDURAL_HIT_GROUP)
+                        .any_hit_shader((shader_index as u32) +1 )
+                        .intersection_shader((shader_index as u32) +2 );
+                }
+                
+                group
+            }
         };
 
         modules.append(&mut this_modules);

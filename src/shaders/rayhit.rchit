@@ -2,34 +2,11 @@
 #extension GL_EXT_ray_tracing : enable
 #extension GL_EXT_nonuniform_qualifier : enable
 #extension GL_EXT_debug_printf : enable
+#extension GL_GOOGLE_include_directive : enable
 
-struct Vertex {
-  vec3 pos;
-  vec3 normal;
-  vec3 color;
-  vec2 uvs;
-};
+#include "./common.glsl"
 
-struct GeometryInfo {
-  mat4 transform;
-  vec4 baseColor;
-  int baseColorTextureIndex;
-  float metallicFactor;
-  uint indexOffset;
-  uint vertexOffset;
-  vec4 emission;
-  float roughness;
-};
-
-layout(location = 0) rayPayloadInEXT Payload {
-	bool missed;
-	float metallicFactor;
-  float roughness;
-	vec3 color;
-  vec3 emission;
-	vec3 hitPoint;
-	vec3 hitNormal;
-} p;
+layout(location = 0) rayPayloadInEXT Payload p;
 
 //layout(location = 1) rayPayloadEXT bool isShadowed;
 
@@ -64,10 +41,10 @@ void main()
 
   vec3 vertexColor = v0.color * barycentricCoords.x + v1.color * barycentricCoords.y + v2.color * barycentricCoords.z;
   vec3 baseColor = geometryInfo.baseColor.xyz;
-  vec3 color = baseColor * vertexColor;
+  vec4 color = vec4(baseColor * vertexColor, 1.0);
 
   if (geometryInfo.baseColorTextureIndex > -1) {
-    color = color * texture(nonuniformEXT(textures[geometryInfo.baseColorTextureIndex]), uvs).xyz;
+    color = color * texture(nonuniformEXT(textures[geometryInfo.baseColorTextureIndex]), uvs);
   }
 
   vec3 origin = gl_WorldRayOriginEXT + gl_WorldRayDirectionEXT * gl_HitTEXT;

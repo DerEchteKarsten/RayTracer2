@@ -44,8 +44,7 @@ void main()
 	vec3 d = gl_WorldRayDirectionEXT;
 	float u = (0.5 + atan2(d.z, d.x)/(2*PI));
     float v = (0.5 - asin(d.y)/PI);
-
-    p.color = texture(skyBox, vec2(u,v)).xyz;
+	vec4 tex = texture(skyBox, vec2(u,v));
+	p.color = tex.rgb;
     p.missed = true;
-    //vec4(0.392, 0.5843, 0.92941, 1.0);
 }

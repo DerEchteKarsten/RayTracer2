@@ -936,20 +936,35 @@ impl Image {
         })
     }
 
-    pub fn new_from_data(ctx: &mut Context, image: DynamicImage) -> Result<(Self, vk::ImageView)> {
+    pub fn new_from_data(ctx: &mut Context, image: DynamicImage, format: vk::Format) -> Result<(Self, vk::ImageView)> {
         let (width, height) = image.dimensions();
         let image_extent = vk::Extent2D { width, height };
-        let image_data = image.to_rgba8();
-        let image_data_raw = image_data.as_raw();
+        let image_buffer = if format != vk::Format::R8G8B8A8_SRGB {
+            let image_data = image.to_rgba32f();
+            let image_data_raw = image_data.as_raw();
+    
+            let image_buffer = ctx.create_buffer(
+                vk::BufferUsageFlags::TRANSFER_SRC,
+                MemoryLocation::CpuToGpu,
+                (size_of::<f32>() * image_data.len()) as u64,
+                Some("image buffer"),
+            )?;
+            image_buffer.copy_data_to_buffer(image_data_raw.as_slice())?;
+            image_buffer
+        } else {
+            let image_data = image.to_rgba8();
+            let image_data_raw = image_data.as_raw();
+    
+            let image_buffer = ctx.create_buffer(
+                vk::BufferUsageFlags::TRANSFER_SRC,
+                MemoryLocation::CpuToGpu,
+                (size_of::<u8>() * image_data.len()) as u64,
+                Some("image buffer"),
+            )?;
+            image_buffer.copy_data_to_buffer(image_data_raw.as_slice())?;
+            image_buffer
+        };
 
-        let image_buffer = ctx.create_buffer(
-            vk::BufferUsageFlags::TRANSFER_SRC,
-            MemoryLocation::CpuToGpu,
-            (size_of::<u8>() * image_data.len()) as u64,
-            Some("image buffer"),
-        )?;
-
-        image_buffer.copy_data_to_buffer(image_data_raw.as_slice())?;
 
         log::debug!("TODO: Mip Levels");
 
@@ -958,7 +973,7 @@ impl Image {
             &mut ctx.allocator,
             vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::SAMPLED,
             MemoryLocation::GpuOnly,
-            vk::Format::R8G8B8A8_SRGB,
+            format,
             width,
             height,
         )?;
@@ -994,7 +1009,7 @@ impl Image {
             ctx.pipeline_image_barriers(cmd, &[texture_barrier_end]);
         })?;
 
-        let image_view = create_image_view(&ctx.device, &texture_image, &vk::Format::R8G8B8A8_SRGB);
+        let image_view = create_image_view(&ctx.device, &texture_image, &format);
         Ok((
             Self {
                 allocation: texture_image.allocation,
@@ -1003,7 +1018,7 @@ impl Image {
                     depth: 1,
                     height,
                 },
-                format: vk::Format::R8G8B8A8_SRGB,
+                format: format,
                 inner: texture_image.inner,
                 mip_levls: 1,
             },
