@@ -213,7 +213,12 @@ impl Context {
                 swapchain.extent.height,
             )?;
 
-            Self::transition_image_layout_to_general(&device, &command_pool, &image, &graphics_queue);
+            Self::transition_image_layout_to_general(
+                &device,
+                &command_pool,
+                &image,
+                &graphics_queue,
+            );
 
             let view = create_image_view(&device, &image, &vk::Format::R32G32B32A32_SFLOAT);
             (image, view)
@@ -230,7 +235,12 @@ impl Context {
                 swapchain.extent.height,
             )?;
 
-            Self::transition_image_layout_to_general(&device, &command_pool, &image, &graphics_queue);
+            Self::transition_image_layout_to_general(
+                &device,
+                &command_pool,
+                &image,
+                &graphics_queue,
+            );
 
             let view = create_image_view(&device, &image, &swapchain.format);
             (image, view)
@@ -721,33 +731,6 @@ pub fn allocate_descriptor_set(
         .unwrap())
 }
 
-pub fn update_descriptor_set_buffer(
-    ctx: &mut Context,
-    set: &vk::DescriptorSet,
-    buffer: &Buffer,
-    binding: u32,
-) {
-    // let mut data = vec![];
-    // for _ in 0..1003213 {
-    //     data.push(1 as u32);
-    // }
-    // let test_buffer = ctx.create_gpu_only_buffer_from_data::<u32>(vk::BufferUsageFlags::STORAGE_BUFFER, data.as_slice(), Some("TEst Buffer")).unwrap();
-    // log::debug!("{:?}, {:?}", test_buffer, buffer);
-    let buffer_info = vk::DescriptorBufferInfo::builder()
-        .buffer(buffer.inner)
-        .range(vk::WHOLE_SIZE)
-        .build();
-
-    let write = vk::WriteDescriptorSet::builder()
-        .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-        .dst_binding(binding)
-        .dst_set(set.clone())
-        .buffer_info(from_ref(&buffer_info))
-        .build();
-
-    unsafe { ctx.device.update_descriptor_sets(&[write], &[]) };
-}
-
 pub fn update_descriptor_sets(
     ctx: &mut Context,
     set: &vk::DescriptorSet,
@@ -757,7 +740,6 @@ pub fn update_descriptor_sets(
 
     let mut descriptor_writes = vec![];
     let mut image_infos = vec![];
-    let mut buffer_infos = vec![];
 
     for w in writes {
         match w.kind {
@@ -775,6 +757,7 @@ pub fn update_descriptor_sets(
                         .image_info(&[img_info])
                         .build(),
                 );
+                image_infos.push(img_info);
             }
             AccelerationStructure {
                 acceleration_structure,
@@ -794,7 +777,7 @@ pub fn update_descriptor_sets(
             }
             UniformBuffer { buffer } => {
                 let buffer_info = vk::DescriptorBufferInfo::builder()
-                    .buffer(buffer.inner)
+                    .buffer(buffer)
                     .range(vk::WHOLE_SIZE)
                     .build();
 
@@ -806,7 +789,6 @@ pub fn update_descriptor_sets(
                         .buffer_info(&[buffer_info])
                         .build(),
                 );
-                buffer_infos.push(buffer_info);
             }
             CombinedImageSampler {
                 view,
@@ -816,7 +798,8 @@ pub fn update_descriptor_sets(
                 let img_info = vk::DescriptorImageInfo::builder()
                     .image_view(view.clone())
                     .sampler(sampler.clone())
-                    .image_layout(layout);
+                    .image_layout(layout)
+                    .build();
 
                 descriptor_writes.push(
                     vk::WriteDescriptorSet::builder()
@@ -828,34 +811,52 @@ pub fn update_descriptor_sets(
                 );
                 image_infos.push(img_info);
             }
+            StorageBuffer { buffer } => {
+                let buffer_info = vk::DescriptorBufferInfo::builder()
+                    .buffer(buffer)
+                    .range(vk::WHOLE_SIZE)
+                    .build();
+
+                let write = vk::WriteDescriptorSet::builder()
+                    .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                    .dst_binding(w.binding)
+                    .dst_set(set.clone())
+                    .buffer_info(&[buffer_info])
+                    .build();
+                //TODO WTF is this hack
+                unsafe { ctx.device.update_descriptor_sets(&[write], &[]) };
+            }
         }
     }
 
     unsafe { ctx.device.update_descriptor_sets(&descriptor_writes, &[]) };
 }
 
-#[derive(Clone, Copy)]
-pub struct WriteDescriptorSet<'a> {
+#[derive(Clone)]
+pub struct WriteDescriptorSet {
     pub binding: u32,
-    pub kind: WriteDescriptorSetKind<'a>,
+    pub kind: WriteDescriptorSetKind,
 }
 
-#[derive(Clone, Copy)]
-pub enum WriteDescriptorSetKind<'a> {
+#[derive(Clone, Debug)]
+pub enum WriteDescriptorSetKind {
     StorageImage {
-        view: &'a vk::ImageView,
+        view: vk::ImageView,
         layout: vk::ImageLayout,
     },
     AccelerationStructure {
-        acceleration_structure: &'a vk::AccelerationStructureKHR,
+        acceleration_structure: vk::AccelerationStructureKHR,
     },
     UniformBuffer {
-        buffer: &'a Buffer,
+        buffer: vk::Buffer,
     },
     CombinedImageSampler {
-        view: &'a vk::ImageView,
-        sampler: &'a vk::Sampler,
+        view: vk::ImageView,
+        sampler: vk::Sampler,
         layout: vk::ImageLayout,
+    },
+    StorageBuffer {
+        buffer: vk::Buffer,
     },
 }
 
@@ -936,13 +937,17 @@ impl Image {
         })
     }
 
-    pub fn new_from_data(ctx: &mut Context, image: DynamicImage, format: vk::Format) -> Result<(Self, vk::ImageView)> {
+    pub fn new_from_data(
+        ctx: &mut Context,
+        image: DynamicImage,
+        format: vk::Format,
+    ) -> Result<(Self, vk::ImageView)> {
         let (width, height) = image.dimensions();
         let image_extent = vk::Extent2D { width, height };
         let image_buffer = if format != vk::Format::R8G8B8A8_SRGB {
             let image_data = image.to_rgba32f();
             let image_data_raw = image_data.as_raw();
-    
+
             let image_buffer = ctx.create_buffer(
                 vk::BufferUsageFlags::TRANSFER_SRC,
                 MemoryLocation::CpuToGpu,
@@ -954,7 +959,7 @@ impl Image {
         } else {
             let image_data = image.to_rgba8();
             let image_data_raw = image_data.as_raw();
-    
+
             let image_buffer = ctx.create_buffer(
                 vk::BufferUsageFlags::TRANSFER_SRC,
                 MemoryLocation::CpuToGpu,
@@ -964,7 +969,6 @@ impl Image {
             image_buffer.copy_data_to_buffer(image_data_raw.as_slice())?;
             image_buffer
         };
-
 
         log::debug!("TODO: Mip Levels");
 

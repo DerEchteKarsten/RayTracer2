@@ -37,6 +37,10 @@ void main()
 	vec3 normal = normalize(v0.normal * barycentricCoords.x + v1.normal * barycentricCoords.y + v2.normal * barycentricCoords.z);
   normal = normalize(geometryInfo.transform * vec4(normal, 0.0)).xyz;
 
+  if (dot(normal, gl_WorldRayDirectionEXT) > 0) {
+    normal *= -1;
+  }
+
   vec2 uvs = v0.uvs * barycentricCoords.x + v1.uvs * barycentricCoords.y + v2.uvs * barycentricCoords.z;
 
   vec3 vertexColor = v0.color * barycentricCoords.x + v1.color * barycentricCoords.y + v2.color * barycentricCoords.z;

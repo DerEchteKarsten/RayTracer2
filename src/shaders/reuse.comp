@@ -1,0 +1,69 @@
+#version 460
+#extension GL_EXT_debug_printf : enable
+#extension GL_GOOGLE_include_directive : enable
+
+#include "restir.glsl"
+
+layout( push_constant ) uniform Frame {
+	uint frame;
+	uint moved;
+} f;
+
+layout (binding = 0, set=0) buffer temporalReservoirs {
+	Reservoir temporalReservoirs[];
+} tr;
+
+layout (binding = 1, set=0) buffer spaceialReservoirs {
+	Reservoir spaceialReservoirs[];
+} sr;
+
+layout (binding = 2, set=0) readonly buffer InitialSamples {
+	Sample initialSamples[];
+} is;
+
+layout(binding = 3, set = 0, rgba32f) uniform image2D image;
+
+uint toLinearIndex(uvec2 pixel) {
+    return pixel.y * gl_WorkGroupSize.x + pixel.x;
+}
+
+float luminance(vec3 rgb)
+{
+    const vec3 W = vec3(0.2125, 0.7154, 0.0721);
+    return dot(rgb, W);
+}
+
+float evalTargetFunction(vec3 radiance)
+{
+    return luminance(radiance);
+}
+
+const int temporalMaxSamples = 100;
+
+void temporal_reuse(uint q) {
+    Sample S = is.initialSamples[q];
+    Reservoir R = tr.temporalReservoirs[q];
+    float w = evalTargetFunction(S.radiance) / ;
+
+    R.s = S;
+
+    tr.temporalReservoirs[q] = R;
+}
+
+// void spaceial_reuse () {
+
+// }
+
+void main() {
+    uint pixelIndex = (gl_WorkGroupID.y * gl_NumWorkGroups.x) + gl_WorkGroupID.x;
+
+    if (f.frame == 0) {
+        Sample s = is.initialSamples[pixelIndex];
+        imageStore(image, ivec2(gl_WorkGroupID.xy), vec4(s.radiance, 1.0));
+        tr.temporalReservoirs[pixelIndex] = Reservoir(s, 0, 0, 0);
+    }else {
+        temporal_reuse(pixelIndex);
+        Sample s = tr.temporalReservoirs[pixelIndex].s;
+	    imageStore(image, ivec2(gl_WorkGroupID.xy), vec4(s.radiance, 1.0));
+    }
+}

@@ -9,7 +9,7 @@
 #extension GL_EXT_shader_explicit_arithmetic_types : enable
 #extension GL_GOOGLE_include_directive : enable
 
-#include "./common.glsl"
+#include "./restir.glsl"
 
 layout( push_constant ) uniform Frame {
 	uint frame;
@@ -17,70 +17,23 @@ layout( push_constant ) uniform Frame {
 } f;
 
 layout(binding = 0, set = 0) uniform accelerationStructureEXT topLevelAS;
-layout(binding = 1, set = 0, rgba32f) uniform image2D image;
+// layout(binding = 1, set = 0, rgba32f) uniform image2D image;
 layout(binding = 2, set = 0) uniform CameraProperties 
 {
 	mat4 viewInverse;
 	mat4 projInverse;
 } cam;
-
 layout(location = 0) rayPayloadEXT Payload p;
 
-#define PI 3.1415926
-
-uint NextRandom(inout uint state) {
-	state = state * 747796405 + 2891336453;
-	uint result = ((state >> ((state >> 28) + 4)) ^ state) * 277803737;
-	result = (result >> 22) ^ result;
-	return result;
-}
-
-float RandomValue(inout uint state) {
-	return NextRandom(state) / 4294967295.0;
-}
-
-float RandomValueNormalDistribution(inout uint state) {
-	float theta = 2 * 3.1415926 * RandomValue(state);
-	float rho = sqrt(-2 * log(RandomValue(state)));
-	return rho * cos(theta);
-}
-
-vec3 RandomDirection(inout uint state) {
-	float x = RandomValueNormalDistribution(state);
-	float y = RandomValueNormalDistribution(state);
-	float z = RandomValueNormalDistribution(state);
-	return normalize(vec3(x,y,z));
-}
-
-float FresnelSchlickRoughness( float cosTheta, float F0, float roughness ) {
-    return F0 + (max((1. - roughness), F0) - F0) * pow(abs(1. - cosTheta), 5.0);
-}
-
-vec3 modifyDirectionWithRoughness( const vec3 normal, const vec3 n, const float roughness, inout uint state ) {
-    vec2 r = vec2(RandomValue(state), RandomValue(state));
-    
-	vec3  uu = normalize(cross(n, abs(n.y) > .5 ? vec3(1.,0.,0.) : vec3(0.,1.,0.)));
-	vec3  vv = cross(uu, n);
-	
-    float a = roughness*roughness;
-    
-	float rz = sqrt(abs((1.0-r.y) / clamp(1.+(a - 1.)*r.y,.00001,1.)));
-	float ra = sqrt(abs(1.-rz*rz));
-	float rx = ra*cos(6.28318530718*r.x); 
-	float ry = ra*sin(6.28318530718*r.x);
-	vec3  rr = vec3(rx*uu + ry*vv + rz*n);
-    
-    vec3 ret = normalize(rr);
-    return dot(ret,normal) > 0. ? ret : n;
-}
-
+layout(binding = 9, set = 0) writeonly buffer InitialSamples {
+	Sample initialSamples[];
+} is;
 
 vec3 Trace(vec3 direction, vec3 origin, inout uint state) {
 	vec3 incomingLight = vec3(0.0);
 	vec3 rayColor = vec3(1.0);
 
-	for (int i = 0; i <= 3; i++) {
-		traceRayEXT(topLevelAS, gl_RayFlagsOpaqueEXT, 0xff, 0, 0, 0, origin, tmin, direction, tmax, 0);
+	for (int i = 0; i <= 15; i++) {
 		for (int t = 0; t<=5; t++ ) {
 			traceRayEXT(topLevelAS, gl_RayFlagsOpaqueEXT, 0xff, 0, 0, 0, origin, tmin, direction, tmax, 0);
 			if (p.color.a == 0.0) {
@@ -92,42 +45,92 @@ vec3 Trace(vec3 direction, vec3 origin, inout uint state) {
 		}
 		if (!p.missed) {
 			if (f.moved == 1) {
-				return p.color.rgb;
-			}
+                return p.color.rgb;
+            }
+            origin = p.hitPoint;
+            incomingLight += p.emission * 12 * rayColor;
 
-			origin = p.hitPoint;
-			incomingLight += p.emission * 50 * rayColor;
+            float F = FresnelSchlickRoughness(max(0.,-dot(p.hitNormal, direction)), p.metallicFactor, p.roughness);
 
-            float F = FresnelSchlickRoughness(max(0.,-dot(p.hitNormal, direction)), .04, p.roughness);
+            if (F > RandomValue(state)) {
+                direction = modifyDirectionWithRoughness(p.hitNormal, reflect(direction,p.hitNormal), p.roughness, state);
+            } else {
+                rayColor *= p.color.rgb;
+                direction = normalize(p.hitNormal + RandomDirection(state));
+            }
 
-			if (F > RandomValue(state)) {
-				direction = modifyDirectionWithRoughness(p.hitNormal, reflect(direction,p.hitNormal), p.roughness, state);
-			} else {
-				rayColor *= p.color.rgb;
-				direction = normalize(p.hitNormal + RandomDirection(state));
-			}
-
-			float p = max(rayColor.r, max(rayColor.g, rayColor.b));
-			if (RandomValue(state) >= p) {
-				break;
-			}
-			rayColor *= 1.0 / p; 
+            float p = max(rayColor.r, max(rayColor.g, rayColor.b));
+            if (RandomValue(state) >= p) {
+                break;
+            }
+            rayColor *= 1.0 / p;
 		}else {
 			// const float dotp = dot(direction, normalize(vec3(1.0, 10.0, 1.0)));
 			// if (dotp > 0.9) {
-			// 	incomingLight += dotp * vec3(0.99215, 0.9843, 0.82745) * 40 * rayColor;
+			// 	incomingLight += dotp * vec3(0.99215, 0.9843, 0.82745) * 200 * rayColor;
 			// }
-			incomingLight += p.color.rgb;
-			if (dot(normalize(vec3(0.392, 0.5843, 0.24)), direction) > 0.9) {
-				incomingLight += vec3(5, 5, 3);
-			}
 			break;
 		}
 	}
 	return incomingLight;
 }
-const int raysPerPixel = 1;
 
+
+Sample initial_sampling(vec3 direction, vec3 origin, inout uint state) {
+    vec3 incomingLight = vec3(0.0);
+	vec3 rayColor = vec3(1.0);
+
+    Sample s = Sample(vec3(0.0, 0.0, 0.0), vec3(0.0, 0.0, 0.0), vec3(0.0, 0.0, 0.0), vec3(0.0, 0.0, 0.0), vec3(0.0, 0.0, 0.0), state);
+    for (int i = 0; i <= 2; i++) {
+        for (int t = 0; t<=5; t++ ) {
+            traceRayEXT(topLevelAS, gl_RayFlagsOpaqueEXT, 0xff, 0, 0, 0, origin, tmin, direction, tmax, 0);
+            if (p.color.a == 0.0) {
+                origin = p.hitPoint;
+                traceRayEXT(topLevelAS, gl_RayFlagsOpaqueEXT, 0xff, 0, 0, 0, origin, tmin, direction, tmax, 0);
+            }else {
+                break;
+            }
+        }
+
+        if (!p.missed) {
+			if (f.moved == 1) {
+				s.radiance = p.color.xyz;
+				return s;
+			}
+            origin = p.hitPoint;
+            s.radiance += p.emission * 12 * rayColor;
+
+            float F = FresnelSchlickRoughness(max(0.,-dot(p.hitNormal, direction)), p.metallicFactor, p.roughness);
+
+            if (F > RandomValue(state)) {
+                direction = modifyDirectionWithRoughness(p.hitNormal, reflect(direction,p.hitNormal), p.roughness, state);
+            } else {
+                rayColor *= p.color.rgb;
+                direction = normalize(p.hitNormal + RandomDirection(state));
+            }
+			
+            if (i == 0) {
+                s.origin = p.hitPoint;
+                s.originNormal = p.hitNormal;
+            } else if (i == 1) {
+                s.samplePoint = p.hitPoint;
+                s.samplePointNormal = p.hitNormal;
+            } 
+			
+	
+            float p = max(rayColor.r, max(rayColor.g, rayColor.b));
+			if (RandomValue(state) >= p) {
+                break;
+            }
+            rayColor *= 1.0 / p;
+        }else{
+			break;
+		}
+    }
+    return s;
+}
+
+const int raysPerPixel = 1;
 void main() 
 {	
 	const vec2 pixelCenter = vec2(gl_LaunchIDEXT.xy) + vec2(0.5);
@@ -138,17 +141,28 @@ void main()
 	vec4 target = cam.projInverse * vec4(d.x, d.y, 1, 1) ;
 	vec4 direction = cam.viewInverse*vec4(normalize(target.xyz), 0) ;
 
-	uint rngState = uint((gl_LaunchIDEXT.y * gl_LaunchSizeEXT.x) + gl_LaunchIDEXT.x); //+ uint(f.frame) * 23145;
+	uint rngState = uint((gl_LaunchIDEXT.y * gl_LaunchSizeEXT.x) + gl_LaunchIDEXT.x) + uint(f.frame) * 23145;
 
-	vec3 totalLight = vec3(0.0);
 
-	for (int ray = 0; ray < raysPerPixel; ray++) {
-		vec3 incomingLight = Trace(direction.xyz, origin.xyz, rngState);
-		totalLight += incomingLight;
-	}
+	Sample s = initial_sampling(direction.xyz, origin.xyz, rngState);
 
-	vec3 pixelCol = totalLight / raysPerPixel;
-	vec3 color = pixelCol;
+	// vec3 color = s.radiance;
+	// if (f.moved == 0) {
+	// 	float a = 1.0 / float(f.frame+1.0);
+	// 	vec3 oldColor = imageLoad(image, ivec2(gl_LaunchIDEXT.xy)).xyz;
+	// 	color = vec3(mix(oldColor, color, a));
+	// } else {
+	// 	color = s.radiance; 
+	// }
+
+	// vec3 totalLight = vec3(0.0);
+	// for (int ray = 0; ray < raysPerPixel; ray++) {
+	// 	vec3 incomingLight = Trace(direction.xyz, origin.xyz, rngState);
+	// 	totalLight += incomingLight;
+	// }
+
+	// vec3 pixelCol = totalLight / raysPerPixel;
+	// vec3 color;
 	// if (f.moved == 0) {
 	// 	float a =1.0 / float(f.frame+1.0);
 	// 	vec3 oldColor = imageLoad(image, ivec2(gl_LaunchIDEXT.xy)).xyz;
@@ -156,6 +170,5 @@ void main()
 	// }else{
 	// 	color = pixelCol;
 	// }
-
-	imageStore(image, ivec2(gl_LaunchIDEXT.xy), vec4(color,1.0));
+	is.initialSamples[(gl_LaunchIDEXT.y * gl_LaunchSizeEXT.x) + gl_LaunchIDEXT.x] = s;
 }
