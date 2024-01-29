@@ -25,6 +25,7 @@ struct Payload {
   vec3 emission;
 	vec3 hitPoint;
 	vec3 hitNormal;
+	float depth;
 };
 
 const float tmin = 0.1;
@@ -57,9 +58,18 @@ vec3 RandomDirection(inout uint state) {
 	return normalize(vec3(x,y,z));
 }
 
-
 float FresnelSchlickRoughness( float cosTheta, float F0, float roughness ) {
     return F0 + (max((1. - roughness), F0) - F0) * pow(abs(1. - cosTheta), 5.0);
+}
+
+float Schlick_Fresnel(float F0, float VdotH)
+{
+    return F0 + (1 - F0) * pow(max(1 - VdotH, 0), 5);
+}
+
+vec3 Schlick_Fresnel(vec3 F0, float VdotH)
+{
+    return F0 + (vec3(1) - F0) * pow(max(1 - VdotH, 0), 5);
 }
 
 vec3 modifyDirectionWithRoughness( const vec3 normal, const vec3 n, const float roughness, inout uint state ) {

@@ -1,20 +1,13 @@
 #version 460
 #extension GL_EXT_ray_tracing : enable
+#extension GL_GOOGLE_include_directive: enable
 
-layout(location = 0) rayPayloadInEXT Payload {
-	bool missed;
-	float metallicFactor;
-  	float roughness;
-	vec3 color;
-  	vec3 emission;
-	vec3 hitPoint;
-	vec3 hitNormal;
-} p;
+#include "./common.glsl"
+
+layout(location = 0) rayPayloadInEXT Payload p;
 
 
 layout(binding = 8, set = 0) uniform sampler2D skyBox;
-
-#define PI 3.141592653589793238
 
 float atan2(in float y, in float x)
 {
@@ -45,6 +38,7 @@ void main()
 	float u = (0.5 + atan2(d.z, d.x)/(2*PI));
     float v = (0.5 - asin(d.y)/PI);
 	vec4 tex = texture(skyBox, vec2(u,v));
-	p.color = tex.rgb;
+	p.color = tex;
     p.missed = true;
+	p.depth = 10000;
 }

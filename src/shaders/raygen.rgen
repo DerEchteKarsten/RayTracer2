@@ -38,7 +38,6 @@ vec3 Trace(vec3 direction, vec3 origin, inout uint state) {
 			traceRayEXT(topLevelAS, gl_RayFlagsOpaqueEXT, 0xff, 0, 0, 0, origin, tmin, direction, tmax, 0);
 			if (p.color.a == 0.0) {
 				origin = p.hitPoint;
-				traceRayEXT(topLevelAS, gl_RayFlagsOpaqueEXT, 0xff, 0, 0, 0, origin, tmin, direction, tmax, 0);
 			}else {
 				break;
 			}
@@ -86,7 +85,6 @@ Sample initial_sampling(vec3 direction, vec3 origin, inout uint state) {
             traceRayEXT(topLevelAS, gl_RayFlagsOpaqueEXT, 0xff, 0, 0, 0, origin, tmin, direction, tmax, 0);
             if (p.color.a == 0.0) {
                 origin = p.hitPoint;
-                traceRayEXT(topLevelAS, gl_RayFlagsOpaqueEXT, 0xff, 0, 0, 0, origin, tmin, direction, tmax, 0);
             }else {
                 break;
             }
@@ -171,4 +169,219 @@ void main()
 	// 	color = pixelCol;
 	// }
 	is.initialSamples[(gl_LaunchIDEXT.y * gl_LaunchSizeEXT.x) + gl_LaunchIDEXT.x] = s;
+}
+
+void branchlessONB(in vec3 n, out vec3 b1, out vec3 b2)
+{
+    float sign = n.z >= 0.0f ? 1.0f : -1.0f;
+    float a = -1.0f / (sign + n.z);
+    float b = n.x * n.y * a;
+    b1 = vec3(1.0f + sign * n.x * n.x * a, sign * b, -sign * n.x);
+    b2 = vec3(b, sign + n.y * n.y * a, -n.y);
+}
+
+void brdfGbuffer() {
+    const vec2 pixelCenter = vec2(gl_LaunchIDEXT.xy) + vec2(0.5);
+	const vec2 inUV = pixelCenter/vec2(gl_LaunchSizeEXT.xy);
+	vec2 d = inUV * 2.0 - 1.0;
+
+	vec4 origin = cam.viewInverse * vec4(0,0,0,1);
+	vec4 target = cam.projInverse * vec4(d.x, d.y, 1, 1) ;
+	vec4 direction = cam.viewInverse*vec4(normalize(target.xyz), 0) ;
+
+	uint rng = uint((gl_LaunchIDEXT.y * gl_LaunchSizeEXT.x) + gl_LaunchIDEXT.x) + uint(f.frame) * 23145;
+    for (int t = 0; t<=5; t++ ) {
+        traceRayEXT(topLevelAS, gl_RayFlagsOpaqueEXT, 0xff, 0, 0, 0, origin.xyz, 0.001, direction.xyz, 10000, 0);
+        if (p.color.a == 0.0) {
+            origin.xyz = p.hitPoint;
+        }else {
+            break;
+        }
+    }
+	Surface surface = Surface(p.hitPoint, direction.xyz, p.depth, p.hitNormal, p.color.rgb, p.metallicFactor, p.roughness, 1-p.metallicFactor);
+    
+    vec3 tangent, bitangent;
+    branchlessONB(surface.normal, tangent, bitangent);
+
+    float distance = p.depth;
+
+    float TMin = 0.001f * distance;
+    float TMax = 10000;
+	vec3 Direction;
+	vec3 Origin;
+
+    vec2 Rand;
+    Rand.x = RandomValue(rng);
+    Rand.y = RandomValue(rng);
+
+    vec3 V = normalize(direction.xyz);
+
+    bool isSpecularRay = false;
+    bool isDeltaSurface = surface.roughness == 0;
+    float specular_PDF;
+    vec3 BRDF_over_PDF;
+    float overall_PDF;
+
+    {
+        vec3 specularDirection;
+        vec3 specular_BRDF_over_PDF;
+        {
+            vec3 Ve = vec3(dot(V, tangent), dot(V, bitangent), dot(V, surface.normal));
+            vec3 He = sampleGGX_VNDF(Ve, surface.roughness, Rand);
+            vec3 H = isDeltaSurface ? surface.normal : normalize(He.x * tangent + He.y * bitangent + He.z * surface.normal);
+            specularDirection = reflect(-V, H);
+
+            float HoV = saturate(dot(H, V));
+            float NoV = saturate(dot(surface.normal, V));
+            vec3 F = Schlick_Fresnel(surface.metallic, HoV);
+            float G1 = isDeltaSurface ? 1.0 : (NoV > 0) ? G1_Smith(surface.roughness, NoV) : 0;
+            specular_BRDF_over_PDF = F * G1;
+        }
+
+        vec3 diffuseDirection;
+        float diffuse_BRDF_over_PDF;
+        {
+            float solidAnglePdf;
+            vec3 localDirection = sampleCosHemisphere(Rand, solidAnglePdf);
+            diffuseDirection = tangent * localDirection.x + bitangent * localDirection.y + surface.normal * localDirection.z;
+            diffuse_BRDF_over_PDF = 1.0;
+        }
+
+        specular_PDF = saturate(calcLuminance(specular_BRDF_over_PDF) /
+            calcLuminance(specular_BRDF_over_PDF + diffuse_BRDF_over_PDF * surface.diffuseAlbedo));
+
+        isSpecularRay = RAB_GetNextRandom(rng) < specular_PDF;
+
+        if (isSpecularRay)
+        {
+            Direction = specularDirection;
+            BRDF_over_PDF = specular_BRDF_over_PDF / specular_PDF;
+        }
+        else
+        {
+            Direction = diffuseDirection;
+            BRDF_over_PDF = diffuse_BRDF_over_PDF / (1.0 - specular_PDF);
+        }
+
+        const float specularLobe_PDF = ImportanceSampleGGX_VNDF_PDF(surface.roughness, surface.normal, V, Direction);
+        const float diffuseLobe_PDF = saturate(dot(Direction, surface.normal)) / c_pi;
+
+        // For delta surfaces, we only pass the diffuse lobe to ReSTIR GI, and this pdf is for that.
+        overall_PDF = isDeltaSurface ? diffuseLobe_PDF : lerp(diffuseLobe_PDF, specularLobe_PDF, specular_PDF);
+    }
+
+    if (dot(surface.geoNormal, Direction) <= 0.0)
+    {
+        BRDF_over_PDF = 0.0;
+        TMax = 0;
+    }
+
+    Origin = surface.worldPos;
+
+    vec3 radiance = vec3(0);
+    
+    traceRayEXT(topLevelAS, gl_RayFlagsOpaqueEXT, 0xff, 0, 0, 0, Origin, TMin, Direction, TMax, 0);
+
+    struct 
+    {
+        vec3 position;
+        vec3 normal;
+        vec3 diffuseAlbedo;
+        vec3 specularF0;
+        float roughness;
+        bool isEnvironmentMap;
+    } secondarySurface;
+
+    // Include the emissive component of surfaces seen with BRDF rays if requested (i.e. when Direct Lighting mode
+    // is set to BRDF) or on delta reflection rays because those bypass ReSTIR GI and direct specular lighting,
+    // and we need to see reflections of lamps and the sky in mirrors.
+    const bool includeEmissiveComponent = (isSpecularRay && isDeltaSurface);
+
+    if (!p.missed)
+    {
+        if (g_PerPassConstants.rayCountBufferIndex >= 0)
+        {
+            InterlockedAdd(u_RayCountBuffer[RAY_COUNT_HITS(g_PerPassConstants.rayCountBufferIndex)], 1);
+        }
+        
+        if (includeEmissiveComponent)
+            radiance += p.emission;
+
+        secondarySurface.position = p.hitPoint;
+        secondarySurface.normal = (dot(p.hitNormal, Direction) < 0) ? p.Normal : -p.Normal;
+        secondarySurface.diffuseAlbedo = p.color;
+        secondarySurface.specularF0 = p.metallicFactor;
+        secondarySurface.roughness = ms.roughness;
+        secondarySurface.isEnvironmentMap = false;
+    }
+    else
+    {
+        if (g_Const.sceneConstants.enableEnvironmentMap && includeEmissiveComponent)
+        {
+            vec3 environmentRadiance += vec3(10); //GetEnvironmentRadiance(ray.Direction);
+            radiance += environmentRadiance;
+        }
+
+        secondarySurface.position = Origin + Direction * 10000;
+        secondarySurface.normal = -Direction;
+        secondarySurface.diffuseAlbedo = 0;
+        secondarySurface.specularF0 = 0;
+        secondarySurface.roughness = 0;
+        secondarySurface.isEnvironmentMap = true;
+    }
+
+    if (g_Const.enableBrdfIndirect)
+    {
+        SecondaryGBufferData secondaryGBufferData = (SecondaryGBufferData)0;
+        secondaryGBufferData.worldPos = secondarySurface.position;
+        secondaryGBufferData.normal = ndirToOctUnorm32(secondarySurface.normal);
+        secondaryGBufferData.throughputAndFlags = Pack_R16G16B16A16_FLOAT(float4(payload.throughput * BRDF_over_PDF, 0));
+        secondaryGBufferData.diffuseAlbedo = Pack_R11G11B10_UFLOAT(secondarySurface.diffuseAlbedo);
+        secondaryGBufferData.specularAndRoughness = Pack_R8G8B8A8_Gamma_UFLOAT(float4(secondarySurface.specularF0, secondarySurface.roughness));
+
+        if (g_Const.brdfPT.enableReSTIRGI)
+        {
+            if (isSpecularRay && isDeltaSurface)
+            {
+                // Special case for specular rays on delta surfaces: they bypass ReSTIR GI and are shaded
+                // entirely in the ShadeSecondarySurfaces pass, so they need the right throughput here.
+            }
+            else
+            {
+                // BRDF_over_PDF will be multiplied after resampling GI reservoirs.
+                secondaryGBufferData.throughputAndFlags = Pack_R16G16B16A16_FLOAT(float4(payload.throughput, 0));
+            }
+
+            // The emission from the secondary surface needs to be added when creating the initial
+            // GI reservoir sample in ShadeSecondarySurface.hlsl. It need to be stored separately.
+            secondaryGBufferData.emission = radiance;
+            radiance = 0;
+            
+            secondaryGBufferData.pdf = overall_PDF;
+        }
+        
+        uint flags = 0;
+        if (isSpecularRay) flags |= kSecondaryGBuffer_IsSpecularRay;
+        if (isDeltaSurface) flags |= kSecondaryGBuffer_IsDeltaSurface;
+        if (secondarySurface.isEnvironmentMap) flags |= kSecondaryGBuffer_IsEnvironmentMap;
+        secondaryGBufferData.throughputAndFlags.y |= flags << 16;
+
+        u_SecondaryGBuffer[gbufferIndex] = secondaryGBufferData;
+    }
+
+    if (any(radiance > 0) || !g_Const.enableBrdfAdditiveBlend)
+    {
+        radiance *= payload.throughput;
+
+        vec3 diffuse = isSpecularRay ? 0.0 : radiance * BRDF_over_PDF;
+        vec3 specular = isSpecularRay ? radiance * BRDF_over_PDF : 0.0;
+        float diffuseHitT = payload.committedRayT;
+        float specularHitT = payload.committedRayT;
+
+        specular = DemodulateSpecular(surface.specularF0, specular);
+
+
+        StoreShadingOutput(GlobalIndex, pixelPosition,
+            surface.viewDepth, surface.roughness, diffuse, specular, payload.committedRayT, !g_Const.enableBrdfAdditiveBlend, !g_Const.enableBrdfIndirect);
+    }
 }
