@@ -145,7 +145,7 @@ fn main() {
         .create_gpu_only_buffer_from_data_with_size(
             vk::BufferUsageFlags::STORAGE_BUFFER,
             &[()],
-            (96 * window_size.width * window_size.height).into(),
+            (200 * window_size.width * window_size.height).into(),
             "Spacial Reuse".into(),
         )
         .unwrap();
@@ -153,7 +153,7 @@ fn main() {
         .create_gpu_only_buffer_from_data_with_size(
             vk::BufferUsageFlags::STORAGE_BUFFER,
             &[()],
-            (96 * window_size.width * window_size.height).into(),
+            (200 * window_size.width * window_size.height).into(),
             "Temporal Reuse".into(),
         )
         .unwrap();
@@ -162,7 +162,7 @@ fn main() {
         .create_gpu_only_buffer_from_data_with_size(
             vk::BufferUsageFlags::STORAGE_BUFFER,
             &[()],
-            (84 * window_size.width * window_size.height).into(),
+            (200 * window_size.width * window_size.height).into(),
             "Initial Samples".into(),
         )
         .unwrap();

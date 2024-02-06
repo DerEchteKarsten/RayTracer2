@@ -2,12 +2,13 @@
 #extension GL_EXT_debug_printf : enable
 #extension GL_GOOGLE_include_directive : enable
 
-#include "restir.glsl"
-
 layout( push_constant ) uniform Frame {
 	uint frame;
 	uint moved;
 } f;
+
+#include "./restir.glsl"
+
 
 layout (binding = 0, set=0) buffer temporalReservoirs {
 	Reservoir temporalReservoirs[];
@@ -23,47 +24,200 @@ layout (binding = 2, set=0) readonly buffer InitialSamples {
 
 layout(binding = 3, set = 0, rgba32f) uniform image2D image;
 
+
 uint toLinearIndex(uvec2 pixel) {
     return pixel.y * gl_WorkGroupSize.x + pixel.x;
 }
 
 float luminance(vec3 rgb)
 {
-    const vec3 W = vec3(0.2125, 0.7154, 0.0721);
-    return dot(rgb, W);
+    return dot(rgb, vec3(0.2126f, 0.7152f, 0.0722f));
 }
 
-float evalTargetFunction(vec3 radiance)
+Reservoir EmptyReservoir()
 {
-    return luminance(radiance);
+    Reservoir s;
+
+    s.s.samplePoint = vec3(0.0);
+    s.s.samplePointNormal = vec3(0.0);
+    s.s.origin = vec3(0);
+    s.s.originNormal = vec3(0);
+    s.s.depth = tmax;
+    s.s.radiance = vec3(0.0);
+    s.s.randomDirection = vec3(0);
+    s.weightOfReservoir = 0.0;
+    s.numCandidateSamples = 0;
+    s.weightOfSample = 0;
+
+    return s;
 }
+
+
+void CalculatePartialJacobian(const vec3 recieverPos, const vec3 samplePos, const vec3 sampleNormal,
+    out float distanceToSurface, out float cosineEmissionAngle)
+{
+    vec3 vec = recieverPos - samplePos;
+
+    distanceToSurface = length(vec);
+    cosineEmissionAngle = clamp(dot(sampleNormal, vec / distanceToSurface), 0, 1);
+}
+
+// Calculates the full Jacobian for resampling neighborReservoir into a new receiver surface
+float CalculateJacobian(vec3 recieverPos, vec3 neighborReceiverPos, const Reservoir neighborReservoir)
+{
+    // Calculate Jacobian determinant to adjust weight.
+    // See Equation (11) in the ReSTIR GI paper.
+    float originalDistance, originalCosine;
+    float newDistance, newCosine;
+    CalculatePartialJacobian(recieverPos, neighborReservoir.s.samplePoint, neighborReservoir.s.samplePointNormal, newDistance, newCosine);
+    CalculatePartialJacobian(neighborReceiverPos, neighborReservoir.s.samplePoint, neighborReservoir.s.samplePointNormal, originalDistance, originalCosine);
+
+    float jacobian = (newCosine * originalDistance * originalDistance)
+        / (originalCosine * newDistance * newDistance);
+
+    if (isinf(jacobian) || isnan(jacobian))
+        jacobian = 0;
+
+    return jacobian;
+}
+
+
+bool ValidateGISampleWithJacobian(inout float jacobian)
+{
+    // Sold angle ratio is too different. Discard the sample.
+    if (jacobian > 10.0 || jacobian < 1 / 10.0) {
+        return false;
+    }
+
+    // clamp Jacobian.
+    jacobian = clamp(jacobian, 1 / 3.0, 3.0);
+
+    return true;
+}
+
+float evalTargetFunction(Sample s)
+{
+    return luminance(s.radiance);
+}
+
+const ivec2[4] neigbur_offsets = {
+    ivec2(0, 1),
+    ivec2(0, -1),
+    ivec2(1, 0),
+    ivec2(-1, 0),
+};
 
 const int temporalMaxSamples = 100;
 
-void temporal_reuse(uint q) {
+void temporal_reuse(uint q, inout uint rngState) {
     Sample S = is.initialSamples[q];
     Reservoir R = tr.temporalReservoirs[q];
-    float w = evalTargetFunction(S.radiance) / ;
 
-    R.s = S;
+    if (f.moved == 1) {
+        R.s = S;
+        R.weightOfSample = 1;
+        R.weightOfReservoir = 0;
+        R.numCandidateSamples = 1;
+        tr.temporalReservoirs[q] = R;
+        return;
+    }
+    
+    float w = evalTargetFunction(S) / (dot(S.originNormal, S.randomDirection));
+    
+    update_reservoir(R, S, w, rngState);
+    R.weightOfSample = (R.weightOfReservoir / (R.numCandidateSamples * evalTargetFunction(R.s)));
 
     tr.temporalReservoirs[q] = R;
 }
 
-// void spaceial_reuse () {
+// // const uint reuse_radius = 4;
+// const uint max_reuse_samples = 3;
+// void spatial_reuse(uint q, inout uint rngState) {
+//     Reservoir Rs = sr.spaceialReservoirs[q];
+//     Sample S = is.initialSamples[q];
+//     if (f.moved == 1) {
+//         Rs.s = S;
+//         Rs.weightOfSample = 0;
+//         Rs.weightOfReservoir = 0;
+//         Rs.numCandidateSamples = 0;
+//         sr.spaceialReservoirs[q] = Rs;
+//         return;
+//     }
 
+//     uint[max_reuse_samples + 1] Q;
+//     Q[0] = q;
+//     for (int s = 1; s < max_reuse_samples + 1; s++) {
+
+//         const uint[8] neigbur_offsets = {
+//             gl_NumWorkGroups.y + 1,
+//             gl_NumWorkGroups.y,
+//             gl_NumWorkGroups.y - 1,
+//             1,
+//             -1,
+//             -gl_NumWorkGroups.y + 1,
+//             -gl_NumWorkGroups.y,
+//             -gl_NumWorkGroups.y - 1,
+//         };
+
+//         uint qn = q + neigbur_offsets[uint(RandomValue(rngState) * 7)];
+
+//         if (qn == q) {
+//             continue;
+//         }
+//         Sample Sqn = is.initialSamples[qn];
+//         if ((qn > gl_NumWorkGroups.x * gl_NumWorkGroups.y)) {
+//             continue;
+//         }
+
+//         if (dot(S.originNormal, Sqn.originNormal) < 0.9) {
+//             continue;
+//         }
+
+//         Reservoir Rn = tr.temporalReservoirs[qn];
+//         //Jacobian
+//         float p_hat = evalTargetFunction(Rn.s);
+//         // Visibility
+
+//         // sr.spaceialReservoirs[q].s.radiance = vec3(S.depth - Rn.s.depth);
+//         // sr.spaceialReservoirs[q].weightOfSample = 1;
+
+//         // return;
+
+//         // if (S.depth - Rn.s.depth > 0.1) {
+//         //     p_hat = 0; 
+//         // }
+        
+//         merge_reservoir(Rs, Rn, p_hat, rngState);
+//         Q[s] = qn;
+//     }
+//     uint Z = 0;
+//     for (int qn = 0; qn < max_reuse_samples + 1; qn++) {
+//         Reservoir Rn = tr.temporalReservoirs[Q[qn]]; 
+//         if (evalTargetFunction(Rs.s) > 0) {
+//             Z += Rn.numCandidateSamples;
+//         }
+//     }
+//     Rs.weightOfSample = Rs.weightOfReservoir / (Z* evalTargetFunction(Rs.s));
+//     sr.spaceialReservoirs[q] = Rs;
 // }
 
 void main() {
-    uint pixelIndex = (gl_WorkGroupID.y * gl_NumWorkGroups.x) + gl_WorkGroupID.x;
+    uint pixelIndex = (gl_GlobalInvocationID.y * gl_NumWorkGroups.x) + gl_GlobalInvocationID.x;
+	uint rngState = pixelIndex + uint(f.frame) * 23145;
 
-    if (f.frame == 0) {
-        Sample s = is.initialSamples[pixelIndex];
-        imageStore(image, ivec2(gl_WorkGroupID.xy), vec4(s.radiance, 1.0));
-        tr.temporalReservoirs[pixelIndex] = Reservoir(s, 0, 0, 0);
-    }else {
-        temporal_reuse(pixelIndex);
-        Sample s = tr.temporalReservoirs[pixelIndex].s;
-	    imageStore(image, ivec2(gl_WorkGroupID.xy), vec4(s.radiance, 1.0));
-    }
+    temporal_reuse(pixelIndex, rngState);
+    // spatial_reuse(pixelIndex, rngState);
+    Sample s = is.initialSamples[pixelIndex];
+
+    Reservoir r = tr.temporalReservoirs[pixelIndex];
+
+    vec3 color = r.s.radiance;
+    // if (f.moved == 0) {
+    //     float a = 1.0 / float(f.frame+1.0);
+    //     vec3 oldColor = imageLoad(image, ivec2(gl_WorkGroupID.xy)).xyz;
+    //     color = vec3(mix(oldColor, color, a));
+    // } else {
+    //     color = s.radiance; 
+    // }
+    imageStore(image, ivec2(gl_GlobalInvocationID.xy), vec4(color * r.weightOfSample, 1.0));
 }

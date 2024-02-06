@@ -45,6 +45,12 @@ float RandomValue(inout uint state) {
 	return NextRandom(state) / 4294967295.0;
 }
 
+float ValueNormalDistribution(float x) {
+	float theta = 2 * PI * x;
+	float rho = sqrt(-2 * log(x));
+	return rho * cos(theta);
+}
+
 float RandomValueNormalDistribution(inout uint state) {
 	float theta = 2 * 3.1415926 * RandomValue(state);
 	float rho = sqrt(-2 * log(RandomValue(state)));
@@ -62,15 +68,6 @@ float FresnelSchlickRoughness( float cosTheta, float F0, float roughness ) {
     return F0 + (max((1. - roughness), F0) - F0) * pow(abs(1. - cosTheta), 5.0);
 }
 
-float Schlick_Fresnel(float F0, float VdotH)
-{
-    return F0 + (1 - F0) * pow(max(1 - VdotH, 0), 5);
-}
-
-vec3 Schlick_Fresnel(vec3 F0, float VdotH)
-{
-    return F0 + (vec3(1) - F0) * pow(max(1 - VdotH, 0), 5);
-}
 
 vec3 modifyDirectionWithRoughness( const vec3 normal, const vec3 n, const float roughness, inout uint state ) {
     vec2 r = vec2(RandomValue(state), RandomValue(state));
