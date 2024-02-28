@@ -64,6 +64,12 @@ vec3 RandomDirection(inout uint state) {
 	return normalize(vec3(x,y,z));
 }
 
+vec2 RandomDirection2(inout uint state) {
+	float x = RandomValueNormalDistribution(state);
+	float y = RandomValueNormalDistribution(state);
+	return normalize(vec2(x,y));
+}
+
 float FresnelSchlickRoughness( float cosTheta, float F0, float roughness ) {
     return F0 + (max((1. - roughness), F0) - F0) * pow(abs(1. - cosTheta), 5.0);
 }

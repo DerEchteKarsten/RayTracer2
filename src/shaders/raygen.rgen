@@ -9,7 +9,9 @@
 #extension GL_EXT_shader_explicit_arithmetic_types : enable
 #extension GL_GOOGLE_include_directive : enable
 
-#include "./restir.glsl"
+// #include "./restir.glsl"
+
+#include "common.glsl"
 
 layout( push_constant ) uniform Frame {
 	uint frame;
@@ -17,7 +19,9 @@ layout( push_constant ) uniform Frame {
 } f;
 
 layout(binding = 0, set = 0) uniform accelerationStructureEXT topLevelAS;
-// layout(binding = 1, set = 0, rgba32f) uniform image2D image;
+layout(binding = 1, set = 1, rgba32f) uniform image2D image;
+layout(binding = 1, set = 2, rgba32f) uniform image2D last_image;
+
 layout(binding = 2, set = 0) uniform CameraProperties 
 {
 	mat4 viewInverse;
@@ -25,98 +29,108 @@ layout(binding = 2, set = 0) uniform CameraProperties
 } cam;
 layout(location = 0) rayPayloadEXT Payload p;
 
-layout(binding = 9, set = 0) writeonly buffer InitialSamples {
-	Sample initialSamples[];
-} is;
+// layout(binding = 9, set = 0) writeonly buffer InitialSamples {
+// 	Sample initialSamples[];
+// } is;
 
-vec3 Trace(vec3 direction, vec3 origin, inout uint state) {
-	vec3 incomingLight = vec3(0.0);
-	vec3 rayColor = vec3(1.0);
+const int MaxBounces = 3; 
+const int MaxAlphaSurfaces = 5;
+const int MaxSamples = 4;
+vec3 Trace(in vec3 direction, in vec3 origin, inout uint state) {
+	vec3 totalLight = vec3(0.0);
 
-	for (int i = 0; i <= 15; i++) {
-		for (int t = 0; t<=5; t++ ) {
-			traceRayEXT(topLevelAS, gl_RayFlagsOpaqueEXT, 0xff, 0, 0, 0, origin, tmin, direction, tmax, 0);
-			if (p.color.a == 0.0) {
-				origin = p.hitPoint;
+	for (int s = 0; s < MaxSamples; s++) {
+		vec3 o = origin;
+		vec3 d = direction;
+		vec3 incomingLight = vec3(0.0);
+		vec3 rayColor = vec3(1.0);
+		for (int i = 0; i <= MaxBounces; i++) {
+			for (int t = 0; t<=MaxAlphaSurfaces; t++ ) {
+				traceRayEXT(topLevelAS, gl_RayFlagsOpaqueEXT, 0xff, 0, 0, 0, o, tmin, d, tmax, 0);
+				if (p.color.a < 1.0) {
+					o = p.hitPoint;
+					rayColor *= p.color.rgb * p.color.a;
+				}else {
+					break;
+				}
+			}
+			if (!p.missed) {
+				o = p.hitPoint;
+				incomingLight += p.emission * 12 * rayColor;
+
+				float F = FresnelSchlickRoughness(max(0.,-dot(p.hitNormal, d)), p.metallicFactor, p.roughness);
+
+				if (F > RandomValue(state)) {
+					d = modifyDirectionWithRoughness(p.hitNormal, reflect(d,p.hitNormal), p.roughness, state);
+				} else {
+					rayColor *= p.color.rgb;
+					d = normalize(p.hitNormal + RandomDirection(state));
+				}
 			}else {
+				// const float dotp = dot(direction, normalize(vec3(1.0, 10.0, 1.0)));
+				// if (dotp > 0.9) {
+				// 	incomingLight += dotp * vec3(0.99215, 0.9843, 0.82745) * 200 * rayColor;
+				// }
 				break;
 			}
 		}
-		if (!p.missed) {
-			if (f.moved == 1) {
-                return p.color.rgb;
-            }
-            origin = p.hitPoint;
-            incomingLight += p.emission * 12 * rayColor;
-
-            float F = FresnelSchlickRoughness(max(0.,-dot(p.hitNormal, direction)), p.metallicFactor, p.roughness);
-
-            if (F > RandomValue(state)) {
-                direction = modifyDirectionWithRoughness(p.hitNormal, reflect(direction,p.hitNormal), p.roughness, state);
-            } else {
-                rayColor *= p.color.rgb;
-				vec3 rand_dir = RandomDirection(state);
-                direction = normalize(p.hitNormal + rand_dir);
-            }
-
-            float p = max(rayColor.r, max(rayColor.g, rayColor.b));
-            if (RandomValue(state) >= p) {
-                break;
-            }
-            rayColor *= 1.0 / p;
-		}else {
-			// const float dotp = dot(direction, normalize(vec3(1.0, 10.0, 1.0)));
-			// if (dotp > 0.9) {
-			// 	incomingLight += dotp * vec3(0.99215, 0.9843, 0.82745) * 200 * rayColor;
-			// }
-			break;
-		}
+		totalLight += incomingLight;
 	}
-	return incomingLight;
+
+	return totalLight / MaxSamples;
 }
 
 
-const int MaxBounces = 2; 
-const int MaxAlphaSurfaces = 5;
 
-Sample initial_sampling(vec3 direction, vec3 origin, inout uint state) {
-	vec3 rayColor = vec3(1.0);
-	Sample s = Sample(vec3(0), vec3(0), vec3(0),vec3(0), vec3(0),vec3(0),vec3(0), 0);
-    for (int i = 0; i <= MaxBounces; i++) {
-        for (int t = 0; t<= MaxAlphaSurfaces; t++ ) {
-            traceRayEXT(topLevelAS, gl_RayFlagsOpaqueEXT, 0xff, 0, 0, 0, origin, tmin, direction, tmax, 0);
-			s.depth += p.depth;
-            if (p.color.a == 0.0) {
-                origin = p.hitPoint;
-            }else {
-                break;
-            }
-        }
+// Sample initial_sampling(vec3 direction, vec3 origin, inout uint state) {
+// 	vec3 rayColor = vec3(1.0);
+// 	Sample s = Sample(vec3(0), vec3(0), vec3(0),vec3(0), vec3(0),vec3(0),vec3(0), 0, false);
+//     for (int i = 0; i <= MaxBounces; i++) {
+//         for (int t = 0; t<= MaxAlphaSurfaces; t++ ) {
+//             traceRayEXT(topLevelAS, gl_RayFlagsOpaqueEXT, 0xff, 0, 0, 0, origin, tmin, direction, tmax, 0);
+// 			s.depth += p.depth;
+//             if (p.color.a == 0.0) {
+//                 origin = p.hitPoint;
+//             }else {
+//                 break;
+//             }
+//         }
 
-        if (!p.missed) {
-            origin = p.hitPoint;
-            s.radiance += p.emission * 6 * rayColor;
-			rayColor *= p.color.rgb;
-			direction = normalize(p.hitNormal + RandomDirection(state));
-			
-            if (i == 0) {
-				s.albedo = p.color.rgb;
-                s.origin = p.hitPoint;
-                s.originNormal = p.hitNormal;
-				s.randomDirection = direction;
-            } else if (i == 1) {
-                s.samplePoint = p.hitPoint;
-                s.samplePointNormal = p.hitNormal;
-            }
-        }else{
-			if (i == 0) {
-				s.originNormal = direction;
-			}
-			break;
-		}
-    }
-    return s;
-}
+//         if (!p.missed) {
+//             origin = p.hitPoint;
+//             s.radiance += p.emission * 6 * rayColor;
+// 			rayColor *= p.color.rgb;
+
+// 			// float F = FresnelSchlickRoughness(max(0.,-dot(p.hitNormal, direction)), 0, 1);
+//             // if (F > RandomValue(state)) {
+//                 // direction = modifyDirectionWithRoughness(p.hitNormal, reflect(direction,p.hitNormal), 1, state);
+//             // } else {
+//                 rayColor *= p.color.rgb;
+// 				vec3 rand_dir = RandomDirection(state);
+//                 direction = normalize(p.hitNormal + rand_dir);
+//             // 
+//             if (i == 0) {
+//                 s.origin = p.hitPoint;
+//                 s.originNormal = p.hitNormal;
+// 				s.randomDirection = direction;
+// 				s.albedo = p.color.rgb;
+//             } else if (i == 1) {
+//                 s.samplePoint = p.hitPoint;
+//                 s.samplePointNormal = p.hitNormal;
+//             }
+//         }else{
+// 			if (i == 0) {
+// 				s.originNormal = direction;
+// 			}
+// 			if (i == 0) {
+// 				s.missed = true;
+// 			}
+// 			// s.radiance += p.color.rgb * 100 * rayColor;
+// 			break;
+// 		}
+//     }
+//     return s;
+// }
 
 void main() 
 {	
@@ -130,31 +144,11 @@ void main()
 
 	uint rngState = uint((gl_LaunchIDEXT.y * gl_LaunchSizeEXT.x) + gl_LaunchIDEXT.x) + uint(f.frame) * 23145;
 
-	Sample s = initial_sampling(direction.xyz, origin.xyz, rngState);
-
-	// vec3 color = s.radiance;
-	// if (f.moved == 0) {
-	// 	float a = 1.0 / float(f.frame+1.0);
-	// 	vec3 oldColor = imageLoad(image, ivec2(gl_LaunchIDEXT.xy)).xyz;
-	// 	color = vec3(mix(oldColor, color, a));
-	// } else {
-	// 	color = s.radiance; 
-	// }
-
-	// vec3 totalLight = vec3(0.0);
-	// for (int ray = 0; ray < raysPerPixel; ray++) {
-	// 	vec3 incomingLight = Trace(direction.xyz, origin.xyz, rngState);
-	// 	totalLight += incomingLight;
-	// }
-
-	// vec3 pixelCol = totalLight / raysPerPixel;
-	// vec3 color;
-	// if (f.moved == 0) {
-	// 	float a =1.0 / float(f.frame+1.0);
-	// 	vec3 oldColor = imageLoad(image, ivec2(gl_LaunchIDEXT.xy)).xyz;
-	// 	color = vec3(mix(oldColor, pixelCol, a));
-	// }else{
-	// 	color = pixelCol;
-	// }
-	is.initialSamples[(gl_LaunchIDEXT.y * gl_LaunchSizeEXT.x) + gl_LaunchIDEXT.x] = s;
+	vec3 pixelCol;
+	if ((uint(gl_LaunchIDEXT.x) % 4 == 0) && (uint(gl_LaunchIDEXT.y) % 4 == 0)) {
+		pixelCol = Trace(direction.xyz, origin.xyz, rngState);
+	} else {
+		pixelCol = imageLoad(image, ivec2(uvec2(((gl_LaunchIDEXT.xy / 4))) * 4)).rgb;
+	}
+	imageStore(image, ivec2(gl_LaunchIDEXT.xy), vec4(pixelCol, 1.0));
 }

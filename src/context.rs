@@ -5,13 +5,14 @@ use std::{
     num,
     ops::Sub,
     os::raw::c_void,
+    rc::Rc,
+    time::{Duration, Instant},
 };
 
 use anyhow::Result;
 use ash::{
-    extensions::ext::DebugUtils,
-    extensions::khr,
-    vk::{self, FramebufferMixedSamplesCombinationNV},
+    extensions::{ext::DebugUtils, khr},
+    vk::{self, FramebufferMixedSamplesCombinationNV, ImageView},
     Device, Entry, Instance,
 };
 use gpu_allocator::{
@@ -19,6 +20,7 @@ use gpu_allocator::{
     AllocatorDebugSettings, MemoryLocation,
 };
 use image::{DynamicImage, GenericImageView};
+use log::debug;
 use raw_window_handle::{RawDisplayHandle, RawWindowHandle};
 use simple_logger::SimpleLogger;
 use std::slice::from_ref;
@@ -42,10 +44,12 @@ pub struct Context {
     pub frames_in_flight: Vec<Frame>,
     pub swapchain: Swapchain,
     pub frame: u64,
+    pub last_swapchain_image_index: u32,
     pub cmd_buffs: Vec<vk::CommandBuffer>,
-    pub storage_image: (Image, vk::ImageView),
-    pub post_processing_image: (Image, vk::ImageView),
+    pub storage_image: Vec<(Image, vk::ImageView)>,
+    pub post_processing_image: Vec<(Image, vk::ImageView)>,
     pub last_frame: u64,
+    pub g_buffer: Vec<vk::Framebuffer>,
     _entry: Entry,
 }
 
@@ -203,50 +207,86 @@ impl Context {
         }
 
         let storage_image = {
-            let image = Image::new_2d(
-                &device,
-                &mut allocator,
-                vk::ImageUsageFlags::TRANSFER_SRC | vk::ImageUsageFlags::STORAGE,
-                MemoryLocation::GpuOnly,
-                vk::Format::R32G32B32A32_SFLOAT,
-                swapchain.extent.width,
-                swapchain.extent.height,
-            )?;
+            (0..swapchain.images.len())
+                .map(|_| {
+                    let image = Image::new_2d(
+                        &device,
+                        &mut allocator,
+                        vk::ImageUsageFlags::TRANSFER_SRC | vk::ImageUsageFlags::STORAGE,
+                        MemoryLocation::GpuOnly,
+                        swapchain.format,
+                        swapchain.extent.width,
+                        swapchain.extent.height,
+                    )
+                    .unwrap();
 
-            Self::transition_image_layout_to_general(
-                &device,
-                &command_pool,
-                &image,
-                &graphics_queue,
-            );
+                    Self::transition_image_layout_to_general(
+                        &device,
+                        &command_pool,
+                        &image,
+                        &graphics_queue,
+                    )
+                    .unwrap();
 
-            let view = create_image_view(&device, &image, &vk::Format::R32G32B32A32_SFLOAT);
-            (image, view)
+                    let view = create_image_view(&device, &image, &swapchain.format);
+                    (image, view)
+                })
+                .collect::<Vec<(Image, ImageView)>>()
         };
 
         let post_processing_image = {
-            let image = Image::new_2d(
-                &device,
-                &mut allocator,
-                vk::ImageUsageFlags::TRANSFER_SRC | vk::ImageUsageFlags::STORAGE,
-                MemoryLocation::GpuOnly,
-                swapchain.format,
-                swapchain.extent.width,
-                swapchain.extent.height,
-            )?;
+            (0..swapchain.images.len())
+                .map(|_| {
+                    let image = Image::new_2d(
+                        &device,
+                        &mut allocator,
+                        vk::ImageUsageFlags::TRANSFER_SRC | vk::ImageUsageFlags::STORAGE,
+                        MemoryLocation::GpuOnly,
+                        swapchain.format,
+                        swapchain.extent.width,
+                        swapchain.extent.height,
+                    )
+                    .unwrap();
 
-            Self::transition_image_layout_to_general(
-                &device,
-                &command_pool,
-                &image,
-                &graphics_queue,
-            );
+                    Self::transition_image_layout_to_general(
+                        &device,
+                        &command_pool,
+                        &image,
+                        &graphics_queue,
+                    )
+                    .unwrap();
 
-            let view = create_image_view(&device, &image, &swapchain.format);
-            (image, view)
+                    let view = create_image_view(&device, &image, &swapchain.format);
+                    (image, view)
+                })
+                .collect::<Vec<(Image, ImageView)>>()
         };
 
+        let g_buffer = {
+            (0..swapchain.images.len())
+                .map(|_| {
+                    let image = &Image::new_2d(
+                        &device,
+                        &mut allocator,
+                        vk::ImageUsageFlags::COLOR_ATTACHMENT,
+                        MemoryLocation::GpuOnly,
+                        vk::Format::R32G32B32A32_SFLOAT,
+                        window_size.height,
+                        window_size.height,
+                    )
+                    .unwrap();
+                    let attachments =
+                        create_image_view(&device, image, vk::Format::R32G32B32A32_SFLOAT);
+
+                    let create_info = vk::FramebufferCreateInfo::builder()
+                        .attachment_count(4)
+                        .attachments(&[]);
+                    unsafe { device.create_framebuffer(create_info, None) }.unwrap()
+                })
+                .collect::<Vec<vk::Framebuffer>>()
+        };
         Ok(Self {
+            last_swapchain_image_index: 0,
             post_processing_image,
             last_frame: 0,
             frame: 0,
@@ -266,6 +306,7 @@ impl Context {
             swapchain,
             cmd_buffs,
             storage_image,
+            g_buffer,
             _entry: entry,
         })
     }
@@ -516,31 +557,112 @@ impl Context {
         )
     }
 
-    pub fn render<F>(&self, func: F) -> Result<u64>
+    pub fn render<F>(&mut self, func: F) -> Result<u64>
     where
-        F: FnOnce(u32),
+        F: FnOnce(&mut Context, u32),
     {
-        let frame_index = (self.frame + 1) % FRAMES_IN_FLIGHT as u64;
+        let (image_index, frame_index) = {
+            let frame_index: u64 = (self.frame + 1) % FRAMES_IN_FLIGHT as u64;
+            let frame = &self.frames_in_flight[frame_index as usize];
+            frame.fence.wait(&self.device, None)?;
+            frame.fence.reset(&self.device)?;
+
+            let image_index = match unsafe {
+                self.swapchain.ash_swapchain.acquire_next_image(
+                    self.swapchain.vk_swapchain,
+                    u64::MAX,
+                    frame.image_available,
+                    vk::Fence::null(),
+                )
+            } {
+                Err(err) => {
+                    if err == vk::Result::ERROR_OUT_OF_DATE_KHR || err == vk::Result::SUBOPTIMAL_KHR
+                    {
+                        debug!("Suboptimal");
+                    }
+                    0
+                }
+                Ok(v) => v.0,
+            };
+            let cmd = &self.cmd_buffs[image_index as usize];
+            begin_command_buffer(cmd, &self.device, None)?;
+            (image_index, frame_index)
+        };
+        func(self, image_index);
+
         let frame = &self.frames_in_flight[frame_index as usize];
-        frame.fence.wait(&self.device, None)?;
-
-        let image_index = unsafe {
-            self.swapchain.ash_swapchain.acquire_next_image(
-                self.swapchain.vk_swapchain,
-                u64::MAX,
-                frame.image_available,
-                vk::Fence::null(),
-            )
-        }
-        .unwrap()
-        .0;
-
         let cmd = &self.cmd_buffs[image_index as usize];
+        self.last_swapchain_image_index = image_index;
+        let swapchain_image = &self.swapchain.images[image_index as usize];
+        let post_proccesing_image = &self.post_processing_image[image_index as usize];
+        self.pipeline_image_barriers(
+            &cmd,
+            &[
+                ImageBarrier {
+                    image: &swapchain_image.0,
+                    old_layout: vk::ImageLayout::UNDEFINED,
+                    new_layout: vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                    src_access_mask: vk::AccessFlags2::NONE,
+                    dst_access_mask: vk::AccessFlags2::TRANSFER_WRITE,
+                    src_stage_mask: vk::PipelineStageFlags2::NONE,
+                    dst_stage_mask: vk::PipelineStageFlags2::TRANSFER,
+                },
+                ImageBarrier {
+                    image: &post_proccesing_image.0,
+                    old_layout: vk::ImageLayout::GENERAL,
+                    new_layout: vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+                    src_access_mask: vk::AccessFlags2::SHADER_WRITE,
+                    dst_access_mask: vk::AccessFlags2::TRANSFER_READ,
+                    src_stage_mask: vk::PipelineStageFlags2::RAY_TRACING_SHADER_KHR,
+                    dst_stage_mask: vk::PipelineStageFlags2::TRANSFER,
+                },
+            ],
+        );
 
-        begin_command_buffer(cmd, &self.device, None)?;
+        self.copy_image(
+            &cmd,
+            &post_proccesing_image.0,
+            vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+            &swapchain_image.0,
+            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+        );
 
-        func(image_index);
+        self.pipeline_image_barriers(
+            &cmd,
+            &[
+                ImageBarrier {
+                    image: &swapchain_image.0,
+                    old_layout: vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                    new_layout: vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+                    src_access_mask: vk::AccessFlags2::TRANSFER_WRITE,
+                    dst_access_mask: vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
+                    src_stage_mask: vk::PipelineStageFlags2::TRANSFER,
+                    dst_stage_mask: vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
+                },
+                ImageBarrier {
+                    image: &post_proccesing_image.0,
+                    old_layout: vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+                    new_layout: vk::ImageLayout::GENERAL,
+                    src_access_mask: vk::AccessFlags2::TRANSFER_READ,
+                    dst_access_mask: vk::AccessFlags2::NONE,
+                    src_stage_mask: vk::PipelineStageFlags2::TRANSFER,
+                    dst_stage_mask: vk::PipelineStageFlags2::ALL_COMMANDS,
+                },
+            ],
+        );
 
+        self.pipeline_image_barriers(
+            cmd,
+            &[ImageBarrier {
+                image: &swapchain_image.0,
+                old_layout: vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+                new_layout: vk::ImageLayout::PRESENT_SRC_KHR,
+                src_access_mask: vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
+                dst_access_mask: vk::AccessFlags2::COLOR_ATTACHMENT_READ,
+                src_stage_mask: vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
+                dst_stage_mask: vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
+            }],
+        );
         unsafe { self.device.end_command_buffer(*cmd) }.unwrap();
         let submit_info = vk::SubmitInfo2::builder()
             .wait_semaphore_infos(from_ref(
@@ -562,11 +684,12 @@ impl Context {
             ))
             .build();
 
+        let before = Instant::now();
         unsafe {
-            frame.fence.reset(&self.device)?;
             self.device
                 .queue_submit2(self.graphics_queue, &[submit_info], frame.fence.handel)?;
         };
+        debug!("{:?}", Instant::now().duration_since(before));
 
         let rf = &[frame.render_finished];
         let sc = &[self.swapchain.vk_swapchain];
@@ -576,16 +699,18 @@ impl Context {
             .swapchains(sc)
             .image_indices(&image_indices);
 
-        let suboptimal = unsafe {
+        match unsafe {
             self.swapchain
                 .ash_swapchain
                 .queue_present(self.graphics_queue, &present_info)
-                .unwrap()
+        } {
+            Err(err) => {
+                if err == vk::Result::ERROR_OUT_OF_DATE_KHR || err == vk::Result::SUBOPTIMAL_KHR {
+                    debug!("Suboptimal");
+                }
+            }
+            Ok(v) => {}
         };
-        if suboptimal {
-            println!("suboptimal");
-        }
-
         Ok(frame_index)
     }
 
@@ -1229,6 +1354,7 @@ pub struct RayTracingShaderGroupInfo {
 
 pub struct RayTracingPipeline {
     pub descriptor_set_layout: vk::DescriptorSetLayout,
+    pub dynamic_layout: vk::DescriptorSetLayout,
     pub layout: vk::PipelineLayout,
     pub handle: vk::Pipeline,
     pub shader_group_info: RayTracingShaderGroupInfo,
@@ -1528,7 +1654,7 @@ impl Swapchain {
     }
 }
 
-pub fn create_image_view(device: &Device, image: &Image, format: &vk::Format) -> vk::ImageView {
+pub fn create_image_view(device: &Device, image: &Image, format: vk::Format) -> vk::ImageView {
     let image_view_info = vk::ImageViewCreateInfo::builder()
         .image(image.inner)
         .view_type(vk::ImageViewType::TYPE_2D)

@@ -22,7 +22,7 @@ use ash::Device;
 
 use glam::{vec3, Mat4, Vec3};
 use std::default::Default;
-use std::ffi::CString;
+use std::ffi::{CStr, CString};
 use std::os::unix::thread;
 use std::slice::from_ref;
 use std::time::{Duration, Instant};
@@ -40,9 +40,9 @@ use winit::{
 
 struct ComputePipeline {
     pub handel: vk::Pipeline,
-    pub descriptor: vk::DescriptorSet,
+    pub descriptors: Box<[Box<[vk::DescriptorSet]>]>,
     pub layout: vk::PipelineLayout,
-    pub descriptor_layout: vk::DescriptorSetLayout,
+    pub descriptor_layouts: Box<[vk::DescriptorSetLayout]>,
 }
 
 fn main() {
@@ -124,94 +124,44 @@ fn main() {
         ..Default::default()
     };
 
-    let postprocessing_binding = [
-        WriteDescriptorSet {
-            binding: 0,
-            kind: WriteDescriptorSetKind::StorageImage {
-                view: ctx.storage_image.1,
-                layout: vk::ImageLayout::GENERAL,
-            },
-        },
-        WriteDescriptorSet {
-            binding: 1,
-            kind: WriteDescriptorSetKind::StorageImage {
-                view: ctx.post_processing_image.1,
-                layout: vk::ImageLayout::GENERAL,
-            },
-        },
-    ];
-
-    let spacial_reuse_buffer = ctx
-        .create_gpu_only_buffer_from_data_with_size(
-            vk::BufferUsageFlags::STORAGE_BUFFER,
-            &[()],
-            (200 * window_size.width * window_size.height).into(),
-            "Spacial Reuse".into(),
-        )
-        .unwrap();
-    let temporal_reuse_buffer = ctx
-        .create_gpu_only_buffer_from_data_with_size(
-            vk::BufferUsageFlags::STORAGE_BUFFER,
-            &[()],
-            (200 * window_size.width * window_size.height).into(),
-            "Temporal Reuse".into(),
-        )
-        .unwrap();
-
-    let initial_sample_buffer = ctx
-        .create_gpu_only_buffer_from_data_with_size(
-            vk::BufferUsageFlags::STORAGE_BUFFER,
-            &[()],
-            (200 * window_size.width * window_size.height).into(),
-            "Initial Samples".into(),
-        )
-        .unwrap();
-
-    let reuse_bindings = [
-        WriteDescriptorSet {
-            binding: 0,
-            kind: WriteDescriptorSetKind::StorageBuffer {
-                buffer: spacial_reuse_buffer.inner,
-            },
-        },
-        WriteDescriptorSet {
-            binding: 1,
-            kind: WriteDescriptorSetKind::StorageBuffer {
-                buffer: temporal_reuse_buffer.inner,
-            },
-        },
-        WriteDescriptorSet {
-            binding: 2,
-            kind: WriteDescriptorSetKind::StorageBuffer {
-                buffer: initial_sample_buffer.inner,
-            },
-        },
-        WriteDescriptorSet {
-            binding: 3,
-            kind: WriteDescriptorSetKind::StorageImage {
-                layout: vk::ImageLayout::GENERAL,
-                view: ctx.storage_image.1,
-            },
-        },
-    ];
+    let post_proccesing_sets = Box::from([Box::from(
+        (0..ctx.swapchain.images.len())
+            .map(|i| {
+                Box::from([
+                    WriteDescriptorSet {
+                        binding: 0,
+                        kind: WriteDescriptorSetKind::StorageImage {
+                            view: ctx.storage_image[i].1,
+                            layout: vk::ImageLayout::GENERAL,
+                        },
+                    },
+                    WriteDescriptorSet {
+                        binding: 1,
+                        kind: WriteDescriptorSetKind::StorageImage {
+                            view: ctx.post_processing_image[i].1,
+                            layout: vk::ImageLayout::GENERAL,
+                        },
+                    },
+                ])
+            })
+            .collect::<Vec<Box<[WriteDescriptorSet]>>>(),
+    )]);
 
     let postprocessing_pass = create_compute_pipeline(
         &mut ctx,
-        &postprocessing_binding,
+        post_proccesing_sets,
+        Box::from([Box::from([
+            ComputeBinding {
+                count: 1,
+                ty: vk::DescriptorType::STORAGE_IMAGE,
+            },
+            ComputeBinding {
+                count: 1,
+                ty: vk::DescriptorType::STORAGE_IMAGE,
+            },
+        ])]),
         &[],
         include_bytes!("./shaders/post_processing.comp.spv"),
-    );
-    let reuse_pass = create_compute_pipeline(
-        &mut ctx,
-        &reuse_bindings,
-        &[
-            vk::PushConstantRange {
-                stage_flags: vk::ShaderStageFlags::COMPUTE,
-                offset: 0,
-                size: 8,
-            },
-        ],
-        include_bytes!("./shaders/reuse.comp.spv"),
     );
 
     log::trace!("Starting Image Load");
@@ -288,6 +238,7 @@ fn main() {
         )
         .unwrap()
     };
+
     let shaders_create_info = [
         RayTracingShaderCreateInfo {
             source: &[(
@@ -323,34 +274,27 @@ fn main() {
     ];
     let pipeline = create_ray_tracing_pipeline(&ctx, &model, &shaders_create_info).unwrap();
     let shader_binding_table = ctx.create_shader_binding_table(&pipeline).unwrap();
-
-    let (descriptor_pool, static_set) = create_raytracing_descriptor_sets(
-        &mut ctx,
-        &pipeline,
-        &tlas,
-        &uniform_buffer,
-        &model,
-        &mut vec![
-            WriteDescriptorSet {
+    let (descriptor_pool, static_set, dynamic_set) = {
+        create_raytracing_descriptor_sets(
+            &mut ctx,
+            &pipeline,
+            &tlas,
+            &uniform_buffer,
+            &model,
+            &mut vec![WriteDescriptorSet {
                 binding: 8,
                 kind: WriteDescriptorSetKind::CombinedImageSampler {
                     view: sky_box.1,
                     sampler: sky_box_sampler,
                     layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
                 },
-            },
-            WriteDescriptorSet {
-                binding: 9,
-                kind: WriteDescriptorSetKind::StorageBuffer {
-                    buffer: initial_sample_buffer.inner,
-                },
-            },
-        ],
-    )
-    .unwrap();
+            }],
+        )
+        .unwrap()
+    };
 
     let mut moved = false;
-    let mut frame = 0;
+    let mut frame: u32 = 0;
     let mut now = Instant::now();
     let mut last_time = Instant::now();
     let mut frame_time = Duration::new(0, 0);
@@ -364,7 +308,6 @@ fn main() {
                 now = Instant::now();
                 frame_time = now - last_time;
                 last_time = now;
-                debug!("{:?}", frame_time);
             }
             Event::WindowEvent { event, .. } => match event {
                 WindowEvent::CloseRequested => *control_flow = ControlFlow::Exit,
@@ -391,31 +334,114 @@ fn main() {
                 if moved {
                     frame = 0;
                 }
+                uniform_buffer
+                    .copy_data_to_buffer(std::slice::from_ref(&uniform_data))
+                    .unwrap();
                 camera = new_cam;
 
                 uniform_data.proj_inverse = camera.projection_matrix().inverse();
                 uniform_data.view_inverse = camera.view_matrix().inverse();
 
-                uniform_buffer
-                    .copy_data_to_buffer(std::slice::from_ref(&uniform_data))
-                    .unwrap();
-                //println!("{}", delta_time.as_micros());
-                ctx.frame = ctx
-                    .render(|i| {
-                        record_command_buffers(
-                            &ctx,
-                            i,
-                            &pipeline,
-                            &shader_binding_table,
-                            &postprocessing_pass,
-                            &reuse_pass,
-                            window_size,
-                            &static_set,
-                            &frame,
-                            &moved,
+                ctx.render(|ctx, i| {
+                    let cmd = &ctx.cmd_buffs[i as usize];
+
+                    unsafe {
+                        let frame_c = std::slice::from_raw_parts(
+                            &frame as *const u32 as *const u8,
+                            size_of::<u32>(),
                         );
-                    })
-                    .unwrap();
+                        let moved_c = &[if moved == true { 1 as u8 } else { 0 as u8 }, 0, 0, 0];
+
+                        ctx.device.cmd_push_constants(
+                            *cmd,
+                            pipeline.layout,
+                            vk::ShaderStageFlags::RAYGEN_KHR,
+                            0,
+                            &frame_c,
+                        );
+                        ctx.device.cmd_push_constants(
+                            *cmd,
+                            pipeline.layout,
+                            vk::ShaderStageFlags::RAYGEN_KHR,
+                            size_of::<u32>() as u32,
+                            moved_c,
+                        );
+
+                        ctx.device.cmd_bind_descriptor_sets(
+                            *cmd,
+                            vk::PipelineBindPoint::RAY_TRACING_KHR,
+                            pipeline.layout,
+                            0,
+                            &[
+                                static_set,
+                                dynamic_set[i as usize],
+                                dynamic_set[ctx.last_swapchain_image_index as usize],
+                            ],
+                            &[],
+                        );
+
+                        ctx.device.cmd_bind_pipeline(
+                            *cmd,
+                            vk::PipelineBindPoint::RAY_TRACING_KHR,
+                            pipeline.handle,
+                        );
+
+                        let call_region = vk::StridedDeviceAddressRegionKHR::default();
+
+                        ctx.ray_tracing.pipeline_fn.cmd_trace_rays(
+                            *cmd,
+                            &shader_binding_table.raygen_region,
+                            &shader_binding_table.miss_region,
+                            &shader_binding_table.hit_region,
+                            &call_region,
+                            window_size.width,
+                            window_size.height,
+                            1,
+                        );
+
+                        // ctx.device
+                        //     .cmd_bind_pipeline(*cmd, vk::PipelineBindPoint::COMPUTE, temporal_reuse.handel);
+
+                        // ctx.device.cmd_bind_descriptor_sets(
+                        //     *cmd,
+                        //     vk::PipelineBindPoint::COMPUTE,
+                        //     temporal_reuse.layout,
+                        //     0,
+                        //     &[temporal_reuse.descriptor],
+                        //     &[],
+                        // );
+
+                        // ctx.device.cmd_push_constants(
+                        //     *cmd,
+                        //     temporal_reuse.layout,
+                        //     vk::ShaderStageFlags::COMPUTE,
+                        //     0,
+                        //     &frame_c,
+                        // );
+
+                        // ctx.device
+                        //     .cmd_dispatch(*cmd, window_size.width, window_size.height, 1);
+
+                        ctx.device.cmd_bind_pipeline(
+                            *cmd,
+                            vk::PipelineBindPoint::COMPUTE,
+                            postprocessing_pass.handel,
+                        );
+
+                        ctx.device.cmd_bind_descriptor_sets(
+                            *cmd,
+                            vk::PipelineBindPoint::COMPUTE,
+                            postprocessing_pass.layout,
+                            0,
+                            &[postprocessing_pass.descriptors[0][i as usize]],
+                            &[],
+                        );
+
+                        ctx.device
+                            .cmd_dispatch(*cmd, window_size.width, window_size.height, 1);
+                    }
+                })
+                .unwrap();
             }
             Event::LoopDestroyed => {
                 unsafe { ctx.device.destroy_descriptor_pool(descriptor_pool, None) };
@@ -433,7 +459,11 @@ fn create_raytracing_descriptor_sets(
     ubo_buffer: &Buffer,
     model: &Model,
     wirtes: &mut Vec<WriteDescriptorSet>,
-) -> Result<(vk::DescriptorPool, vk::DescriptorSet)> {
+) -> Result<(
+    vk::DescriptorPool,
+    vk::DescriptorSet,
+    Vec<vk::DescriptorSet>,
+)> {
     let size = context.swapchain.images.len() as u32;
 
     let mut pool_sizes = vec![
@@ -443,7 +473,7 @@ fn create_raytracing_descriptor_sets(
             .build(),
         vk::DescriptorPoolSize::builder()
             .ty(vk::DescriptorType::STORAGE_IMAGE)
-            .descriptor_count(1)
+            .descriptor_count(1 + size)
             .build(),
         vk::DescriptorPoolSize::builder()
             .ty(vk::DescriptorType::UNIFORM_BUFFER)
@@ -500,6 +530,20 @@ fn create_raytracing_descriptor_sets(
 
     let static_set =
         allocate_descriptor_set(&context.device, &pool, &pipeline.descriptor_set_layout)?;
+    let dynamic_sets =
+        allocate_descriptor_sets(&context.device, &pool, &pipeline.dynamic_layout, size)?;
+
+    for i in 0..size {
+        let write = WriteDescriptorSet {
+            binding: 1,
+            kind: WriteDescriptorSetKind::StorageImage {
+                layout: vk::ImageLayout::GENERAL,
+                view: context.storage_image[i as usize].1,
+            },
+        };
+        update_descriptor_sets(context, &dynamic_sets[i as usize], &[write]);
+    }
+
     let w: Vec<_> = [
         WriteDescriptorSet {
             binding: 0,
@@ -561,179 +605,7 @@ fn create_raytracing_descriptor_sets(
         };
     }
 
-    Ok((pool, static_set))
-}
-
-fn record_command_buffers(
-    ctx: &Context,
-    index: u32,
-    pipeline: &RayTracingPipeline,
-    shader_binding_table: &ShaderBindingTable,
-    postprocessing: &ComputePipeline,
-    temporal_reuse: &ComputePipeline,
-    window_size: PhysicalSize<u32>,
-    static_set: &vk::DescriptorSet,
-    frame: &u32,
-    moved: &bool,
-) {
-    let swapchain_image = &ctx.swapchain.images[index as usize].0;
-    let cmd = &ctx.cmd_buffs[index as usize];
-
-    unsafe {
-        let frame_c =
-            std::slice::from_raw_parts(frame as *const u32 as *const u8, size_of::<u32>());
-        let moved_c = &[if *moved == true { 1 as u8 } else { 0 as u8 }, 0, 0, 0];
-
-        ctx.device.cmd_push_constants(
-            *cmd,
-            pipeline.layout,
-            vk::ShaderStageFlags::RAYGEN_KHR,
-            0,
-            &frame_c,
-        );
-        ctx.device.cmd_push_constants(
-            *cmd,
-            pipeline.layout,
-            vk::ShaderStageFlags::RAYGEN_KHR,
-            size_of::<u32>() as u32,
-            moved_c,
-        );
-
-        ctx.device.cmd_bind_pipeline(
-            *cmd,
-            vk::PipelineBindPoint::RAY_TRACING_KHR,
-            pipeline.handle,
-        );
-
-        ctx.device.cmd_bind_descriptor_sets(
-            *cmd,
-            vk::PipelineBindPoint::RAY_TRACING_KHR,
-            pipeline.layout,
-            0,
-            &[*static_set],
-            &[],
-        );
-
-        let call_region = vk::StridedDeviceAddressRegionKHR::default();
-
-        ctx.ray_tracing.pipeline_fn.cmd_trace_rays(
-            *cmd,
-            &shader_binding_table.raygen_region,
-            &shader_binding_table.miss_region,
-            &shader_binding_table.hit_region,
-            &call_region,
-            window_size.width,
-            window_size.height,
-            1,
-        );
-
-        ctx.device
-            .cmd_bind_pipeline(*cmd, vk::PipelineBindPoint::COMPUTE, temporal_reuse.handel);
-
-        ctx.device.cmd_bind_descriptor_sets(
-            *cmd,
-            vk::PipelineBindPoint::COMPUTE,
-            temporal_reuse.layout,
-            0,
-            &[temporal_reuse.descriptor],
-            &[],
-        );
-
-        ctx.device.cmd_push_constants(
-            *cmd,
-            temporal_reuse.layout,
-            vk::ShaderStageFlags::COMPUTE,
-            0,
-            &frame_c,
-        );
-
-        ctx.device
-            .cmd_dispatch(*cmd, window_size.width, window_size.height, 1);
-
-        ctx.device
-            .cmd_bind_pipeline(*cmd, vk::PipelineBindPoint::COMPUTE, postprocessing.handel);
-
-        ctx.device.cmd_bind_descriptor_sets(
-            *cmd,
-            vk::PipelineBindPoint::COMPUTE,
-            postprocessing.layout,
-            0,
-            &[postprocessing.descriptor],
-            &[],
-        );
-
-        ctx.device
-            .cmd_dispatch(*cmd, window_size.width, window_size.height, 1);
-
-        ctx.pipeline_image_barriers(
-            &cmd,
-            &[
-                ImageBarrier {
-                    image: &swapchain_image,
-                    old_layout: vk::ImageLayout::UNDEFINED,
-                    new_layout: vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                    src_access_mask: vk::AccessFlags2::NONE,
-                    dst_access_mask: vk::AccessFlags2::TRANSFER_WRITE,
-                    src_stage_mask: vk::PipelineStageFlags2::NONE,
-                    dst_stage_mask: vk::PipelineStageFlags2::TRANSFER,
-                },
-                ImageBarrier {
-                    image: &ctx.post_processing_image.0,
-                    old_layout: vk::ImageLayout::GENERAL,
-                    new_layout: vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
-                    src_access_mask: vk::AccessFlags2::SHADER_WRITE,
-                    dst_access_mask: vk::AccessFlags2::TRANSFER_READ,
-                    src_stage_mask: vk::PipelineStageFlags2::RAY_TRACING_SHADER_KHR,
-                    dst_stage_mask: vk::PipelineStageFlags2::TRANSFER,
-                },
-            ],
-        );
-
-        ctx.copy_image(
-            &cmd,
-            &ctx.post_processing_image.0,
-            vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
-            swapchain_image,
-            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-        );
-
-        ctx.pipeline_image_barriers(
-            &cmd,
-            &[
-                ImageBarrier {
-                    image: &swapchain_image,
-                    old_layout: vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                    new_layout: vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
-                    src_access_mask: vk::AccessFlags2::TRANSFER_WRITE,
-                    dst_access_mask: vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
-                    src_stage_mask: vk::PipelineStageFlags2::TRANSFER,
-                    dst_stage_mask: vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
-                },
-                ImageBarrier {
-                    image: &ctx.post_processing_image.0,
-                    old_layout: vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
-                    new_layout: vk::ImageLayout::GENERAL,
-                    src_access_mask: vk::AccessFlags2::TRANSFER_READ,
-                    dst_access_mask: vk::AccessFlags2::NONE,
-                    src_stage_mask: vk::PipelineStageFlags2::TRANSFER,
-                    dst_stage_mask: vk::PipelineStageFlags2::ALL_COMMANDS,
-                },
-            ],
-        );
-
-        ctx.pipeline_image_barriers(
-            cmd,
-            &[ImageBarrier {
-                image: &swapchain_image,
-                old_layout: vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
-                new_layout: vk::ImageLayout::PRESENT_SRC_KHR,
-                src_access_mask: vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
-                dst_access_mask: vk::AccessFlags2::COLOR_ATTACHMENT_READ,
-                src_stage_mask: vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
-                dst_stage_mask: vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
-            }],
-        );
-    }
+    Ok((pool, static_set, dynamic_sets))
 }
 
 fn create_acceleration_structure(
@@ -916,17 +788,24 @@ fn create_ray_tracing_pipeline(
             .build(),
     ];
 
-    // let dynamic_layout_bindings = [vk::DescriptorSetLayoutBinding::builder()
-    //     .binding(1)
-    //     .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
-    //     .descriptor_count(1)
-    //     .stage_flags(vk::ShaderStageFlags::RAYGEN_KHR)
-    //     .build(),
-    // ];
+    let dynamic_layout_bindings = [vk::DescriptorSetLayoutBinding::builder()
+        .binding(1)
+        .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
+        .descriptor_count(1)
+        .stage_flags(vk::ShaderStageFlags::RAYGEN_KHR)
+        .build()];
+    let old_imag_layout_bindings = [vk::DescriptorSetLayoutBinding::builder()
+        .binding(1)
+        .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
+        .descriptor_count(1)
+        .stage_flags(vk::ShaderStageFlags::RAYGEN_KHR)
+        .build()];
 
     let static_dsl = ctx.create_descriptor_set_layout(&static_layout_bindings, &[])?;
-    // let dynamic_dsl = ctx.create_descriptor_set_layout(&dynamic_layout_bindings, &[])?;
-    let dsls = [static_dsl];
+    let dynamic_dsl = ctx.create_descriptor_set_layout(&dynamic_layout_bindings, &[])?;
+    let old_image_dsl = ctx.create_descriptor_set_layout(&old_imag_layout_bindings, &[])?;
+
+    let dsls = [static_dsl, dynamic_dsl, old_image_dsl];
 
     let push_constants = &[vk::PushConstantRange::builder()
         .offset(0)
@@ -948,7 +827,7 @@ fn create_ray_tracing_pipeline(
     let mut stages = vec![];
     let mut groups = vec![];
 
-    let entry_point_name = CString::new("main").unwrap();
+    let entry_point_name: CString = CString::new("main").unwrap();
 
     for shader in shaders_create_info.iter() {
         let mut this_modules = vec![];
@@ -1026,73 +905,46 @@ fn create_ray_tracing_pipeline(
     Ok(RayTracingPipeline {
         handle: inner,
         descriptor_set_layout: static_dsl,
+        dynamic_layout: dynamic_dsl,
         layout: pipeline_layout,
         shader_group_info,
     })
 }
 
+struct ComputeBinding {
+    pub ty: vk::DescriptorType,
+    pub count: u32,
+}
+
 fn create_compute_pipeline(
     ctx: &mut Context,
-    writes: &[WriteDescriptorSet],
+    writes: Box<[Box<[Box<[WriteDescriptorSet]>]>]>,
+    layout: Box<[Box<[ComputeBinding]>]>,
+
     push_constant_ranges: &[vk::PushConstantRange],
     shader: &[u8],
 ) -> ComputePipeline {
-    let mut bindings = Vec::with_capacity(writes.len());
-    for w in writes.iter() {
-        bindings.push(match w.kind {
-            WriteDescriptorSetKind::CombinedImageSampler {
-                layout: _,
-                sampler: _,
-                view: _,
-            } => vk::DescriptorSetLayoutBinding {
-                binding: w.binding,
-                descriptor_count: 1,
-                stage_flags: vk::ShaderStageFlags::COMPUTE,
-                descriptor_type: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
-                ..Default::default()
-            },
-            WriteDescriptorSetKind::StorageBuffer { buffer: _ } => vk::DescriptorSetLayoutBinding {
-                binding: w.binding,
-                descriptor_count: 1,
-                stage_flags: vk::ShaderStageFlags::COMPUTE,
-                descriptor_type: vk::DescriptorType::STORAGE_BUFFER,
-                ..Default::default()
-            },
-            WriteDescriptorSetKind::AccelerationStructure {
-                acceleration_structure: _,
-            } => vk::DescriptorSetLayoutBinding {
-                binding: w.binding,
-                descriptor_count: 1,
-                stage_flags: vk::ShaderStageFlags::COMPUTE,
-                descriptor_type: vk::DescriptorType::ACCELERATION_STRUCTURE_KHR,
-                ..Default::default()
-            },
-            WriteDescriptorSetKind::StorageImage { view: _, layout: _ } => {
-                vk::DescriptorSetLayoutBinding {
-                    binding: w.binding,
-                    descriptor_count: 1,
-                    stage_flags: vk::ShaderStageFlags::COMPUTE,
-                    descriptor_type: vk::DescriptorType::STORAGE_IMAGE,
-                    ..Default::default()
-                }
-            }
-            WriteDescriptorSetKind::UniformBuffer { buffer: _ } => vk::DescriptorSetLayoutBinding {
-                binding: w.binding,
-                descriptor_count: 1,
-                stage_flags: vk::ShaderStageFlags::COMPUTE,
-                descriptor_type: vk::DescriptorType::UNIFORM_BUFFER,
-                ..Default::default()
-            },
-        })
+    let mut layouts = Vec::with_capacity(layout.len());
+    for set in layout.iter() {
+        let mut bindings = Vec::with_capacity(writes.len());
+        for (i, b) in set.iter().enumerate() {
+            bindings.push(
+                vk::DescriptorSetLayoutBinding::builder()
+                    .descriptor_count(b.count)
+                    .descriptor_type(b.ty)
+                    .binding(i as u32)
+                    .stage_flags(vk::ShaderStageFlags::COMPUTE)
+                    .build(),
+            );
+        }
+        layouts.push(create_descriptor_set_layout(&ctx.device, bindings.as_slice(), &[]).unwrap());
     }
-
-    let set_layout = create_descriptor_set_layout(&ctx.device, &bindings, &[]).unwrap();
 
     let layout = unsafe {
         ctx.device
             .create_pipeline_layout(
                 &vk::PipelineLayoutCreateInfo::builder()
-                    .set_layouts(&[set_layout])
+                    .set_layouts(layouts.as_slice())
                     .push_constant_ranges(push_constant_ranges)
                     .build(),
                 None,
@@ -1116,48 +968,56 @@ fn create_compute_pipeline(
             .unwrap()
     }[0];
 
-    let mut pool_sizes = Vec::with_capacity(writes.len());
-    for w in writes.iter() {
-        pool_sizes.push(match w.kind {
-            WriteDescriptorSetKind::CombinedImageSampler {
-                layout: _,
-                sampler: _,
-                view: _,
-            } => vk::DescriptorPoolSize::builder()
-                .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                .descriptor_count(1)
-                .build(),
-            WriteDescriptorSetKind::StorageBuffer { buffer: _ } => {
-                vk::DescriptorPoolSize::builder()
-                    .ty(vk::DescriptorType::STORAGE_BUFFER)
-                    .descriptor_count(1)
-                    .build()
+    let mut descriptors = Vec::with_capacity(writes.len());
+    for (i, descriptor) in writes.iter().enumerate() {
+        let mut sets = Vec::with_capacity(descriptor.len());
+        for set in descriptor.iter() {
+            let mut pool_sizes = Vec::with_capacity(writes.len());
+            for w in set.iter() {
+                pool_sizes.push(match w.kind {
+                    WriteDescriptorSetKind::CombinedImageSampler {
+                        layout: _,
+                        sampler: _,
+                        view: _,
+                    } => vk::DescriptorPoolSize::builder()
+                        .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                        .descriptor_count(1)
+                        .build(),
+                    WriteDescriptorSetKind::StorageBuffer { buffer: _ } => {
+                        vk::DescriptorPoolSize::builder()
+                            .ty(vk::DescriptorType::STORAGE_BUFFER)
+                            .descriptor_count(1)
+                            .build()
+                    }
+                    WriteDescriptorSetKind::AccelerationStructure {
+                        acceleration_structure: _,
+                    } => vk::DescriptorPoolSize::builder()
+                        .ty(vk::DescriptorType::ACCELERATION_STRUCTURE_KHR)
+                        .descriptor_count(1)
+                        .build(),
+                    WriteDescriptorSetKind::StorageImage { view: _, layout: _ } => {
+                        vk::DescriptorPoolSize::builder()
+                            .ty(vk::DescriptorType::STORAGE_IMAGE)
+                            .descriptor_count(1)
+                            .build()
+                    }
+                    WriteDescriptorSetKind::UniformBuffer { buffer: _ } => {
+                        vk::DescriptorPoolSize::builder()
+                            .ty(vk::DescriptorType::UNIFORM_BUFFER)
+                            .descriptor_count(1)
+                            .build()
+                    }
+                })
             }
-            WriteDescriptorSetKind::AccelerationStructure {
-                acceleration_structure: _,
-            } => vk::DescriptorPoolSize::builder()
-                .ty(vk::DescriptorType::ACCELERATION_STRUCTURE_KHR)
-                .descriptor_count(1)
-                .build(),
-            WriteDescriptorSetKind::StorageImage { view: _, layout: _ } => {
-                vk::DescriptorPoolSize::builder()
-                    .ty(vk::DescriptorType::STORAGE_IMAGE)
-                    .descriptor_count(1)
-                    .build()
-            }
-            WriteDescriptorSetKind::UniformBuffer { buffer: _ } => {
-                vk::DescriptorPoolSize::builder()
-                    .ty(vk::DescriptorType::UNIFORM_BUFFER)
-                    .descriptor_count(1)
-                    .build()
-            }
-        })
-    }
 
-    let pool = ctx.create_descriptor_pool(1, &pool_sizes).unwrap();
-    let descriptor = allocate_descriptor_set(&ctx.device, &pool, &set_layout).unwrap();
-    for w in writes.iter() {
-        update_descriptor_sets(ctx, &descriptor, &[w.clone()]);
+            let pool = ctx.create_descriptor_pool(1, &pool_sizes).unwrap();
+            let descriptor = allocate_descriptor_set(&ctx.device, &pool, &layouts[i]).unwrap();
+            for w in set.iter() {
+                update_descriptor_sets(ctx, &descriptor, &[w.clone()]);
+            }
+            sets.push(descriptor);
+        }
+        descriptors.push(Box::from(sets.as_slice()));
     }
     // update_descriptor_sets(ctx, &descriptor, writes.clone());
     // let view = ctx.storage_image.1.clone();
@@ -1176,9 +1036,172 @@ fn create_compute_pipeline(
     //     }
     // ]);
     ComputePipeline {
-        descriptor,
+        descriptors: Box::from(descriptors.as_slice()),
         handel,
         layout,
-        descriptor_layout: set_layout,
+        descriptor_layouts: Box::from(layouts.as_slice()),
     }
+}
+
+struct RasterPipeline {
+    pub pipeline: vk::Pipeline,
+    pub layout: vk::PipelineLayout,
+    pub descriptor_layout: vk::DescriptorSetLayout,
+    pub render_pass: vk::RenderPass,
+    pub descriptor: vk::DescriptorSet,
+}
+
+fn create_raster_pipeline(ctx: &Context, model: &Model) -> Result<RasterPipeline> {
+    let render_pass_create_info = vk::RenderPassCreateInfo::builder().attachments(&[
+        vk::AttachmentDescription::builder()
+            .samples(vk::SampleCountFlags::TYPE_1)
+            .final_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+            .format(vk::Format::R32G32B32A32_SFLOAT)
+            .initial_layout(vk::ImageLayout::UNDEFINED)
+            .load_op(vk::AttachmentLoadOp::DONT_CARE)
+            .store_op(vk::AttachmentStoreOp::STORE)
+            .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
+            .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
+            .build(),
+        vk::AttachmentDescription::builder()
+            .samples(vk::SampleCountFlags::TYPE_1)
+            .final_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+            .format(vk::Format::R32G32B32A32_SFLOAT)
+            .initial_layout(vk::ImageLayout::UNDEFINED)
+            .load_op(vk::AttachmentLoadOp::DONT_CARE)
+            .store_op(vk::AttachmentStoreOp::STORE)
+            .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
+            .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
+            .build(),
+        vk::AttachmentDescription::builder()
+            .samples(vk::SampleCountFlags::TYPE_1)
+            .final_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+            .format(vk::Format::R32G32B32A32_SFLOAT)
+            .initial_layout(vk::ImageLayout::UNDEFINED)
+            .load_op(vk::AttachmentLoadOp::DONT_CARE)
+            .store_op(vk::AttachmentStoreOp::STORE)
+            .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
+            .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
+            .build(),
+        vk::AttachmentDescription::builder()
+            .samples(vk::SampleCountFlags::TYPE_1)
+            .final_layout(vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL)
+            .format(vk::Format::D32_SFLOAT)
+            .initial_layout(vk::ImageLayout::UNDEFINED)
+            .load_op(vk::AttachmentLoadOp::DONT_CARE)
+            .store_op(vk::AttachmentStoreOp::STORE)
+            .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
+            .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
+            .build(),
+    ])
+    .dependencies(&[
+        vk::SubpassDependency::builder()
+            .dst_access_mask(vk::AccessFlags::)
+    ]);
+    let render_pass = unsafe {
+        ctx.device
+            .create_render_pass(&render_pass_create_info, None)?
+    };
+
+    let descriptor_bindings = [
+        vk::DescriptorSetLayoutBinding::builder()
+            .binding(0)
+            .descriptor_count(1)
+            .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+            .build(),
+        vk::DescriptorSetLayoutBinding::builder()
+            .binding(2)
+            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+            .descriptor_count(model.samplers.len() as u32)
+            .build(),
+    ];
+
+    let descriptor_layout = ctx.create_descriptor_set_layout(&descriptor_bindings, &[])?;
+
+    let layout_info = vk::PipelineLayoutCreateInfo::builder()
+        .set_layouts(&[descriptor_layout])
+        .push_constant_ranges(&[])
+        .build();
+    let layout = unsafe { ctx.device.create_pipeline_layout(&layout_info, None) }?;
+
+    let color_blend_attachments = vk::PipelineColorBlendAttachmentState::builder()
+        .blend_enable(false)
+        .color_write_mask(vk::ColorComponentFlags::RGBA)
+        .build();
+
+    let color_blend_state = vk::PipelineColorBlendStateCreateInfo::builder()
+        .attachments(&[color_blend_attachments])
+        .logic_op(vk::LogicOp::COPY)
+        .blend_constants([0.0, 0.0, 0.0, 0.0])
+        .build();
+
+    let depth_stencil_state = vk::PipelineDepthStencilStateCreateInfo::builder()
+        .depth_bounds_test_enable(false)
+        .stencil_test_enable(false)
+        .depth_compare_op(vk::CompareOp::LESS)
+        .depth_test_enable(true)
+        .depth_write_enable(true);
+
+    let dynamic_state = vk::PipelineDynamicStateCreateInfo::builder()
+        .dynamic_states(&[vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR]);
+
+    let input_assembly_state: vk::PipelineInputAssemblyStateCreateInfoBuilder<'_> =
+        vk::PipelineInputAssemblyStateCreateInfo::builder()
+            .primitive_restart_enable(false)
+            .topology(vk::PrimitiveTopology::TRIANGLE_LIST);
+
+    let vertex_input_state = vk::PipelineVertexInputStateCreateInfo::builder()
+        .vertex_attribute_descriptions(vertex_attribute_descriptions)
+        .vertex_binding_descriptions(vertex_binding_descriptions);
+
+    let rasterization_state = vk::PipelineRasterizationStateCreateInfo::builder()
+        .cull_mode(vk::CullModeFlags::BACK)
+        .depth_clamp_enable(false)
+        .polygon_mode(vk::PolygonMode::FILL)
+        .line_width(1.0)
+        .front_face(vk::FrontFace::COUNTER_CLOCKWISE)
+        .depth_bias_enable(true);
+
+    let multisample_state = vk::PipelineMultisampleStateCreateInfo::builder()
+        .sample_shading_enable(false)
+        .rasterization_samples(vk::SampleCountFlags::TYPE_1);
+
+    let entry_point_name: CString = CString::new("main").unwrap();
+    let stages = [
+        vk::PipelineShaderStageCreateInfo::builder()
+            .module(ctx.create_shader_module("./src/shaders/default.frag.spv".to_string()))
+            .stage(vk::ShaderStageFlags::FRAGMENT)
+            .name(&entry_point_name)
+            .build(),
+        vk::PipelineShaderStageCreateInfo::builder()
+            .module(ctx.create_shader_module("./src/shaders/default.vert.spv".to_string()))
+            .stage(vk::ShaderStageFlags::VERTEX)
+            .name(&entry_point_name)
+            .build(),
+    ];
+
+    let pipeline_create_info = vk::GraphicsPipelineCreateInfo::builder()
+        .color_blend_state(&color_blend_state)
+        .depth_stencil_state(&depth_stencil_state)
+        .dynamic_state(&dynamic_state)
+        .input_assembly_state(&input_assembly_state)
+        .vertex_input_state(&vertex_input_state)
+        .layout(layout)
+        .rasterization_state(&rasterization_state)
+        .multisample_state(&multisample_state)
+        .render_pass(render_pass)
+        .stages(&stages)
+        .build();
+    let pipeline = unsafe {
+        ctx.device
+            .create_graphics_pipelines(vk::PipelineCache::null(), &[pipeline_create_info], None)
+            .unwrap()
+    }[0];
+    Ok(RasterPipeline {
+        pipeline,
+        render_pass,
+        descriptor,
+        descriptor_layout,
+        layout,
+    })
 }

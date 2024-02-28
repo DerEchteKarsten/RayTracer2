@@ -11,6 +11,7 @@ struct Sample {
     vec3 albedo;
     vec3 randomDirection;
     float depth;
+    bool missed;    
 };
 
 struct Reservoir {
