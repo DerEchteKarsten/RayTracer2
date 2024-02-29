@@ -49,7 +49,6 @@ pub struct Context {
     pub storage_image: Vec<(Image, vk::ImageView)>,
     pub post_processing_image: Vec<(Image, vk::ImageView)>,
     pub last_frame: u64,
-    pub g_buffer: Vec<vk::Framebuffer>,
     _entry: Entry,
 }
 
@@ -228,7 +227,7 @@ impl Context {
                     )
                     .unwrap();
 
-                    let view = create_image_view(&device, &image, &swapchain.format);
+                    let view = create_image_view(&device, &image, swapchain.format);
                     (image, view)
                 })
                 .collect::<Vec<(Image, ImageView)>>()
@@ -256,35 +255,12 @@ impl Context {
                     )
                     .unwrap();
 
-                    let view = create_image_view(&device, &image, &swapchain.format);
+                    let view = create_image_view(&device, &image, swapchain.format);
                     (image, view)
                 })
                 .collect::<Vec<(Image, ImageView)>>()
         };
 
-        let g_buffer = {
-            (0..swapchain.images.len())
-                .map(|_| {
-                    let image = &Image::new_2d(
-                        &device,
-                        &mut allocator,
-                        vk::ImageUsageFlags::COLOR_ATTACHMENT,
-                        MemoryLocation::GpuOnly,
-                        vk::Format::R32G32B32A32_SFLOAT,
-                        window_size.height,
-                        window_size.height,
-                    )
-                    .unwrap();
-                    let attachments =
-                        create_image_view(&device, image, vk::Format::R32G32B32A32_SFLOAT);
-
-                    let create_info = vk::FramebufferCreateInfo::builder()
-                        .attachment_count(4)
-                        .attachments(&[]);
-                    unsafe { device.create_framebuffer(create_info, None) }.unwrap()
-                })
-                .collect::<Vec<vk::Framebuffer>>()
-        };
         Ok(Self {
             last_swapchain_image_index: 0,
             post_processing_image,
@@ -306,7 +282,6 @@ impl Context {
             swapchain,
             cmd_buffs,
             storage_image,
-            g_buffer,
             _entry: entry,
         })
     }
@@ -317,6 +292,17 @@ impl Context {
         image: &Image,
         queue: &vk::Queue,
     ) -> Result<()> {
+        Self::transition_image_layout_to(device, command_pool, image, queue, vk::ImageLayout::GENERAL, vk::ImageAspectFlags::COLOR)
+    }
+
+    pub fn transition_image_layout_to(
+        device: &Device,
+        command_pool: &vk::CommandPool,
+        image: &Image,
+        queue: &vk::Queue,
+        layout: vk::ImageLayout,
+        aspect: vk::ImageAspectFlags,
+    ) -> Result<()> {
         let cmd = allocate_command_buffer(&device, &command_pool, vk::CommandBufferLevel::PRIMARY)?;
 
         let barrier = vk::ImageMemoryBarrier2::builder()
@@ -325,10 +311,10 @@ impl Context {
             .old_layout(vk::ImageLayout::UNDEFINED)
             .dst_stage_mask(vk::PipelineStageFlags2::BOTTOM_OF_PIPE)
             .dst_access_mask(vk::AccessFlags2::NONE)
-            .new_layout(vk::ImageLayout::GENERAL)
+            .new_layout(layout)
             .image(image.inner)
             .subresource_range(vk::ImageSubresourceRange {
-                aspect_mask: vk::ImageAspectFlags::COLOR,
+                aspect_mask: aspect,
                 base_mip_level: 0,
                 level_count: 1,
                 base_array_layer: 0,
@@ -1138,7 +1124,7 @@ impl Image {
             ctx.pipeline_image_barriers(cmd, &[texture_barrier_end]);
         })?;
 
-        let image_view = create_image_view(&ctx.device, &texture_image, &format);
+        let image_view = create_image_view(&ctx.device, &texture_image, format);
         Ok((
             Self {
                 allocation: texture_image.allocation,
@@ -1635,7 +1621,7 @@ impl Swapchain {
 
         let views = images
             .iter()
-            .map(|i| create_image_view(device, &i, &format.format))
+            .map(|i| create_image_view(device, &i, format.format))
             .collect::<Vec<_>>();
 
         let images_and_views = images
@@ -1655,10 +1641,14 @@ impl Swapchain {
 }
 
 pub fn create_image_view(device: &Device, image: &Image, format: vk::Format) -> vk::ImageView {
+    create_image_view_aspekt(device, image, format, vk::ImageAspectFlags::COLOR)
+}
+
+pub fn create_image_view_aspekt(device: &Device, image: &Image, format: vk::Format, aspect: vk::ImageAspectFlags) -> vk::ImageView {
     let image_view_info = vk::ImageViewCreateInfo::builder()
         .image(image.inner)
         .view_type(vk::ImageViewType::TYPE_2D)
-        .format(*format)
+        .format(format)
         .components(vk::ComponentMapping {
             r: vk::ComponentSwizzle::IDENTITY,
             g: vk::ComponentSwizzle::IDENTITY,
@@ -1676,6 +1666,11 @@ pub fn create_image_view(device: &Device, image: &Image, format: vk::Format) -> 
         );
     unsafe { device.create_image_view(&image_view_info, None) }.unwrap()
 }
+
+pub fn create_depth_view(device: &Device, image: &Image, format: vk::Format) -> vk::ImageView {
+    create_image_view_aspekt(device, image, format, vk::ImageAspectFlags::DEPTH)
+}
+
 
 pub fn new_command_pool(
     device: &Device,

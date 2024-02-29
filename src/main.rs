@@ -7,6 +7,7 @@ mod gltf;
 // mod pipeline;
 
 mod model;
+use gltf::Vertex;
 use log::debug;
 use model::*;
 
@@ -189,6 +190,60 @@ fn main() {
         .copy_data_to_buffer(std::slice::from_ref(&uniform_data))
         .unwrap();
 
+    let g_buffer_pipeline = create_raster_pipeline(&mut ctx, &model, &uniform_buffer).unwrap();
+
+    let g_buffer = {
+        (0..ctx.swapchain.images.len())
+            .map(|_| {
+                let images = (0..4)
+                    .map(|i| {
+                        Image::new_2d(
+                            &ctx.device,
+                            &mut ctx.allocator,
+                            if i == 4 {
+                                vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT
+                            } else {
+                                vk::ImageUsageFlags::COLOR_ATTACHMENT
+                            },
+                            MemoryLocation::GpuOnly,
+                            if i == 0 {
+                                vk::Format::R32G32B32A32_SFLOAT
+                            } else if i == 4 {
+                                vk::Format::D32_SFLOAT
+                            } else {
+                                vk::Format::R32G32B32_SFLOAT
+                            },
+                            window_size.height,
+                            window_size.height,
+                        )
+                        .unwrap()
+                    })
+                    .collect::<Vec<_>>();
+                
+                Context::transition_image_layout_to(&ctx.device, &ctx.command_pool, &images[4], &ctx.graphics_queue, vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL, vk::ImageAspectFlags::DEPTH).unwrap();
+                Context::transition_image_layout_to(&ctx.device, &ctx.command_pool, &images[1], &ctx.graphics_queue, vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL, vk::ImageAspectFlags::COLOR).unwrap();
+                Context::transition_image_layout_to(&ctx.device, &ctx.command_pool, &images[2], &ctx.graphics_queue, vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL, vk::ImageAspectFlags::COLOR).unwrap();
+                Context::transition_image_layout_to(&ctx.device, &ctx.command_pool, &images[3], &ctx.graphics_queue, vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL, vk::ImageAspectFlags::COLOR).unwrap();
+
+                let attachments = [
+                    create_image_view(&ctx.device, &images[0], vk::Format::R32G32B32A32_SFLOAT),
+                    create_image_view(&ctx.device, &images[1], vk::Format::R32G32B32_SFLOAT),
+                    create_image_view(&ctx.device, &images[2], vk::Format::R32G32B32_SFLOAT),
+                    create_depth_view(&ctx.device, &images[3], vk::Format::D32_SFLOAT),
+                ];
+
+                let create_info = vk::FramebufferCreateInfo::builder()
+                    .attachment_count(4)
+                    .attachments(&attachments)
+                    .height(window_size.height)
+                    .width(window_size.width)
+                    .layers(1)
+                    .render_pass(g_buffer_pipeline.render_pass);
+                unsafe { ctx.device.create_framebuffer(&create_info, None) }.unwrap()
+            })
+            .collect::<Vec<vk::Framebuffer>>()
+    };
+
     let tlas = {
         #[rustfmt::skip]
         let transform_matrix = vk::TransformMatrixKHR { matrix: [
@@ -274,6 +329,7 @@ fn main() {
     ];
     let pipeline = create_ray_tracing_pipeline(&ctx, &model, &shaders_create_info).unwrap();
     let shader_binding_table = ctx.create_shader_binding_table(&pipeline).unwrap();
+
     let (descriptor_pool, static_set, dynamic_set) = {
         create_raytracing_descriptor_sets(
             &mut ctx,
@@ -351,6 +407,81 @@ fn main() {
                             size_of::<u32>(),
                         );
                         let moved_c = &[if moved == true { 1 as u8 } else { 0 as u8 }, 0, 0, 0];
+
+                        ctx.device.cmd_bind_pipeline(
+                            *cmd,
+                            vk::PipelineBindPoint::GRAPHICS,
+                            g_buffer_pipeline.pipeline,
+                        );
+
+                        ctx.device.cmd_bind_descriptor_sets(
+                            *cmd,
+                            vk::PipelineBindPoint::GRAPHICS,
+                            g_buffer_pipeline.layout,
+                            0,
+                            &[g_buffer_pipeline.descriptor],
+                            &[],
+                        );
+
+                        ctx.device.cmd_bind_index_buffer(
+                            *cmd,
+                            model.index_buffer.inner,
+                            0,
+                            vk::IndexType::UINT32,
+                        );
+                        ctx.device.cmd_bind_vertex_buffers(
+                            *cmd,
+                            0,
+                            &[model.vertex_buffer.inner],
+                            &[0],
+                        );
+
+                        let view_port = vk::Viewport::builder()
+                            .height(window_size.height as f32)
+                            .width(window_size.width as f32)
+                            .max_depth(1.0)
+                            .min_depth(0.0)
+                            .x(0 as f32)
+                            .y(0 as f32)
+                            .build();
+                        ctx.device.cmd_set_viewport(*cmd, 0, &[view_port]);
+
+                        let scissor = vk::Rect2D::builder()
+                            .extent(vk::Extent2D {
+                                height: 0,
+                                width: 0,
+                            })
+                            .offset(vk::Offset2D { x: 0, y: 0 });
+
+                        let begin_info = vk::RenderPassBeginInfo::builder()
+                            .clear_values(&[
+                                vk::ClearValue {
+                                    color: vk::ClearColorValue {
+                                        float32: [0.0, 0.0, 0.0, 1.0],
+                                    },
+                                },
+                                vk::ClearValue {
+                                    depth_stencil: vk::ClearDepthStencilValue {
+                                        depth: 1.0,
+                                        stencil: 0,
+                                    },
+                                },
+                            ])
+                            .render_pass(g_buffer_pipeline.render_pass)
+                            .framebuffer(g_buffer[i as usize])
+                            .render_area(vk::Rect2D {
+                                extent: vk::Extent2D {
+                                    width: window_size.width,
+                                    height: window_size.height,
+                                },
+                                offset: vk::Offset2D { x: 0, y: 0 },
+                            });
+
+                        ctx.device.cmd_begin_render_pass(
+                            *cmd,
+                            &begin_info,
+                            vk::SubpassContents::INLINE,
+                        );
 
                         ctx.device.cmd_push_constants(
                             *cmd,
@@ -1051,8 +1182,12 @@ struct RasterPipeline {
     pub descriptor: vk::DescriptorSet,
 }
 
-fn create_raster_pipeline(ctx: &Context, model: &Model) -> Result<RasterPipeline> {
-    let render_pass_create_info = vk::RenderPassCreateInfo::builder().attachments(&[
+fn create_raster_pipeline(
+    ctx: &mut Context,
+    model: &Model,
+    uniform_buffer: &Buffer,
+) -> Result<RasterPipeline> {
+    let attachments = [
         vk::AttachmentDescription::builder()
             .samples(vk::SampleCountFlags::TYPE_1)
             .final_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
@@ -1093,11 +1228,38 @@ fn create_raster_pipeline(ctx: &Context, model: &Model) -> Result<RasterPipeline
             .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
             .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
             .build(),
-    ])
-    .dependencies(&[
-        vk::SubpassDependency::builder()
-            .dst_access_mask(vk::AccessFlags::)
-    ]);
+    ];
+
+    let subpasses = [vk::SubpassDescription::builder()
+        .color_attachments(&[
+            vk::AttachmentReference::builder().attachment(0).layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL).build(),
+            vk::AttachmentReference::builder().attachment(1).layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL).build(),
+            vk::AttachmentReference::builder().attachment(2).layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL).build(),
+        ]).depth_stencil_attachment(
+            &vk::AttachmentReference::builder().attachment(3).layout(vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL).build(),
+        )
+        .build()];
+
+    let dependencys = [vk::SubpassDependency::builder()
+        .src_subpass(vk::SUBPASS_EXTERNAL)
+        .dst_subpass(0)
+        .dst_stage_mask(
+            vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
+                | vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS,
+        )
+        .src_stage_mask(
+            vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
+                | vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS,
+        )
+        .src_access_mask(vk::AccessFlags::empty())
+        .dst_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE)
+        .build()];
+
+    let render_pass_create_info = vk::RenderPassCreateInfo::builder()
+        .attachments(&attachments)
+        .dependencies(&dependencys)
+        .subpasses(&subpasses);
+
     let render_pass = unsafe {
         ctx.device
             .create_render_pass(&render_pass_create_info, None)?
@@ -1113,6 +1275,11 @@ fn create_raster_pipeline(ctx: &Context, model: &Model) -> Result<RasterPipeline
             .binding(2)
             .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
             .descriptor_count(model.samplers.len() as u32)
+            .build(),
+        vk::DescriptorSetLayoutBinding::builder()
+            .binding(3)
+            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+            .descriptor_count(1)
             .build(),
     ];
 
@@ -1150,9 +1317,42 @@ fn create_raster_pipeline(ctx: &Context, model: &Model) -> Result<RasterPipeline
             .primitive_restart_enable(false)
             .topology(vk::PrimitiveTopology::TRIANGLE_LIST);
 
+    let vertex_attribute_descriptions = [
+        vk::VertexInputAttributeDescription::builder()
+            .binding(0)
+            .format(vk::Format::R32G32B32A32_SFLOAT)
+            .location(0)
+            .offset(0)
+            .build(),
+        vk::VertexInputAttributeDescription::builder()
+            .binding(1)
+            .format(vk::Format::R32G32B32_SFLOAT)
+            .location(1)
+            .offset(16)
+            .build(),
+        vk::VertexInputAttributeDescription::builder()
+            .binding(2)
+            .format(vk::Format::R32G32B32_SFLOAT)
+            .location(2)
+            .offset(32)
+            .build(),
+        vk::VertexInputAttributeDescription::builder()
+            .binding(3)
+            .format(vk::Format::R32G32_SFLOAT)
+            .location(3)
+            .offset(48)
+            .build(),
+    ];
+
+    let vertex_binding_descriptions = [vk::VertexInputBindingDescription::builder()
+        .binding(0)
+        .input_rate(vk::VertexInputRate::VERTEX)
+        .stride(size_of::<Vertex>() as u32)
+        .build()];
+
     let vertex_input_state = vk::PipelineVertexInputStateCreateInfo::builder()
-        .vertex_attribute_descriptions(vertex_attribute_descriptions)
-        .vertex_binding_descriptions(vertex_binding_descriptions);
+        .vertex_attribute_descriptions(&vertex_attribute_descriptions)
+        .vertex_binding_descriptions(&vertex_binding_descriptions);
 
     let rasterization_state = vk::PipelineRasterizationStateCreateInfo::builder()
         .cull_mode(vk::CullModeFlags::BACK)
@@ -1197,6 +1397,64 @@ fn create_raster_pipeline(ctx: &Context, model: &Model) -> Result<RasterPipeline
             .create_graphics_pipelines(vk::PipelineCache::null(), &[pipeline_create_info], None)
             .unwrap()
     }[0];
+
+    let pool_sizes = [
+        vk::DescriptorPoolSize::builder()
+            .descriptor_count(1)
+            .ty(vk::DescriptorType::UNIFORM_BUFFER)
+            .build(),
+        vk::DescriptorPoolSize::builder()
+            .descriptor_count(1)
+            .ty(vk::DescriptorType::STORAGE_BUFFER)
+            .build(),
+        vk::DescriptorPoolSize::builder()
+            .descriptor_count(model.samplers.len() as u32)
+            .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+            .build(),
+    ];
+
+    let descriptor_pool = ctx.create_descriptor_pool(1, &pool_sizes)?;
+    let descriptor = allocate_descriptor_set(&ctx.device, &descriptor_pool, &descriptor_layout)?;
+
+    let mut writes = vec![
+        WriteDescriptorSet {
+            binding: 0,
+            kind: WriteDescriptorSetKind::UniformBuffer {
+                buffer: uniform_buffer.inner,
+            },
+        },
+        WriteDescriptorSet {
+            binding: 1,
+            kind: WriteDescriptorSetKind::StorageBuffer {
+                buffer: model.geometry_info_buffer.inner,
+            },
+        },
+    ];
+
+    for (i, (image_index, sampler_index)) in model.textures.iter().enumerate() {
+        let view = &model.views[*image_index];
+        let sampler = &model.samplers[*sampler_index];
+        let img_info = vk::DescriptorImageInfo::builder()
+            .image_view(*view)
+            .sampler(*sampler)
+            .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
+
+        unsafe {
+            ctx.device.update_descriptor_sets(
+                &[vk::WriteDescriptorSet::builder()
+                    .dst_array_element(i as u32)
+                    .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                    .dst_binding(7)
+                    .dst_set(descriptor)
+                    .image_info(from_ref(&img_info))
+                    .build()],
+                &[],
+            )
+        };
+    }
+
+    update_descriptor_sets(ctx, &descriptor, &writes);
+
     Ok(RasterPipeline {
         pipeline,
         render_pass,
