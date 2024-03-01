@@ -292,7 +292,14 @@ impl Context {
         image: &Image,
         queue: &vk::Queue,
     ) -> Result<()> {
-        Self::transition_image_layout_to(device, command_pool, image, queue, vk::ImageLayout::GENERAL, vk::ImageAspectFlags::COLOR)
+        Self::transition_image_layout_to(
+            device,
+            command_pool,
+            image,
+            queue,
+            vk::ImageLayout::GENERAL,
+            vk::ImageAspectFlags::COLOR,
+        )
     }
 
     pub fn transition_image_layout_to(
@@ -688,7 +695,7 @@ impl Context {
         match unsafe {
             self.swapchain
                 .ash_swapchain
-                .queue_present(self.graphics_queue, &present_info)
+                .queue_present(self.present_queue, &present_info)
         } {
             Err(err) => {
                 if err == vk::Result::ERROR_OUT_OF_DATE_KHR || err == vk::Result::SUBOPTIMAL_KHR {
@@ -1162,7 +1169,7 @@ pub fn alinged_size(size: u32, alignment: u32) -> u32 {
     (size + (alignment - 1)) & !(alignment - 1)
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct QueueFamily {
     index: u32,
     handel: vk::QueueFamilyProperties,
@@ -1191,7 +1198,7 @@ impl QueueFamily {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct DeviceFeatures {
     pub ray_tracing_pipeline: bool,
     pub acceleration_structure: bool,
@@ -1212,7 +1219,7 @@ impl DeviceFeatures {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct PhysicalDevice {
     pub handel: vk::PhysicalDevice,
     pub name: String,
@@ -1644,7 +1651,12 @@ pub fn create_image_view(device: &Device, image: &Image, format: vk::Format) -> 
     create_image_view_aspekt(device, image, format, vk::ImageAspectFlags::COLOR)
 }
 
-pub fn create_image_view_aspekt(device: &Device, image: &Image, format: vk::Format, aspect: vk::ImageAspectFlags) -> vk::ImageView {
+pub fn create_image_view_aspekt(
+    device: &Device,
+    image: &Image,
+    format: vk::Format,
+    aspect: vk::ImageAspectFlags,
+) -> vk::ImageView {
     let image_view_info = vk::ImageViewCreateInfo::builder()
         .image(image.inner)
         .view_type(vk::ImageViewType::TYPE_2D)
@@ -1657,7 +1669,7 @@ pub fn create_image_view_aspekt(device: &Device, image: &Image, format: vk::Form
         })
         .subresource_range(
             vk::ImageSubresourceRange::builder()
-                .aspect_mask(vk::ImageAspectFlags::COLOR)
+                .aspect_mask(aspect)
                 .base_mip_level(0)
                 .level_count(image.mip_levls)
                 .base_array_layer(0)
@@ -1670,7 +1682,6 @@ pub fn create_image_view_aspekt(device: &Device, image: &Image, format: vk::Form
 pub fn create_depth_view(device: &Device, image: &Image, format: vk::Format) -> vk::ImageView {
     create_image_view_aspekt(device, image, format, vk::ImageAspectFlags::DEPTH)
 }
-
 
 pub fn new_command_pool(
     device: &Device,
@@ -2000,6 +2011,7 @@ fn select_suitable_physical_device(
 ) -> Result<(PhysicalDevice, QueueFamily, QueueFamily)> {
     let mut graphics = None;
     let mut present = None;
+
 
     let device = devices
         .iter()

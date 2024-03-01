@@ -39,7 +39,7 @@ pub struct Mesh {
 }
 
 #[repr(C)]
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct Vertex {
     pub position: Vec4,
     pub normal: Vec4,

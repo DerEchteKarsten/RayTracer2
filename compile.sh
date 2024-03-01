@@ -13,4 +13,4 @@ compile $base/src/shaders/rayint.rint
 compile $base/src/shaders/post_processing.comp
 compile $base/src/shaders/reuse.comp
 compile $base/src/shaders/default.frag
-compile $base/src/shaders/reuse.vert
+compile $base/src/shaders/default.vert

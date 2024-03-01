@@ -15,6 +15,7 @@ dependencies = [
  "gpu-allocator",
  "image",
  "log",
+ "memoffset 0.9.0",
  "once_cell",
  "rand",
  "raw-window-handle",

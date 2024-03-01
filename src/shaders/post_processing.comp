@@ -2,7 +2,7 @@
 #extension GL_EXT_debug_printf : enable
 #extension GL_GOOGLE_include_directive : enable
 
-layout (binding = 0, set=0, rgba32f) uniform readonly image2D inputImage;
+layout (binding = 0, set=0, rgba32f) uniform image2D inputImage;
 layout (binding = 1, set=0, rgba8) uniform image2D outputImage;
 
 #define AGX_LOOK 0
@@ -91,15 +91,11 @@ const float gamma = 2.2;
 
 void main() {
     vec3 col = imageLoad(inputImage, ivec2(gl_GlobalInvocationID.xy)).rgb;
-    // col = ACESToneMapping(col);
-    // vec3 gray = vec3(dot(vec3(0.2126,0.7152,0.0722), col));
-	//    vec3 desaturated = vec3(mix(col, gray, 0.41));
- 
-    col = agx(col);
-    col = agxLook(col);
-    col = agxEotf(col);
-    
-    vec3 gamma_cor = pow(col, vec3(1.0 / gamma));
-    //imageStore(outputImage, ivec2(gl_GlobalInvocationID.xy), vec4(clamp(gamma_cor, 0.0, 1.0), 1.0));
-    imageStore(outputImage, ivec2(gl_GlobalInvocationID.xy), vec4(gamma_cor, 1.0));
+
+    // col = agx(col);
+    // col = agxLook(col);
+    // col = agxEotf(col);
+    // vec3 gamma_cor = pow(col, vec3(1.0 / gamma));
+
+    imageStore(outputImage, ivec2(gl_GlobalInvocationID.xy), vec4(col, 1.0));
 }
