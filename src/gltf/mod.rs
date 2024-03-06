@@ -105,7 +105,6 @@ pub fn load_file<P: AsRef<Path>>(path: P) -> Result<Model> {
                 let index_count = index_reader.len() as _;
 
                 index_reader.for_each(|i| indices.push(i));
-
                 // material
                 let material = primitive.material().into();
 

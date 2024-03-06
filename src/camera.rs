@@ -23,6 +23,12 @@ pub struct UniformData {
     pub view_inverse: Mat4,
     pub proj_inverse: Mat4,
 }
+#[derive(Clone, Copy)]
+pub struct GUniformData {
+    pub view: Mat4,
+    pub proj: Mat4,
+    pub model: Mat4,
+}
 
 impl Camera {
     pub fn new(

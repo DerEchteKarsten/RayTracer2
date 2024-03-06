@@ -46,8 +46,6 @@ pub struct Context {
     pub frame: u64,
     pub last_swapchain_image_index: u32,
     pub cmd_buffs: Vec<vk::CommandBuffer>,
-    pub storage_image: Vec<(Image, vk::ImageView)>,
-    pub post_processing_image: Vec<(Image, vk::ImageView)>,
     pub last_frame: u64,
     _entry: Entry,
 }
@@ -205,65 +203,8 @@ impl Context {
             )?);
         }
 
-        let storage_image = {
-            (0..swapchain.images.len())
-                .map(|_| {
-                    let image = Image::new_2d(
-                        &device,
-                        &mut allocator,
-                        vk::ImageUsageFlags::TRANSFER_SRC | vk::ImageUsageFlags::STORAGE,
-                        MemoryLocation::GpuOnly,
-                        swapchain.format,
-                        swapchain.extent.width,
-                        swapchain.extent.height,
-                    )
-                    .unwrap();
-
-                    Self::transition_image_layout_to_general(
-                        &device,
-                        &command_pool,
-                        &image,
-                        &graphics_queue,
-                    )
-                    .unwrap();
-
-                    let view = create_image_view(&device, &image, swapchain.format);
-                    (image, view)
-                })
-                .collect::<Vec<(Image, ImageView)>>()
-        };
-
-        let post_processing_image = {
-            (0..swapchain.images.len())
-                .map(|_| {
-                    let image = Image::new_2d(
-                        &device,
-                        &mut allocator,
-                        vk::ImageUsageFlags::TRANSFER_SRC | vk::ImageUsageFlags::STORAGE,
-                        MemoryLocation::GpuOnly,
-                        swapchain.format,
-                        swapchain.extent.width,
-                        swapchain.extent.height,
-                    )
-                    .unwrap();
-
-                    Self::transition_image_layout_to_general(
-                        &device,
-                        &command_pool,
-                        &image,
-                        &graphics_queue,
-                    )
-                    .unwrap();
-
-                    let view = create_image_view(&device, &image, swapchain.format);
-                    (image, view)
-                })
-                .collect::<Vec<(Image, ImageView)>>()
-        };
-
         Ok(Self {
             last_swapchain_image_index: 0,
-            post_processing_image,
             last_frame: 0,
             frame: 0,
             allocator,
@@ -281,7 +222,6 @@ impl Context {
             frames_in_flight,
             swapchain,
             cmd_buffs,
-            storage_image,
             _entry: entry,
         })
     }
@@ -585,77 +525,6 @@ impl Context {
 
         let frame = &self.frames_in_flight[frame_index as usize];
         let cmd = &self.cmd_buffs[image_index as usize];
-        self.last_swapchain_image_index = image_index;
-        let swapchain_image = &self.swapchain.images[image_index as usize];
-        let post_proccesing_image = &self.post_processing_image[image_index as usize];
-        self.pipeline_image_barriers(
-            &cmd,
-            &[
-                ImageBarrier {
-                    image: &swapchain_image.0,
-                    old_layout: vk::ImageLayout::UNDEFINED,
-                    new_layout: vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                    src_access_mask: vk::AccessFlags2::NONE,
-                    dst_access_mask: vk::AccessFlags2::TRANSFER_WRITE,
-                    src_stage_mask: vk::PipelineStageFlags2::NONE,
-                    dst_stage_mask: vk::PipelineStageFlags2::TRANSFER,
-                },
-                ImageBarrier {
-                    image: &post_proccesing_image.0,
-                    old_layout: vk::ImageLayout::GENERAL,
-                    new_layout: vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
-                    src_access_mask: vk::AccessFlags2::SHADER_WRITE,
-                    dst_access_mask: vk::AccessFlags2::TRANSFER_READ,
-                    src_stage_mask: vk::PipelineStageFlags2::RAY_TRACING_SHADER_KHR,
-                    dst_stage_mask: vk::PipelineStageFlags2::TRANSFER,
-                },
-            ],
-        );
-
-        self.copy_image(
-            &cmd,
-            &post_proccesing_image.0,
-            vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
-            &swapchain_image.0,
-            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-        );
-
-        self.pipeline_image_barriers(
-            &cmd,
-            &[
-                ImageBarrier {
-                    image: &swapchain_image.0,
-                    old_layout: vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                    new_layout: vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
-                    src_access_mask: vk::AccessFlags2::TRANSFER_WRITE,
-                    dst_access_mask: vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
-                    src_stage_mask: vk::PipelineStageFlags2::TRANSFER,
-                    dst_stage_mask: vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
-                },
-                ImageBarrier {
-                    image: &post_proccesing_image.0,
-                    old_layout: vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
-                    new_layout: vk::ImageLayout::GENERAL,
-                    src_access_mask: vk::AccessFlags2::TRANSFER_READ,
-                    dst_access_mask: vk::AccessFlags2::NONE,
-                    src_stage_mask: vk::PipelineStageFlags2::TRANSFER,
-                    dst_stage_mask: vk::PipelineStageFlags2::ALL_COMMANDS,
-                },
-            ],
-        );
-
-        self.pipeline_image_barriers(
-            cmd,
-            &[ImageBarrier {
-                image: &swapchain_image.0,
-                old_layout: vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
-                new_layout: vk::ImageLayout::PRESENT_SRC_KHR,
-                src_access_mask: vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
-                dst_access_mask: vk::AccessFlags2::COLOR_ATTACHMENT_READ,
-                src_stage_mask: vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
-                dst_stage_mask: vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
-            }],
-        );
         unsafe { self.device.end_command_buffer(*cmd) }.unwrap();
         let submit_info = vk::SubmitInfo2::builder()
             .wait_semaphore_infos(from_ref(
@@ -2011,7 +1880,6 @@ fn select_suitable_physical_device(
 ) -> Result<(PhysicalDevice, QueueFamily, QueueFamily)> {
     let mut graphics = None;
     let mut present = None;
-
 
     let device = devices
         .iter()

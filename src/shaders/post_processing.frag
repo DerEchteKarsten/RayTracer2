@@ -1,9 +1,6 @@
-#version 460
-#extension GL_EXT_debug_printf : enable
-#extension GL_GOOGLE_include_directive : enable
+layout(location = 0) out vec4 outColor;
 
-layout (binding = 0, set=0, rgba32f) uniform image2D inputImage;
-layout (binding = 1, set=0, rgba8) uniform image2D outputImage;
+layout (binding = 0, set=0, rgba32f) uniform readonly image2D inputImage;
 
 #define AGX_LOOK 0
 
@@ -90,12 +87,11 @@ vec3 agxLook(vec3 val) {
 const float gamma = 2.2;
 
 void main() {
-    vec3 col = imageLoad(inputImage, ivec2(gl_GlobalInvocationID.xy)).rgb;
+    vec3 col = imageLoad(inputImage, ivec2(gl_FragCoord)).rgb;
 
-    // col = agx(col);
-    // col = agxLook(col);
-    // col = agxEotf(col);
-    // vec3 gamma_cor = pow(col, vec3(1.0 / gamma));
-
-    imageStore(outputImage, ivec2(gl_GlobalInvocationID.xy), vec4(col, 1.0));
+    col = agx(col);
+    col = agxLook(col);
+    col = agxEotf(col);
+    vec3 gamma_cor = pow(col, vec3(1.0 / gamma));
+    outColor = vec4(col, 1.0);
 }

@@ -18,14 +18,14 @@ use std::slice::from_ref;
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
 pub struct GeometryInfo {
-    transform: Mat4,
-    base_color: [f32; 4],
-    base_color_texture_index: i32,
-    metallic_factor: f32,
-    index_offset: u32,
-    vertex_offset: u32,
-    emission: [f32; 4],
-    roughness: f32,
+    pub transform: Mat4,
+    pub base_color: [f32; 4],
+    pub base_color_texture_index: i32,
+    pub metallic_factor: f32,
+    pub index_offset: u32,
+    pub vertex_offset: u32,
+    pub emission: [f32; 4],
+    pub roughness: f32,
 }
 
 pub struct Model {
@@ -34,11 +34,13 @@ pub struct Model {
     pub views: Vec<vk::ImageView>,
     pub samplers: Vec<vk::Sampler>,
     pub textures: Vec<(usize, usize)>,
-    // pub blas: AccelerationStructure,
+    pub blas: AccelerationStructure,
     pub vertex_buffer: Buffer,
     pub index_buffer: Buffer,
     pub transform_buffer: Buffer,
     pub geometry_info_buffer: Buffer,
+    pub geometry_infos: Vec<GeometryInfo>,
+    pub index_counts: Vec<u32>,
 }
 
 pub const IDENTITY_MATRIX: vk::TransformMatrixKHR = vk::TransformMatrixKHR {
@@ -63,19 +65,19 @@ pub fn mat4_to_vk_transform(mat: Mat4) -> vk::TransformMatrixKHR {
 }
 
 impl Model {
-    // pub fn instance(&self, transform: Mat4) -> vk::AccelerationStructureInstanceKHR {
-    //     vk::AccelerationStructureInstanceKHR {
-    //         transform: mat4_to_vk_transform(transform),
-    //         instance_custom_index_and_mask: Packed24_8::new(0, 0xFF),
-    //         instance_shader_binding_table_record_offset_and_flags: Packed24_8::new(
-    //             0,
-    //             vk::GeometryInstanceFlagsKHR::TRIANGLE_CULL_DISABLE_NV.as_raw() as _,
-    //         ),
-    //         acceleration_structure_reference: vk::AccelerationStructureReferenceKHR {
-    //             device_handle: self.blas.device_address,
-    //         },
-    //     }
-    // }
+    pub fn instance(&self, transform: Mat4) -> vk::AccelerationStructureInstanceKHR {
+        vk::AccelerationStructureInstanceKHR {
+            transform: mat4_to_vk_transform(transform),
+            instance_custom_index_and_mask: Packed24_8::new(0, 0xFF),
+            instance_shader_binding_table_record_offset_and_flags: Packed24_8::new(
+                0,
+                vk::GeometryInstanceFlagsKHR::TRIANGLE_CULL_DISABLE_NV.as_raw() as _,
+            ),
+            acceleration_structure_reference: vk::AccelerationStructureReferenceKHR {
+                device_handle: self.blas.device_address,
+            },
+        }
+    }
 
     // pub fn from_vertices(
     //     ctx: &mut Context,
@@ -188,26 +190,6 @@ impl Model {
     pub fn from_gltf(ctx: &mut Context, model: gltf::Model) -> Result<Self> {
         let vertices = model.vertices.as_slice();
         let indices = model.indices.as_slice();
-
-        log::debug!("{}", indices.len() / 3);
-
-        let vertex_buffer = ctx.create_gpu_only_buffer_from_data(
-            vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
-                | vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR
-                | vk::BufferUsageFlags::STORAGE_BUFFER
-                | vk::BufferUsageFlags::VERTEX_BUFFER,
-            vertices,
-            Some("Vertex Buffer"),
-        )?;
-
-        let index_buffer = ctx.create_gpu_only_buffer_from_data(
-            vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
-                | vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR
-                | vk::BufferUsageFlags::STORAGE_BUFFER
-                | vk::BufferUsageFlags::INDEX_BUFFER,
-            indices,
-            Some("Index Buffer"),
-        )?;
 
         let transforms = model
             .nodes
@@ -373,6 +355,24 @@ impl Model {
             textures.push((0, 0));
         }
 
+        let vertex_buffer = ctx.create_gpu_only_buffer_from_data(
+            vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
+                | vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR
+                | vk::BufferUsageFlags::STORAGE_BUFFER
+                | vk::BufferUsageFlags::VERTEX_BUFFER,
+            vertices,
+            Some("Vertex Buffer"),
+        )?;
+
+        let index_buffer = ctx.create_gpu_only_buffer_from_data(
+            vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
+                | vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR
+                | vk::BufferUsageFlags::STORAGE_BUFFER
+                | vk::BufferUsageFlags::INDEX_BUFFER,
+            indices,
+            Some("Index Buffer"),
+        )?;
+
         let vertex_buffer_addr = vertex_buffer.get_device_address(&ctx.device);
         let index_buffer_addr = index_buffer.get_device_address(&ctx.device);
         let transform_buffer_addr = transform_buffer.get_device_address(&ctx.device);
@@ -397,6 +397,7 @@ impl Model {
         let mut as_geometries = vec![];
         let mut as_ranges = vec![];
         let mut max_primitive_counts = vec![];
+        let mut index_counts = vec![];
 
         for (node_index, node) in model.nodes.iter().enumerate() {
             let mesh = node.mesh;
@@ -422,6 +423,8 @@ impl Model {
                 index_offset: mesh.index_offset,
                 roughness: mesh.material.roughness,
             });
+
+            index_counts.push(mesh.index_count);
 
             as_geometries.push(
                 vk::AccelerationStructureGeometryKHR::builder()
@@ -449,14 +452,13 @@ impl Model {
             geometry_infos.as_slice(),
             Some("Geometry Buffer"),
         )?;
-
-        // let blas = create_acceleration_structure(
-        //     ctx,
-        //     vk::AccelerationStructureTypeKHR::BOTTOM_LEVEL,
-        //     &as_geometries,
-        //     &as_ranges,
-        //     &max_primitive_counts,
-        // )?;
+        let blas = create_acceleration_structure(
+            ctx,
+            vk::AccelerationStructureTypeKHR::BOTTOM_LEVEL,
+            &as_geometries,
+            &as_ranges,
+            &max_primitive_counts,
+        )?;
 
         Ok(Self {
             index_count: indices.len() as u32,
@@ -464,7 +466,9 @@ impl Model {
             samplers,
             textures,
             views,
-            // blas,
+            geometry_infos,
+            blas,
+            index_counts,
             vertex_buffer,
             index_buffer,
             transform_buffer,
