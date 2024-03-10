@@ -11,7 +11,7 @@ use crate::{
 };
 use anyhow::Result;
 use ash::vk::{self, Packed24_8};
-use glam::{Mat4, Vec3};
+use glam::{vec3, Mat4, Vec3, Vec4};
 use gpu_allocator::MemoryLocation;
 use std::slice::from_ref;
 
@@ -190,7 +190,11 @@ impl Model {
     pub fn from_gltf(ctx: &mut Context, model: gltf::Model) -> Result<Self> {
         let vertices = model.vertices.as_slice();
         let indices = model.indices.as_slice();
-
+        for v in vertices {
+            if v.color != Vec4::new(1.0, 1.0, 1.0, 1.0) {
+                println!("{:?}", v);
+            }
+        }
         let transforms = model
             .nodes
             .iter()

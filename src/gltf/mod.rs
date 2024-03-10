@@ -88,6 +88,7 @@ pub fn load_file<P: AsRef<Path>>(path: P) -> Result<Model> {
                 vertex_reader.enumerate().for_each(|(index, p)| {
                     let position = vec4(p[0], p[1], p[2], 0.0);
                     let normal = normals[index];
+
                     let color = colors.as_ref().map_or(Vec4::ONE, |colors| colors[index]);
                     let uvs = uvs.as_ref().map_or(Vec2::ZERO, |uvs| uvs[index]);
 

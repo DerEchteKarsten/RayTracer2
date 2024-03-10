@@ -12,22 +12,19 @@ layout( push_constant ) uniform Index {
 	uint index;
 } g;
 
-layout(location = 0) in vec4 inPosition;
-layout(location = 1) in vec4 inNormal;
-layout(location = 2) in vec4 inColor;
-layout(location = 3) in vec2 inUV;
+layout(location = 0) in vec4 inNormal;
+layout(location = 1) in vec4 inColor;
+layout(location = 2) in vec2 inUV;
 
 layout(location = 0) out vec4 outColor;
-layout(location = 1) out vec4 outPosition;
-layout(location = 2) out vec4 outNormal;
 
 void main() {
     GeometryInfo geometryInfo = geometryInfos.g[g.index];
+    vec4 Color;
     if (geometryInfo.baseColorTextureIndex > -1) {
-        outColor = texture(textures[geometryInfo.baseColorTextureIndex], inUV) * inColor;
+        Color = texture(textures[geometryInfo.baseColorTextureIndex], inUV) * geometryInfo.baseColor * inColor;
     } else {
-        outColor = inColor;
+        Color = inColor * geometryInfo.baseColor;
     }
-    outPosition = vec4(inPosition.xyz, 1.0);
-    outNormal = vec4(inNormal.xyz, 1.0);
+    outColor = pack(Color, normalize(geometryInfo.transform * inNormal), geometryInfo.roughness, geometryInfo.metallicFactor, geometryInfo.emission);
 }

@@ -21,15 +21,13 @@ layout(location = 1) in vec4 inNormal;
 layout(location = 2) in vec4 inColor;
 layout(location = 3) in vec2 inUV;
 
-layout(location = 0) out vec4 outPosition;
-layout(location = 1) out vec4 outNormal;
-layout(location = 2) out vec4 outColor;
-layout(location = 3) out vec2 outUV;
+layout(location = 0) out vec4 outNormal;
+layout(location = 1) out vec4 outColor;
+layout(location = 2) out vec2 outUV;
 
 
 void main() {
     gl_Position = cam.proj * cam.view * cam.model * geometryInfos.g[g.index].transform * vec4(inPosition.xyz, 1.0);
-    outPosition = cam.model * vec4(inPosition.xyz, 1.0);
     outColor = inColor;
     outNormal = inNormal;
     outUV = inUV;

@@ -1,3 +1,4 @@
+#extension GL_AMD_gpu_shader_half_float : enable
 
 struct Vertex {
   vec3 pos;
@@ -33,6 +34,12 @@ const float tmax = 10000.0;
 
 
 #define PI 3.1415926
+
+// float RandomValue(inout uint state) {
+// 	float res = fract(sin(dot(vec2(state, state), vec2(12.9898, 78.233))) * 43758.5453);
+// 	state = uint(res);
+// 	return res / 4294967295.0;
+// }
 
 uint NextRandom(inout uint state) {
 	state = state * 747796405 + 2891336453;
@@ -91,4 +98,30 @@ vec3 modifyDirectionWithRoughness( const vec3 normal, const vec3 n, const float 
     
     vec3 ret = normalize(rr);
     return dot(ret,normal) > 0. ? ret : n;
+}
+
+float roughness_to_perceptual_roughness(float r) {
+    return sqrt(r);
+}
+
+vec4 pack(in vec4 albedo, in vec4 normal, in float roughness, in float metalness, in vec4 emissive) {
+    vec4 res = 0.0.xxxx;
+    res.x = uintBitsToFloat(packUnorm4x8(albedo));
+    res.y = uintBitsToFloat(packUnorm4x8(normal));
+
+    vec4 roughness_metalness = vec4(roughness_to_perceptual_roughness(roughness), metalness, 0, 0);
+    res.z = uintBitsToFloat(packUnorm4x8(roughness_metalness));
+    res.w = uintBitsToFloat(packUnorm4x8(emissive));
+
+   return res;
+}
+
+
+void unpack(in vec4 g_buffer, out vec4 albedo, out vec4 normal, out float roughness, out float metalness, out vec4 emissive) {
+    albedo = unpackUnorm4x8(floatBitsToUint(g_buffer.x));
+	normal = unpackUnorm4x8(floatBitsToUint(g_buffer.y));
+    vec4 roughness_metalness = unpackUnorm4x8(floatBitsToUint(g_buffer.z));
+	roughness = roughness_metalness.x;
+	metalness = roughness_metalness.y;
+    emissive = unpackUnorm4x8(floatBitsToUint(g_buffer.w));
 }
