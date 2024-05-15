@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use glam::{vec3, Mat3, Mat4, Quat, Vec3};
+use glam::{vec3, Mat3, Mat4, Quat, Vec3, Vec4};
 use winit::event::{DeviceEvent, ElementState, Event, KeyboardInput, MouseButton, WindowEvent};
 
 const MOVE_SPEED: f32 = 20.0;
@@ -22,12 +22,7 @@ pub struct Camera {
 pub struct UniformData {
     pub view_inverse: Mat4,
     pub proj_inverse: Mat4,
-}
-#[derive(Clone, Copy)]
-pub struct GUniformData {
-    pub view: Mat4,
-    pub proj: Mat4,
-    pub model: Mat4,
+    pub input: Vec4,
 }
 
 impl Camera {
@@ -152,6 +147,7 @@ pub fn perspective(fovy: f32, aspect: f32, near: f32, far: f32) -> Mat4 {
 
 #[derive(Debug, Clone, Copy)]
 pub struct Controls {
+    pub left_mouse: bool,
     pub go_forward: bool,
     pub go_backward: bool,
     pub strafe_right: bool,
@@ -172,6 +168,7 @@ impl Default for Controls {
             go_up: false,
             go_down: false,
             look_around: false,
+            left_mouse: false,
             cursor_delta: [0.0; 2],
         }
     }
@@ -229,6 +226,11 @@ impl Controls {
                             window
                                 .set_cursor_grab(winit::window::CursorGrabMode::None)
                                 .unwrap_or(());
+                        }
+                        if *button == MouseButton::Left && *state == ElementState::Pressed {
+                            new_state.left_mouse = true;
+                        } else if *button == MouseButton::Left && *state == ElementState::Released {
+                            new_state.left_mouse = false;
                         }
                     }
                     _ => {}

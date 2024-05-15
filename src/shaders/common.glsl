@@ -1,5 +1,6 @@
 #extension GL_AMD_gpu_shader_half_float : enable
 
+
 struct Vertex {
   vec3 pos;
   vec3 normal;

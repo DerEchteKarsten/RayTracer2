@@ -1164,16 +1164,19 @@ impl PhysicalDevice {
         let mut ray_tracing_feature = vk::PhysicalDeviceRayTracingPipelineFeaturesKHR::default();
         let mut acceleration_struct_feature =
             vk::PhysicalDeviceAccelerationStructureFeaturesKHR::default();
+        let features = vk::PhysicalDeviceFeatures::builder().shader_int64(true).build();
         let mut features12 = vk::PhysicalDeviceVulkan12Features::builder()
             .runtime_descriptor_array(true)
-            .buffer_device_address(true);
+            .buffer_device_address(true)
+            .shader_buffer_int64_atomics(true);
         let mut features13 = vk::PhysicalDeviceVulkan13Features::default();
-        let mut features = vk::PhysicalDeviceFeatures2::builder()
+        let mut features2 = vk::PhysicalDeviceFeatures2::builder()
+            .features(features)
             .push_next(&mut ray_tracing_feature)
             .push_next(&mut acceleration_struct_feature)
             .push_next(&mut features12)
             .push_next(&mut features13);
-        unsafe { instance.get_physical_device_features2(physical_device, &mut features) };
+        unsafe { instance.get_physical_device_features2(physical_device, &mut features2) };
         let supported_device_features = DeviceFeatures {
             ray_tracing_pipeline: ray_tracing_feature.ray_tracing_pipeline == vk::TRUE,
             acceleration_structure: acceleration_struct_feature.acceleration_structure == vk::TRUE,
@@ -1182,7 +1185,6 @@ impl PhysicalDevice {
             dynamic_rendering: features13.dynamic_rendering == vk::TRUE,
             synchronization2: features13.synchronization2 == vk::TRUE,
         };
-
         Ok(Self {
             handel: physical_device,
             name,
@@ -1822,8 +1824,10 @@ fn new_device(
         .synchronization2(true)
         .build();
 
+    let features = vk::PhysicalDeviceFeatures::builder().shader_int64(true).build();
+
     let mut features = vk::PhysicalDeviceFeatures2::builder()
-        .features(vk::PhysicalDeviceFeatures::default())
+        .features(features)
         .push_next(&mut acceleration_struct_feature)
         .push_next(&mut ray_tracing_feature)
         .push_next(&mut vulkan_12_features)
