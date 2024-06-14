@@ -1,6 +1,6 @@
 use std::{
     borrow::BorrowMut,
-    ffi::{c_char, CStr},
+    ffi::{c_char, CStr, CString},
     mem::{align_of, size_of, size_of_val},
     num,
     ops::Sub,
@@ -26,275 +26,48 @@ use simple_logger::SimpleLogger;
 use std::slice::from_ref;
 use winit::dpi::PhysicalSize;
 
+use crate::{module_from_bytes, rendergraph::Renderer, RayTracingShaderCreateInfo, RayTracingShaderGroup};
+
 pub const FRAMES_IN_FLIGHT: u32 = 2;
 
-pub struct Context {
-    pub allocator: Allocator,
-    pub command_pool: vk::CommandPool,
-    pub ray_tracing: RayTracingContext,
-    pub graphics_queue: vk::Queue,
-    pub present_queue: vk::Queue,
-    pub device: ash::Device,
-    pub present_queue_family: QueueFamily,
-    pub graphics_queue_family: QueueFamily,
-    pub physical_device: PhysicalDevice,
-    pub ash_surface: khr::Surface,
-    pub vk_surface: vk::SurfaceKHR,
-    pub instance: Instance,
-    pub frames_in_flight: Vec<Frame>,
-    pub swapchain: Swapchain,
-    pub frame: u64,
-    pub last_swapchain_image_index: u32,
-    pub cmd_buffs: Vec<vk::CommandBuffer>,
-    pub last_frame: u64,
-    _entry: Entry,
-}
-
-impl Context {
-    pub fn new(
-        window_handle: RawWindowHandle,
-        display_handle: RawDisplayHandle,
-        app_name: &str,
-        required_extensions: &[&str],
-        required_device_features: DeviceFeatures,
-        window_size: PhysicalSize<u32>,
-    ) -> Result<Self> {
-        SimpleLogger::default().env().init().unwrap();
-        let entry = unsafe { Entry::load()? };
-
-        let app_info = vk::ApplicationInfo::builder().api_version(vk::API_VERSION_1_3);
-
-        let layer_names = unsafe {
-            [CStr::from_bytes_with_nul_unchecked(
-                b"VK_LAYER_KHRONOS_validation\0",
-            )]
-        };
-
-        let layers_names_raw: Vec<*const c_char> = layer_names
-            .iter()
-            .map(|raw_name| raw_name.as_ptr())
-            .collect();
-
-        let mut instance_extensions = ash_window::enumerate_required_extensions(display_handle)
-            .unwrap()
-            .to_vec();
-
-        //#[cfg(debug_assertions)]
-        instance_extensions.push(DebugUtils::name().as_ptr());
-
-        let mut validation_features = vk::ValidationFeaturesEXT::builder()
-            .enabled_validation_features(&[vk::ValidationFeatureEnableEXT::DEBUG_PRINTF])
-            .build();
-
-        let mut instance_info = vk::InstanceCreateInfo::builder()
-            .application_info(&app_info)
-            .enabled_extension_names(&instance_extensions);
-
-        //#[cfg(debug_assertions)]
-        {
-            instance_info = instance_info
-                .enabled_layer_names(&layers_names_raw)
-                .push_next(&mut validation_features);
-        }
-
-        let mut instance = unsafe { entry.create_instance(&instance_info, None)? };
-
-        //#[cfg(debug_assertions)]
-        {
-            let debug_info = vk::DebugUtilsMessengerCreateInfoEXT::builder()
-                .message_severity(
-                    vk::DebugUtilsMessageSeverityFlagsEXT::ERROR
-                        | vk::DebugUtilsMessageSeverityFlagsEXT::WARNING
-                        | vk::DebugUtilsMessageSeverityFlagsEXT::INFO
-                        | vk::DebugUtilsMessageSeverityFlagsEXT::VERBOSE,
-                )
-                .message_type(
-                    vk::DebugUtilsMessageTypeFlagsEXT::GENERAL
-                        | vk::DebugUtilsMessageTypeFlagsEXT::VALIDATION
-                        | vk::DebugUtilsMessageTypeFlagsEXT::PERFORMANCE
-                        | vk::DebugUtilsMessageTypeFlagsEXT::DEVICE_ADDRESS_BINDING,
-                )
-                .pfn_user_callback(Some(vulkan_debug_callback));
-            let debug_utils_loader = DebugUtils::new(&entry, &instance);
-            let debug_call_back = unsafe {
-                debug_utils_loader
-                    .create_debug_utils_messenger(&debug_info, None)
-                    .unwrap()
-            };
-        }
-        let vk_surface = unsafe {
-            ash_window::create_surface(&entry, &instance, display_handle, window_handle, None)
-        }
-        .unwrap();
-        let ash_surface = khr::Surface::new(&entry, &instance);
-
-        let physical_devices =
-            unsafe { enumerate_physical_devices(&instance, &ash_surface, &vk_surface)? };
-        let (physical_device, graphics_queue_family, present_queue_family) =
-            select_suitable_physical_device(
-                physical_devices.as_slice(),
-                required_extensions,
-                &required_device_features,
-            )?;
-
-        let queue_families = [&graphics_queue_family, &present_queue_family];
-
-        let device = new_device(
-            &instance,
-            &physical_device,
-            &queue_families,
-            required_extensions,
-        )?;
-
-        let graphics_queue = get_queue(&device, &graphics_queue_family, 0);
-        let present_queue = get_queue(&device, &present_queue_family, 0);
-
-        let ray_tracing = {
-            let ray_tracing = RayTracingContext::new(&instance, &physical_device.handel, &device);
-            ray_tracing
-        };
-
-        let command_pool = new_command_pool(
-            &device,
-            &graphics_queue_family,
-            Some(
-                vk::CommandPoolCreateFlags::TRANSIENT
-                    | vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER,
-            ),
-        )?;
-
-        let mut allocator = Allocator::new(&AllocatorCreateDesc {
-            instance: instance.clone(),
-            device: device.clone(),
-            physical_device: physical_device.handel,
-            debug_settings: AllocatorDebugSettings {
-                log_allocations: false,
-                log_frees: false,
-                log_leaks_on_shutdown: false,
-                log_memory_information: false,
-                ..Default::default()
-            },
-            buffer_device_address: true,
-        })?;
-
-        let swapchain = Swapchain::new(
-            &instance,
-            &device,
-            vk_surface,
-            &ash_surface,
-            &physical_device,
-            window_size.width,
-            window_size.height,
-            &present_queue_family,
-            &graphics_queue_family,
-        )?;
-
-        let mut frames_in_flight = Vec::with_capacity(FRAMES_IN_FLIGHT as usize);
-        for _ in 0..FRAMES_IN_FLIGHT {
-            frames_in_flight.push(Frame::new(&device)?);
-        }
-        let mut cmd_buffs = Vec::with_capacity(swapchain.images.len());
-
-        for _ in &swapchain.images {
-            cmd_buffs.push(allocate_command_buffer(
-                &device,
-                &command_pool,
-                vk::CommandBufferLevel::PRIMARY,
-            )?);
-        }
-
-        Ok(Self {
-            last_swapchain_image_index: 0,
-            last_frame: 0,
-            frame: 0,
-            allocator,
-            command_pool,
-            ray_tracing,
-            present_queue,
-            graphics_queue,
-            device,
-            present_queue_family,
-            graphics_queue_family,
-            physical_device,
-            vk_surface,
-            ash_surface,
-            instance,
-            frames_in_flight,
-            swapchain,
-            cmd_buffs,
-            _entry: entry,
-        })
-    }
-
-    pub fn transition_image_layout_to_general(
-        device: &Device,
-        command_pool: &vk::CommandPool,
-        image: &Image,
-        queue: &vk::Queue,
-    ) -> Result<()> {
-        Self::transition_image_layout_to(
-            device,
-            command_pool,
-            image,
-            queue,
-            vk::ImageLayout::GENERAL,
-            vk::ImageAspectFlags::COLOR,
+impl Renderer {
+    pub fn create_aligned_buffer(
+        &mut self,
+        usage: vk::BufferUsageFlags,
+        memory_location: MemoryLocation,
+        size: vk::DeviceSize,
+        name: Option<&str>,
+        alignment: u64,
+    ) -> Result<Buffer> {
+        Buffer::new(
+            &self.device,
+            &mut self.allocator,
+            usage,
+            memory_location,
+            size,
+            name,
+            Some(alignment),
         )
     }
 
-    pub fn transition_image_layout_to(
-        device: &Device,
-        command_pool: &vk::CommandPool,
-        image: &Image,
-        queue: &vk::Queue,
-        layout: vk::ImageLayout,
-        aspect: vk::ImageAspectFlags,
-    ) -> Result<()> {
-        let cmd = allocate_command_buffer(&device, &command_pool, vk::CommandBufferLevel::PRIMARY)?;
-
-        let barrier = vk::ImageMemoryBarrier2::builder()
-            .src_stage_mask(vk::PipelineStageFlags2::TOP_OF_PIPE)
-            .src_access_mask(vk::AccessFlags2::NONE)
-            .old_layout(vk::ImageLayout::UNDEFINED)
-            .dst_stage_mask(vk::PipelineStageFlags2::BOTTOM_OF_PIPE)
-            .dst_access_mask(vk::AccessFlags2::NONE)
-            .new_layout(layout)
-            .image(image.inner)
-            .subresource_range(vk::ImageSubresourceRange {
-                aspect_mask: aspect,
-                base_mip_level: 0,
-                level_count: 1,
-                base_array_layer: 0,
-                layer_count: 1,
-            })
-            .build();
-        unsafe {
-            device.begin_command_buffer(
-                cmd,
-                &vk::CommandBufferBeginInfo::builder()
-                    .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT)
-                    .build(),
-            )?
-        };
-        unsafe {
-            device.cmd_pipeline_barrier2(
-                cmd,
-                &vk::DependencyInfo::builder()
-                    .image_memory_barriers(&[barrier])
-                    .build(),
-            )
-        };
-        unsafe { device.end_command_buffer(cmd)? };
-
-        let fence = Fence {
-            handel: unsafe { device.create_fence(&vk::FenceCreateInfo::builder().build(), None)? },
-        };
-        queue_submit(&device, &queue, &cmd, None, None, &fence)?;
-        fence.wait(&device, None)?;
-
-        free_command_buffer(&command_pool, &device, cmd)?;
-        Ok(())
+    pub fn create_buffer(
+        &mut self,
+        usage: vk::BufferUsageFlags,
+        memory_location: MemoryLocation,
+        size: vk::DeviceSize,
+        name: Option<&str>,
+    ) -> Result<Buffer> {
+        Buffer::new(
+            &self.device,
+            &mut self.allocator,
+            usage,
+            memory_location,
+            size,
+            name,
+            None,
+        )
     }
+
 
     pub fn copy_buffer_to_image(
         &self,
@@ -321,6 +94,10 @@ impl Context {
                 std::slice::from_ref(&region),
             );
         };
+    }
+
+    pub fn get_buffer_address(&self, buffer: &Buffer) -> u64 {
+        buffer.get_device_address(&self.device)
     }
 
     pub fn create_gpu_only_buffer_from_data_with_size<T: Copy>(
@@ -354,6 +131,7 @@ impl Context {
 
     pub fn create_gpu_only_buffer_from_data<T: Copy>(
         &mut self,
+        device: &Device,
         usage: vk::BufferUsageFlags,
         data: &[T],
         name: Option<&str>,
@@ -389,7 +167,7 @@ impl Context {
         let fence = self.create_fence(None)?;
         queue_submit(
             &self.device,
-            &self.graphics_queue,
+            &self.graphics_queue.handel,
             &command_buffer,
             None,
             None,
@@ -459,14 +237,7 @@ impl Context {
         create_descriptor_pool(&self.device, max_sets, pool_sizes)
     }
 
-    pub fn create_shader_binding_table(
-        &mut self,
-        pipeline: &RayTracingPipeline,
-    ) -> Result<ShaderBindingTable> {
-        ShaderBindingTable::new(self, pipeline)
-    }
-
-    pub fn create_shader_module(&self, code_path: String) -> vk::ShaderModule {
+    pub fn create_shader_module(&self, code_path: &str) -> vk::ShaderModule {
         let mut code = std::fs::File::open(code_path).unwrap();
         let decoded_code = ash::util::read_spv(&mut code).unwrap();
         let create_info = vk::ShaderModuleCreateInfo::builder().code(&decoded_code);
@@ -477,7 +248,7 @@ impl Context {
     pub fn create_shader_stage(
         &self,
         stage: vk::ShaderStageFlags,
-        path: String,
+        path: &str,
     ) -> (vk::PipelineShaderStageCreateInfo, vk::ShaderModule) {
         let module = self.create_shader_module(path);
         (
@@ -488,94 +259,6 @@ impl Context {
                 .build(),
             module,
         )
-    }
-
-    pub fn render<F>(&mut self, func: F) -> Result<u64>
-    where
-        F: FnOnce(&mut Context, u32),
-    {
-        let before = Instant::now();
-
-        let (image_index, frame_index) = {
-            let frame_index: u64 = (self.frame + 1) % FRAMES_IN_FLIGHT as u64;
-            let frame = &self.frames_in_flight[frame_index as usize];
-            frame.fence.wait(&self.device, None)?;
-            frame.fence.reset(&self.device)?;
-
-            let image_index = match unsafe {
-                self.swapchain.ash_swapchain.acquire_next_image(
-                    self.swapchain.vk_swapchain,
-                    u64::MAX,
-                    frame.image_available,
-                    vk::Fence::null(),
-                )
-            } {
-                Err(err) => {
-                    if err == vk::Result::ERROR_OUT_OF_DATE_KHR || err == vk::Result::SUBOPTIMAL_KHR
-                    {
-                        debug!("Suboptimal");
-                    }
-                    0
-                }
-                Ok(v) => v.0,
-            };
-            let cmd = &self.cmd_buffs[image_index as usize];
-            begin_command_buffer(cmd, &self.device, None)?;
-            (image_index, frame_index)
-        };
-        func(self, image_index);
-
-        let frame = &self.frames_in_flight[frame_index as usize];
-        let cmd = &self.cmd_buffs[image_index as usize];
-        unsafe { self.device.end_command_buffer(*cmd) }.unwrap();
-        let submit_info = vk::SubmitInfo2::builder()
-            .wait_semaphore_infos(from_ref(
-                &vk::SemaphoreSubmitInfo::builder()
-                    .stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT_KHR)
-                    .semaphore(frame.image_available)
-                    .build(),
-            ))
-            .command_buffer_infos(from_ref(
-                &vk::CommandBufferSubmitInfo::builder()
-                    .command_buffer(*cmd)
-                    .build(),
-            ))
-            .signal_semaphore_infos(from_ref(
-                &vk::SemaphoreSubmitInfo::builder()
-                    .stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS_KHR)
-                    .semaphore(frame.render_finished)
-                    .build(),
-            ))
-            .build();
-
-        unsafe {
-            self.device
-                .queue_submit2(self.graphics_queue, &[submit_info], frame.fence.handel)?;
-        };
-
-        let rf = &[frame.render_finished];
-        let sc = &[self.swapchain.vk_swapchain];
-        let image_indices = vec![image_index];
-        let present_info = vk::PresentInfoKHR::builder()
-            .wait_semaphores(rf)
-            .swapchains(sc)
-            .image_indices(&image_indices);
-
-        match unsafe {
-            self.swapchain
-                .ash_swapchain
-                .queue_present(self.present_queue, &present_info)
-        } {
-            Err(err) => {
-                if err == vk::Result::ERROR_OUT_OF_DATE_KHR || err == vk::Result::SUBOPTIMAL_KHR {
-                    debug!("Suboptimal");
-                }
-            }
-            Ok(v) => {}
-        };
-        debug!("{:?}", Instant::now().duration_since(before));
-
-        Ok(frame_index)
     }
 
     pub fn pipeline_image_barriers(&self, cmd: &vk::CommandBuffer, barriers: &[ImageBarrier]) {
@@ -644,15 +327,246 @@ impl Context {
             )
         };
     }
+}
 
-    pub fn destroy(&self) {
-        unsafe {
-            self.device.device_wait_idle().unwrap();
-            self.device.destroy_device(None);
-            self.instance.destroy_instance(None);
-            todo!();
-        }
+pub struct Target {
+    pub ash_surface_ext: khr::Surface,
+    pub vk_surface: vk::SurfaceKHR,
+    pub swapchain: Swapchain,
+    pub frames_in_flight: Vec<Frame>,
+    pub frame_in_flight: usize,
+}
+
+impl Target {
+    pub fn current_frame<'a>(self) -> & 'a Frame {
+        &self.frames_in_flight[self.frame_in_flight]
     }
+}
+
+pub fn transition_image_layout_to_general(
+    device: &Device,
+    command_pool: &vk::CommandPool,
+    image: &Image,
+    queue: &vk::Queue,
+) -> Result<()> {
+    transition_image_layout_to(
+        device,
+        command_pool,
+        image,
+        queue,
+        vk::ImageLayout::GENERAL,
+        vk::ImageAspectFlags::COLOR,
+    )
+}
+
+pub fn transition_image_layout_to(
+    device: &Device,
+    command_pool: &vk::CommandPool,
+    image: &Image,
+    queue: &vk::Queue,
+    layout: vk::ImageLayout,
+    aspect: vk::ImageAspectFlags,
+) -> Result<()> {
+    let cmd = allocate_command_buffer(&device, &command_pool, vk::CommandBufferLevel::PRIMARY)?;
+
+    let barrier = vk::ImageMemoryBarrier2::builder()
+        .src_stage_mask(vk::PipelineStageFlags2::TOP_OF_PIPE)
+        .src_access_mask(vk::AccessFlags2::NONE)
+        .old_layout(vk::ImageLayout::UNDEFINED)
+        .dst_stage_mask(vk::PipelineStageFlags2::BOTTOM_OF_PIPE)
+        .dst_access_mask(vk::AccessFlags2::NONE)
+        .new_layout(layout)
+        .image(image.inner)
+        .subresource_range(vk::ImageSubresourceRange {
+            aspect_mask: aspect,
+            base_mip_level: 0,
+            level_count: 1,
+            base_array_layer: 0,
+            layer_count: 1,
+        })
+        .build();
+    unsafe {
+        device.begin_command_buffer(
+            cmd,
+            &vk::CommandBufferBeginInfo::builder()
+                .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT)
+                .build(),
+        )?
+    };
+    unsafe {
+        device.cmd_pipeline_barrier2(
+            cmd,
+            &vk::DependencyInfo::builder()
+                .image_memory_barriers(&[barrier])
+                .build(),
+        )
+    };
+    unsafe { device.end_command_buffer(cmd)? };
+
+    let fence = Fence {
+        handel: unsafe { device.create_fence(&vk::FenceCreateInfo::builder().build(), None)? },
+    };
+    queue_submit(&device, &queue, &cmd, None, None, &fence)?;
+    fence.wait(&device, None)?;
+
+    free_command_buffer(&command_pool, &device, cmd)?;
+    Ok(())
+}
+
+pub fn copy_buffer_to_image(
+    device: &Device,
+    cmd: &vk::CommandBuffer,
+    src: &Buffer,
+    dst: &Image,
+    layout: vk::ImageLayout,
+) {
+    let region = vk::BufferImageCopy::builder()
+        .image_subresource(vk::ImageSubresourceLayers {
+            aspect_mask: vk::ImageAspectFlags::COLOR,
+            mip_level: 0,
+            base_array_layer: 0,
+            layer_count: 1,
+        })
+        .image_extent(dst.extent);
+
+    unsafe {
+        device.cmd_copy_buffer_to_image(
+            *cmd,
+            src.inner,
+            dst.inner,
+            layout,
+            std::slice::from_ref(&region),
+        );
+    };
+}
+
+pub fn create_fence(device: &Device, flags: Option<vk::FenceCreateFlags>) -> Result<Fence> {
+    Fence::new(&device, flags)
+}
+
+pub fn create_image_view(device: &Device, image: &Image) -> Result<vk::ImageView> {
+    let view_info = vk::ImageViewCreateInfo::builder()
+        .image(image.inner)
+        .view_type(vk::ImageViewType::TYPE_2D)
+        .format(image.format)
+        .subresource_range(vk::ImageSubresourceRange {
+            aspect_mask: vk::ImageAspectFlags::COLOR,
+            base_mip_level: 0,
+            level_count: 1,
+            base_array_layer: 0,
+            layer_count: 1,
+        });
+
+    let res = unsafe { device.create_image_view(&view_info, None)? };
+
+    Ok(res)
+}
+
+pub fn create_shader_module(device: &Device, code_path: String) -> vk::ShaderModule {
+    let mut code = std::fs::File::open(code_path).unwrap();
+    let decoded_code = ash::util::read_spv(&mut code).unwrap();
+    let create_info = vk::ShaderModuleCreateInfo::builder().code(&decoded_code);
+
+    unsafe { device.create_shader_module(&create_info, None) }.unwrap()
+}
+
+pub fn create_compute_pipeline(renderer: &Renderer, layout: &vk::PipelineLayout, code_path: &str) -> Result<vk::Pipeline> {
+    let entry_point_name: CString = CString::new("main").unwrap();
+    let stage = vk::PipelineShaderStageCreateInfo::builder()
+        .stage(vk::ShaderStageFlags::COMPUTE)
+        .module(renderer.create_shader_module(code_path))
+        .name(&entry_point_name)
+        .build();
+    
+    let create_info = vk::ComputePipelineCreateInfo::builder()
+        .layout(*layout)
+        .stage(stage)
+        .build();
+    let pipelines = unsafe { renderer.device.create_compute_pipelines(vk::PipelineCache::null(), &[create_info], None) }.unwrap();
+    Ok(pipelines[0])
+}
+
+pub fn create_shader_stage(
+    device: &Device,
+    stage: vk::ShaderStageFlags,
+    path: String,
+) -> (vk::PipelineShaderStageCreateInfo, vk::ShaderModule) {
+    let module = create_shader_module(device, path);
+    (
+        vk::PipelineShaderStageCreateInfo::builder()
+            .stage(stage)
+            .module(module)
+            .name(CStr::from_bytes_with_nul("main\0".as_bytes()).unwrap())
+            .build(),
+        module,
+    )
+}
+
+pub fn pipeline_image_barriers(device: &Device, cmd: &vk::CommandBuffer, barriers: &[ImageBarrier]) {
+    let barriers = barriers
+        .iter()
+        .map(|b| {
+            vk::ImageMemoryBarrier2::builder()
+                .src_stage_mask(b.src_stage_mask)
+                .src_access_mask(b.src_access_mask)
+                .old_layout(b.old_layout)
+                .dst_stage_mask(b.dst_stage_mask)
+                .dst_access_mask(b.dst_access_mask)
+                .new_layout(b.new_layout)
+                .image(b.image.inner)
+                .subresource_range(vk::ImageSubresourceRange {
+                    aspect_mask: vk::ImageAspectFlags::COLOR,
+                    base_mip_level: 0,
+                    level_count: b.image.mip_levls,
+                    base_array_layer: 0,
+                    layer_count: 1,
+                })
+                .build()
+        })
+        .collect::<Vec<_>>();
+
+    let dependency_info = vk::DependencyInfo::builder().image_memory_barriers(&barriers);
+
+    unsafe { device.cmd_pipeline_barrier2(*cmd, &dependency_info) };
+}
+
+pub fn copy_image(
+    device: &Device,
+    cmd: &vk::CommandBuffer,
+    src_image: &Image,
+    src_layout: vk::ImageLayout,
+    dst_image: &Image,
+    dst_layout: vk::ImageLayout,
+) {
+    let region = vk::ImageCopy::builder()
+        .src_subresource(vk::ImageSubresourceLayers {
+            aspect_mask: vk::ImageAspectFlags::COLOR,
+            base_array_layer: 0,
+            mip_level: 0,
+            layer_count: 1,
+        })
+        .dst_subresource(vk::ImageSubresourceLayers {
+            aspect_mask: vk::ImageAspectFlags::COLOR,
+            base_array_layer: 0,
+            mip_level: 0,
+            layer_count: 1,
+        })
+        .extent(vk::Extent3D {
+            width: src_image.extent.width,
+            height: src_image.extent.height,
+            depth: 1,
+        });
+
+    unsafe {
+        device.cmd_copy_image(
+            *cmd,
+            src_image.inner,
+            src_layout,
+            dst_image.inner,
+            dst_layout,
+            std::slice::from_ref(&region),
+        )
+    };
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -718,135 +632,6 @@ pub fn allocate_descriptor_set(
         .into_iter()
         .next()
         .unwrap())
-}
-
-pub fn update_descriptor_sets(
-    ctx: &mut Context,
-    set: &vk::DescriptorSet,
-    writes: &[WriteDescriptorSet],
-) {
-    use WriteDescriptorSetKind::*;
-
-    let mut descriptor_writes = vec![];
-    let mut image_infos = vec![];
-
-    for w in writes {
-        match w.kind {
-            StorageImage { view, layout } => {
-                let img_info = vk::DescriptorImageInfo::builder()
-                    .image_view(view.clone())
-                    .image_layout(layout)
-                    .build();
-
-                descriptor_writes.push(
-                    vk::WriteDescriptorSet::builder()
-                        .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
-                        .dst_binding(w.binding)
-                        .dst_set(set.clone())
-                        .image_info(&[img_info])
-                        .build(),
-                );
-                image_infos.push(img_info);
-            }
-            AccelerationStructure {
-                acceleration_structure,
-            } => {
-                let mut write_set_as = vk::WriteDescriptorSetAccelerationStructureKHR::builder()
-                    .acceleration_structures(std::slice::from_ref(&acceleration_structure));
-
-                let mut write = vk::WriteDescriptorSet::builder()
-                    .descriptor_type(vk::DescriptorType::ACCELERATION_STRUCTURE_KHR)
-                    .dst_binding(w.binding)
-                    .dst_set(set.clone())
-                    .push_next(write_set_as.borrow_mut())
-                    .build();
-                write.descriptor_count = 1;
-
-                descriptor_writes.push(write);
-            }
-            UniformBuffer { buffer } => {
-                let buffer_info = vk::DescriptorBufferInfo::builder()
-                    .buffer(buffer)
-                    .range(vk::WHOLE_SIZE)
-                    .build();
-
-                descriptor_writes.push(
-                    vk::WriteDescriptorSet::builder()
-                        .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
-                        .dst_binding(w.binding)
-                        .dst_set(set.clone())
-                        .buffer_info(&[buffer_info])
-                        .build(),
-                );
-            }
-            CombinedImageSampler {
-                view,
-                sampler,
-                layout,
-            } => {
-                let img_info = vk::DescriptorImageInfo::builder()
-                    .image_view(view.clone())
-                    .sampler(sampler.clone())
-                    .image_layout(layout)
-                    .build();
-
-                descriptor_writes.push(
-                    vk::WriteDescriptorSet::builder()
-                        .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                        .dst_binding(w.binding)
-                        .dst_set(set.clone())
-                        .image_info(from_ref(&img_info))
-                        .build(),
-                );
-                image_infos.push(img_info);
-            }
-            StorageBuffer { buffer } => {
-                let buffer_info = vk::DescriptorBufferInfo::builder()
-                    .buffer(buffer)
-                    .range(vk::WHOLE_SIZE)
-                    .build();
-
-                let write = vk::WriteDescriptorSet::builder()
-                    .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-                    .dst_binding(w.binding)
-                    .dst_set(set.clone())
-                    .buffer_info(&[buffer_info])
-                    .build();
-                //TODO WTF is this hack
-                unsafe { ctx.device.update_descriptor_sets(&[write], &[]) };
-            }
-        }
-    }
-
-    unsafe { ctx.device.update_descriptor_sets(&descriptor_writes, &[]) };
-}
-
-#[derive(Clone)]
-pub struct WriteDescriptorSet {
-    pub binding: u32,
-    pub kind: WriteDescriptorSetKind,
-}
-
-#[derive(Clone, Debug)]
-pub enum WriteDescriptorSetKind {
-    StorageImage {
-        view: vk::ImageView,
-        layout: vk::ImageLayout,
-    },
-    AccelerationStructure {
-        acceleration_structure: vk::AccelerationStructureKHR,
-    },
-    UniformBuffer {
-        buffer: vk::Buffer,
-    },
-    CombinedImageSampler {
-        view: vk::ImageView,
-        sampler: vk::Sampler,
-        layout: vk::ImageLayout,
-    },
-    StorageBuffer {
-        buffer: vk::Buffer,
-    },
 }
 
 #[derive(Debug)]
@@ -927,7 +712,7 @@ impl Image {
     }
 
     pub fn new_from_data(
-        ctx: &mut Context,
+        ctx: &mut Renderer,
         image: DynamicImage,
         format: vk::Format,
     ) -> Result<(Self, vk::ImageView)> {
@@ -1002,7 +787,7 @@ impl Image {
             ctx.pipeline_image_barriers(cmd, &[texture_barrier_end]);
         })?;
 
-        let image_view = create_image_view(&ctx.device, &texture_image, format);
+        let image_view = create_image_view(&ctx.device, &texture_image)?;
         Ok((
             Self {
                 allocation: texture_image.allocation,
@@ -1020,7 +805,7 @@ impl Image {
     }
 }
 
-fn copy_buffer(device: &Device, cmd: &vk::CommandBuffer, src_buffer: &Buffer, dst_buffer: &Buffer) {
+pub fn copy_buffer(device: &Device, cmd: &vk::CommandBuffer, src_buffer: &Buffer, dst_buffer: &Buffer) {
     unsafe {
         let region = vk::BufferCopy::builder().size(src_buffer.size);
         device.cmd_copy_buffer(
@@ -1038,6 +823,12 @@ pub fn alinged_size_u64(size: u64, alignment: u64) -> u64 {
 
 pub fn alinged_size(size: u32, alignment: u32) -> u32 {
     (size + (alignment - 1)) & !(alignment - 1)
+}
+
+#[derive(Debug)]
+pub struct Queue {
+    pub family: QueueFamily,
+    pub handel: vk::Queue,
 }
 
 #[derive(Clone, Debug)]
@@ -1069,7 +860,7 @@ impl QueueFamily {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct DeviceFeatures {
     pub ray_tracing_pipeline: bool,
     pub acceleration_structure: bool,
@@ -1104,7 +895,7 @@ pub struct PhysicalDevice {
 }
 
 impl PhysicalDevice {
-    fn new(
+    pub fn new(
         instance: &Instance,
         ash_surface: &khr::Surface,
         vk_surface: &vk::SurfaceKHR,
@@ -1208,21 +999,196 @@ impl PhysicalDevice {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default)]
-pub struct RayTracingShaderGroupInfo {
-    pub group_count: u32,
-    pub raygen_shader_count: u32,
-    pub miss_shader_count: u32,
-    pub hit_shader_count: u32,
+
+
+pub fn create_raster_pipeline(
+    ctx: &mut Renderer,
+    layout: &vk::PipelineLayout,
+    render_pass: vk::RenderPass,
+    vertex_stage: &str,
+    fragment_stage: &str
+) -> Result<vk::Pipeline> {
+    let color_blend_attachments = [vk::PipelineColorBlendAttachmentState::builder()
+        .blend_enable(false)
+        .color_write_mask(
+            vk::ColorComponentFlags::R
+                | vk::ColorComponentFlags::G
+                | vk::ColorComponentFlags::B
+                | vk::ColorComponentFlags::A,
+        )
+        .build()];
+
+    let color_blend_state = vk::PipelineColorBlendStateCreateInfo::builder()
+        .attachments(&color_blend_attachments)
+        .logic_op(vk::LogicOp::COPY)
+        .logic_op_enable(false)
+        .blend_constants([0.0, 0.0, 0.0, 0.0])
+        .build();
+
+    let depth_stencil_state = vk::PipelineDepthStencilStateCreateInfo::builder()
+        .depth_bounds_test_enable(false)
+        .stencil_test_enable(false)
+        .depth_compare_op(vk::CompareOp::LESS)
+        .depth_test_enable(false)
+        .depth_write_enable(false);
+
+    let dynamic_state = vk::PipelineDynamicStateCreateInfo::builder()
+        .dynamic_states(&[vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR]);
+
+    let rasterization_state = vk::PipelineRasterizationStateCreateInfo::builder()
+        .cull_mode(vk::CullModeFlags::BACK)
+        .depth_clamp_enable(false)
+        .polygon_mode(vk::PolygonMode::FILL)
+        .line_width(1.0)
+        .front_face(vk::FrontFace::CLOCKWISE)
+        .depth_bias_enable(false)
+        .rasterizer_discard_enable(false);
+
+    let multisample_state = vk::PipelineMultisampleStateCreateInfo::builder()
+        .sample_shading_enable(false)
+        .rasterization_samples(vk::SampleCountFlags::TYPE_1);
+
+    let entry_point_name: CString = CString::new("main").unwrap();
+    let stages = [
+        vk::PipelineShaderStageCreateInfo::builder()
+            .module(ctx.create_shader_module(fragment_stage))
+            .stage(vk::ShaderStageFlags::FRAGMENT)
+            .name(&entry_point_name)
+            .build(),
+        vk::PipelineShaderStageCreateInfo::builder()
+            .module(ctx.create_shader_module(vertex_stage))
+            .stage(vk::ShaderStageFlags::VERTEX)
+            .name(&entry_point_name)
+            .build(),
+    ];
+
+    let viewport_state = vk::PipelineViewportStateCreateInfo::builder()
+        .scissor_count(1)
+        .viewport_count(1);
+
+    let input_assembly_state = vk::PipelineInputAssemblyStateCreateInfo::builder()
+        .primitive_restart_enable(false)
+        .topology(vk::PrimitiveTopology::TRIANGLE_LIST);
+    let vertex_input_state = vk::PipelineVertexInputStateCreateInfo::builder()
+        .vertex_attribute_descriptions(&[])
+        .vertex_binding_descriptions(&[])
+        .build();
+
+    let pipeline_create_info = vk::GraphicsPipelineCreateInfo::builder()
+        .color_blend_state(&color_blend_state)
+        .depth_stencil_state(&depth_stencil_state)
+        .dynamic_state(&dynamic_state)
+        .input_assembly_state(&input_assembly_state)
+        .vertex_input_state(&vertex_input_state)
+        .layout(*layout)
+        .rasterization_state(&rasterization_state)
+        .multisample_state(&multisample_state)
+        .render_pass(render_pass)
+        .stages(&stages)
+        .viewport_state(&viewport_state)
+        .subpass(0)
+        .build();
+    let pipeline = unsafe {
+        ctx.device
+            .create_graphics_pipelines(vk::PipelineCache::null(), &[pipeline_create_info], None)
+            .unwrap()
+    }[0];
+
+    Ok(pipeline)
 }
 
-pub struct RayTracingPipeline {
-    pub descriptor_set_layout: vk::DescriptorSetLayout,
-    pub dynamic_layout: vk::DescriptorSetLayout,
-    pub layout: vk::PipelineLayout,
-    pub handle: vk::Pipeline,
-    pub shader_group_info: RayTracingShaderGroupInfo,
+pub fn create_ray_tracing_pipeline(
+    ctx: &Renderer,
+    shaders_create_info: &[RayTracingShaderCreateInfo],
+    layout: vk::PipelineLayout,
+) -> Result<(vk::Pipeline, RayTracingShaderGroupInfo)> {
+    let mut shader_group_info = RayTracingShaderGroupInfo {
+        group_count: shaders_create_info.len() as u32,
+        ..Default::default()
+    };
+
+    let mut modules = vec![];
+    let mut stages = vec![];
+    let mut groups = vec![];
+
+    let entry_point_name: CString = CString::new("main").unwrap();
+
+    for shader in shaders_create_info.iter() {
+        let mut this_modules = vec![];
+        let mut this_stages = vec![];
+
+        shader.source.into_iter().for_each(|s| {
+            let module = module_from_bytes(&ctx.device, s.0).unwrap();
+            let stage = vk::PipelineShaderStageCreateInfo::builder()
+                .stage(s.1)
+                .module(module)
+                .name(&entry_point_name)
+                .build();
+            this_modules.push(module);
+            this_stages.push(stage);
+        });
+
+        match shader.group {
+            RayTracingShaderGroup::RayGen => shader_group_info.raygen_shader_count += 1,
+            RayTracingShaderGroup::Miss => shader_group_info.miss_shader_count += 1,
+            RayTracingShaderGroup::Hit => shader_group_info.hit_shader_count += 1,
+        };
+
+        let shader_index = stages.len();
+
+        let mut group = vk::RayTracingShaderGroupCreateInfoKHR::builder()
+            .ty(vk::RayTracingShaderGroupTypeKHR::GENERAL)
+            .general_shader(vk::SHADER_UNUSED_KHR)
+            .closest_hit_shader(vk::SHADER_UNUSED_KHR)
+            .any_hit_shader(vk::SHADER_UNUSED_KHR)
+            .intersection_shader(vk::SHADER_UNUSED_KHR);
+        group = match shader.group {
+            RayTracingShaderGroup::RayGen | RayTracingShaderGroup::Miss => {
+                group.general_shader(shader_index as _)
+            }
+            RayTracingShaderGroup::Hit => {
+                group = group
+                    .ty(vk::RayTracingShaderGroupTypeKHR::TRIANGLES_HIT_GROUP)
+                    .closest_hit_shader(shader_index as _);
+                if shader.source.len() >= 2 {
+                    group = group
+                        .ty(vk::RayTracingShaderGroupTypeKHR::TRIANGLES_HIT_GROUP)
+                        .any_hit_shader((shader_index as u32) + 1);
+                }
+                if shader.source.len() >= 3 {
+                    group = group
+                        .ty(vk::RayTracingShaderGroupTypeKHR::PROCEDURAL_HIT_GROUP)
+                        .any_hit_shader((shader_index as u32) + 1)
+                        .intersection_shader((shader_index as u32) + 2);
+                }
+
+                group
+            }
+        };
+
+        modules.append(&mut this_modules);
+        stages.append(&mut this_stages);
+        groups.push(group.build());
+    }
+
+    let pipe_info = vk::RayTracingPipelineCreateInfoKHR::builder()
+        .layout(layout)
+        .stages(&stages)
+        .groups(&groups)
+        .max_pipeline_ray_recursion_depth(1);
+
+    let inner = unsafe {
+        ctx.ray_tracing_context.pipeline_fn.create_ray_tracing_pipelines(
+            vk::DeferredOperationKHR::null(),
+            vk::PipelineCache::null(),
+            std::slice::from_ref(&pipe_info),
+            None,
+        )?[0]
+    };
+
+    Ok((inner, shader_group_info))
 }
+
 
 pub struct ShaderBindingTable {
     pub _buffer: Buffer,
@@ -1231,29 +1197,35 @@ pub struct ShaderBindingTable {
     pub hit_region: vk::StridedDeviceAddressRegionKHR,
 }
 
-impl ShaderBindingTable {
-    pub fn new(ctx: &mut Context, pipeline: &RayTracingPipeline) -> Result<Self> {
-        let desc = pipeline.shader_group_info;
+#[derive(Debug, Clone, Copy, Default)]
+pub struct RayTracingShaderGroupInfo {
+    pub group_count: u32,
+    pub raygen_shader_count: u32,
+    pub miss_shader_count: u32,
+    pub hit_shader_count: u32,
+}
 
-        let handle_size = ctx.ray_tracing.pipeline_properties.shader_group_handle_size;
+impl ShaderBindingTable {
+    pub fn new(ctx: &mut Renderer, pipeline: &vk::Pipeline, desc: RayTracingShaderGroupInfo) -> Result<Self> {
+        let handle_size = ctx.ray_tracing_context.pipeline_properties.shader_group_handle_size;
         let handle_alignment = ctx
-            .ray_tracing
+            .ray_tracing_context
             .pipeline_properties
             .shader_group_handle_alignment;
         let aligned_handle_size = alinged_size(handle_size, handle_alignment);
         let handle_pad = aligned_handle_size - handle_size;
 
         let group_alignment = ctx
-            .ray_tracing
+            .ray_tracing_context
             .pipeline_properties
             .shader_group_base_alignment;
 
         let data_size = desc.group_count * handle_size;
         let handles = unsafe {
-            ctx.ray_tracing
+            ctx.ray_tracing_context
                 .pipeline_fn
                 .get_ray_tracing_shader_group_handles(
-                    pipeline.handle,
+                    *pipeline,
                     0,
                     desc.group_count,
                     data_size as _,
@@ -1289,13 +1261,13 @@ impl ShaderBindingTable {
             memory_location,
             buffer_size as _,
             Some("Shader Binding Table"),
-            ctx.ray_tracing
+            ctx.ray_tracing_context
                 .pipeline_properties
                 .shader_group_base_alignment
                 .into(),
         )?;
 
-        let address = ctx.get_buffer_address(&buffer);
+        let address = buffer.get_device_address(&ctx.device);
 
         let mut offset = 0;
         for group_shader_count in groups_shader_count {
@@ -1362,7 +1334,7 @@ pub struct Frame {
 }
 
 impl Frame {
-    fn new(device: &Device) -> Result<Self> {
+    pub fn new(device: &Device) -> Result<Self> {
         let fence = Fence::new(device, Some(vk::FenceCreateFlags::SIGNALED))?;
 
         let image_available =
@@ -1378,12 +1350,6 @@ impl Frame {
     }
 }
 
-impl Context {
-    fn create_frame(&mut self, size: PhysicalSize<u32>) -> Result<Frame> {
-        Frame::new(&self.device)
-    }
-}
-
 pub struct Swapchain {
     pub ash_swapchain: khr::Swapchain,
     pub vk_swapchain: vk::SwapchainKHR,
@@ -1395,7 +1361,7 @@ pub struct Swapchain {
 }
 
 impl Swapchain {
-    fn new(
+    pub fn new(
         instance: &Instance,
         device: &Device,
         vk_surface: vk::SurfaceKHR,
@@ -1499,7 +1465,7 @@ impl Swapchain {
 
         let views = images
             .iter()
-            .map(|i| create_image_view(device, &i, format.format))
+            .map(|i| create_image_view(device, &i).unwrap())
             .collect::<Vec<_>>();
 
         let images_and_views = images
@@ -1518,9 +1484,6 @@ impl Swapchain {
     }
 }
 
-pub fn create_image_view(device: &Device, image: &Image, format: vk::Format) -> vk::ImageView {
-    create_image_view_aspekt(device, image, format, vk::ImageAspectFlags::COLOR)
-}
 
 pub fn create_image_view_aspekt(
     device: &Device,
@@ -1740,53 +1703,10 @@ impl Buffer {
     }
 }
 
-impl Context {
-    pub fn create_buffer(
-        &mut self,
-        usage: vk::BufferUsageFlags,
-        memory_location: MemoryLocation,
-        size: vk::DeviceSize,
-        name: Option<&str>,
-    ) -> Result<Buffer> {
-        Buffer::new(
-            &self.device,
-            &mut self.allocator,
-            usage,
-            memory_location,
-            size,
-            name,
-            None,
-        )
-    }
-
-    pub fn create_aligned_buffer(
-        &mut self,
-        usage: vk::BufferUsageFlags,
-        memory_location: MemoryLocation,
-        size: vk::DeviceSize,
-        name: Option<&str>,
-        alignment: u64,
-    ) -> Result<Buffer> {
-        Buffer::new(
-            &self.device,
-            &mut self.allocator,
-            usage,
-            memory_location,
-            size,
-            name,
-            Some(alignment),
-        )
-    }
-
-    pub fn get_buffer_address(&self, buffer: &Buffer) -> u64 {
-        buffer.get_device_address(&self.device)
-    }
-}
-
-fn new_device(
+pub fn create_device(
     instance: &Instance,
     physical_device: &PhysicalDevice,
-    queue_families: &[&QueueFamily; 2],
+    queue_families: &[&QueueFamily; 3],
     required_extensions: &[&str],
 ) -> Result<Device> {
     let queue_priorities = [1.0f32];
@@ -1851,7 +1771,7 @@ fn new_device(
     Ok(device)
 }
 
-fn enumerate_physical_devices(
+pub fn enumerate_physical_devices(
     instance: &Instance,
     ash_surface: &khr::Surface,
     vk_surface: &vk::SurfaceKHR,
@@ -1871,35 +1791,39 @@ fn enumerate_physical_devices(
     Ok(physical_devices)
 }
 
-fn get_queue(device: &Device, queue_family: &QueueFamily, queue_index: u32) -> vk::Queue {
+pub fn get_queue(device: &Device, queue_family: &QueueFamily, queue_index: u32) -> vk::Queue {
     unsafe { device.get_device_queue(queue_family.index, queue_index) }
 }
 
-fn select_suitable_physical_device(
+pub fn select_suitable_physical_device(
     devices: &[PhysicalDevice],
     required_extensions: &[&str],
     required_device_features: &DeviceFeatures,
-) -> Result<(PhysicalDevice, QueueFamily, QueueFamily)> {
+) -> Result<(PhysicalDevice, QueueFamily, QueueFamily, QueueFamily)> {
     let mut graphics = None;
     let mut present = None;
+    let mut compute = None;
 
     let device = devices
         .iter()
         .find(|device| {
             for family in device.queue_families.iter().filter(|f| f.has_queues()) {
                 if family.supports_graphics()
-                    && family.supports_compute()
                     && family.supports_timestamp_queries()
                     && graphics.is_none()
                 {
                     graphics = Some(family.clone());
                 }
 
+                if family.supports_compute() && compute.is_none() {
+                    compute = Some(family.clone())
+                }
+
                 if family.supports_present() && present.is_none() {
                     present = Some(family.clone());
                 }
 
-                if graphics.is_some() && present.is_some() {
+                if graphics.is_some() && present.is_some() && compute.is_some() {
                     break;
                 }
             }
@@ -1917,7 +1841,7 @@ fn select_suitable_physical_device(
         })
         .ok_or_else(|| anyhow::anyhow!("Could not find a suitable device"))?;
 
-    Ok((device.clone(), graphics.unwrap(), present.unwrap()))
+    Ok((device.clone(), graphics.unwrap(), present.unwrap(), compute.unwrap()))
 }
 
 fn begin_command_buffer(
@@ -1929,25 +1853,6 @@ fn begin_command_buffer(
         .flags(flags.unwrap_or(vk::CommandBufferUsageFlags::empty()));
     unsafe { device.begin_command_buffer(*cmd, &begin_info)? };
     Ok(())
-}
-
-//#[cfg(debug_assertions)]
-unsafe extern "system" fn vulkan_debug_callback(
-    flag: vk::DebugUtilsMessageSeverityFlagsEXT,
-    typ: vk::DebugUtilsMessageTypeFlagsEXT,
-    p_callback_data: *const vk::DebugUtilsMessengerCallbackDataEXT,
-    _: *mut c_void,
-) -> vk::Bool32 {
-    use vk::DebugUtilsMessageSeverityFlagsEXT as Flag;
-
-    let message = CStr::from_ptr((*p_callback_data).p_message);
-    match flag {
-        Flag::VERBOSE => log::info!("{:?} - {:?}", typ, message),
-        Flag::INFO => log::info!("{:?} - {:?}", typ, message),
-        Flag::WARNING => log::warn!("{:?} - {:?}", typ, message),
-        _ => log::error!("{:?} - {:?}", typ, message),
-    }
-    vk::FALSE
 }
 
 pub fn queue_submit(
