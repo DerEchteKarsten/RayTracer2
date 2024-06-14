@@ -365,7 +365,10 @@ fn build_oct_tree(tree: &mut Vec<Octant>, depth: i32, lb: Vec3, rt: Vec3, c: u32
     node.lb = vec3(4.0, 4.0, 4.0);
     node.rt = vec3(-4.0, -4.0, -4.0);
     if depth == 0 {
-        node.color = 0x00ff00ff;//min(rand::random::<u32>(), u32::MAX - 1) + 1;
+        node.color = rand::random::<u32>();
+        if node.color == 0 {
+            node.color += 1;
+        }
         tree.push(node);
         return;
     }

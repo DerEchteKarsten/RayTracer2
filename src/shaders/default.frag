@@ -38,7 +38,7 @@ layout(location = 1) out float outDepth;
 struct HitInfo {
     bool hit;
     float closest_dist;
-    uint8_t color;
+    uint32_t color;
 };
 
 struct Ray {
@@ -92,7 +92,7 @@ HitInfo traverse(Ray ray) {
     node_stack[stack_index++] = oct_tree.pool[0];
     HitInfo state;
     state.hit = false;
-    state.color = uint8_t(0);
+    state.color = 0;
     state.closest_dist = 1.0 / 0.0;
     
     while(stack_index > 0) {
@@ -102,7 +102,7 @@ HitInfo traverse(Ray ray) {
             if (node.color != 0) {
                 state.hit = bounds_hit.hit;
                 state.closest_dist = bounds_hit.closest_dist;
-                state.color = uint8_t(node.color);
+                state.color = node.color;
             }else {
                 for(int i = 0; i < 8; i++) {
                     node_stack[stack_index++] = oct_tree.pool[node.children[i]];
@@ -113,12 +113,12 @@ HitInfo traverse(Ray ray) {
     return state;
 }
 
-vec4 hex_to_decimal(uint8_t col) {
-    float r = float((col >> 6) & 0xFF) / 255.0;
-    float g = float((col >> 4) & 0xFF) / 255.0;
-    float b = float((col >> 2) & 0xFF) / 255.0;
-    float a = float(col & 0xFF) / 255.0;
-    return vec4(r,g,b,a);
+vec4 hex_to_decimal(uint32_t col) {
+    float b = float(col) / 255.0;
+    float g = float(col >> 8) / 255.0;
+    float r = float(col >> 12) / 255.0;
+    float a = float(col >> 24) / 255.0;
+    return vec4(r, g, b, a);
 }
 
 void main() {
@@ -135,7 +135,7 @@ void main() {
     HitInfo hit = traverse(ray);
 
     if (hit.hit) {
-        outColor = vec4(hex_to_decimal(hit.color).rgb, 1.0);
+        outColor = vec4(hit.color);//hex_to_decimal(hit.color).rgb, 1.0);
     } else {
         outColor = direction;
     }
