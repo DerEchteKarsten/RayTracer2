@@ -14,6 +14,7 @@
 struct Octant {
     bool empty;
     uint32_t color;
+    vec3 lb, rt;
     uint32_t children[8];
 };
 
@@ -34,117 +35,90 @@ layout(binding = 1, set = 0) readonly buffer OctTree {Octant[] pool; } oct_tree;
 layout(location = 0) out vec4 outColor;
 layout(location = 1) out float outDepth;
 
-float sdfBox( vec3 p, float b )
-{
-  return length(max(abs(p)-vec3(b),0.0));
-}
+struct HitInfo {
+    bool hit;
+    float closest_dist;
+    uint8_t color;
+};
 
-// bool get_color_or_indirection(in Octant node, in uint index, out uint32_t color_or_indirection) {
-//     uint64_t data = node.data[index / 2];
-//     uint32_t node_data;
-//     switch (index % 2) {
-//         case 0:
-//             node_data = uint32_t(data >> 32); 
-//         case 1:
-//             node_data = uint32_t(data << 32);
-//     }
-//     bool is_leave = bool(node_data << 31);
-//     color_or_indirection = (node_data >> 1) << 1;
-//     return is_leave;
-// }
+struct Ray {
+    vec3 dir;
+    vec3 org;
+};
 
-// uint pos_index_to_lin(in ivec3 pos_index) {
-//     return 16 * pos_index.y + 4 * pos_index.z + pos_index.x;
-// }
+HitInfo bounding_box(Ray r, vec3 lb, vec3 rt) {
+    HitInfo hit;
+    hit.hit = false;
 
-// uint32_t get_leave_from_position(vec3 position, out Octant root, out ivec3 pos_index) {
-//     root = oct_tree.pool[0];
-//     uint32_t next_root;
-//     for(int i == 0; i<MAX_DEPTH; i++) {
-//         ivec3 pos_index = ivec3(position) / ivec3(4);
-//         uint32_t index =
-//         bool is_leave = get_color_or_indirection(root, index, next_root);
-//         if (is_leave) {
-//             return next_root;
-//         } else {
-//             position -= pos_index * (MAX_SIZE / (4*i));
-//             root = oct_tree.pool[next_root];
-//         }
-//     }
-//     return next_root;
-// }
+    // r.dir is unit direction vector of ray
+    vec3 dirfrac;
+    dirfrac.x = 1.0f / r.dir.x;
+    dirfrac.y = 1.0f / r.dir.y;
+    dirfrac.z = 1.0f / r.dir.z;
+    // lb is the corner of AABB with minimal coordinates - left bottom, rt is maximal corner
+    // r.org is origin of ray
+    float t1 = (lb.x - r.org.x)*dirfrac.x;
+    float t2 = (rt.x - r.org.x)*dirfrac.x;
+    float t3 = (lb.y - r.org.y)*dirfrac.y;
+    float t4 = (rt.y - r.org.y)*dirfrac.y;
+    float t5 = (lb.z - r.org.z)*dirfrac.z;
+    float t6 = (rt.z - r.org.z)*dirfrac.z;
 
-// float trace(vec3 direction, vec3 origin) {
-//     float depth = max(sdfBox(origin, MAX_SIZE), 0.0);
-//     origin += direction * (depth+0.01);
-//     Octant root;
-//     ivec3 pos_index;
-//     uint32_t current_octant_value = get_leave_from_position(origin, root, pos_index);
-//     if (current_octant_value != EMPTY) {
-//         return depth;
-//     }
-//     for(int i = 0; i < 64; i++) {
-//         uint index = pos_index_to_lin(pos_index);
-//         if (index > 64) {
-//             break;
-//         }
-//         uint32_t val;
-//         get_color_or_indirection(root, index, val);
-//         if (val != EMPTY) {
-//             break;
-//         }else {
-            
-//         }
-//     }
-// }
+    float tmin = max(max(min(t1, t2), min(t3, t4)), min(t5, t6));
+    float tmax = min(min(max(t1, t2), max(t3, t4)), max(t5, t6));
 
-int closest_child(vec3 origin, float bounds, vec3 center) {
-    vec3 oriented_point = origin - center;
-    
-    bool x_test = oriented_point.x >= 0.0;
-    bool y_test = oriented_point.y >= 0.0;
-    bool z_test = oriented_point.z >= 0.0;
-
-    return x_test | (y_test << 1) | (z_test >= 0.0 << 2);
-} 
-
-bool plane_collision(vec3 origin, vec3 direction, vec3 center, vec3 normal) {
-    float denom = normal.dot(direction);
-    if (abs(denom) > 0.0001f) // your favorite epsilon
+    // if tmax < 0, ray (line) is intersecting AABB, but the whole AABB is behind us
+    if (tmax < 0)
     {
-        float t = (center - origin).dot(normal) / denom;
-        if (t >= 0) return true; // you might want to allow an epsilon here too
+        hit.closest_dist = tmax;
+        return hit;
     }
-    return false;
+
+    // if tmin > tmax, ray doesn't intersect AABB
+    if (tmin > tmax)
+    {
+        hit.closest_dist = tmax;
+        return hit;
+    }
+
+    hit.closest_dist = tmin;
+    hit.hit = true;
+    return hit;
 }
 
-bool trace(vec3 direction, vec3 origin, Octant node, int depth, vec3 center) {
-    float bounds = MAX_SIZE / (depth * 2);
-
-    float depth = sdfBox(origin, bounds);
-    if(depth > 0.0) {
-        return false;
-    }
-
-    if(node.color != 0) {
-        return true;
-    }else {
-        int closest_child_index = closest_child(origin, bounds, center);
-
-        //change to bit mask
-        bool[3] plane_hits = {
-            plane_collision(origin, direction, center, vec3(1.0, 0.0, 0.0)),
-            plane_collision(origin, direction, center, vec3(0.0, 1.0, 0.0)),
-            plane_collision(origin, direction, center, vec3(0.0, 0.0, 1.0))
-        }
-
-        for (int i = 0; i < 4; i++) {
-            uint32_t child_adress = node.children[closest_child_index]; 
-            if (child_adress != 0) {
-                trace(direction, origin, oct_tree.pool[child_adress], depth-1, center+(((vec3((bounds) * ((closest_child_index >> 0) & 1), (bounds) * ((closest_child_index >> 1) & 1), (bounds) * ((closest_child_index >> 2) & 1))))))
+HitInfo traverse(Ray ray) {
+    Octant node_stack[100];
+    int stack_index = 0;
+    node_stack[stack_index++] = oct_tree.pool[0];
+    HitInfo state;
+    state.hit = false;
+    state.color = uint8_t(0);
+    state.closest_dist = 1.0 / 0.0;
+    
+    while(stack_index > 0) {
+        Octant node = node_stack[--stack_index];
+        HitInfo bounds_hit = bounding_box(ray, node.lb, node.rt);
+        if (bounds_hit.hit && !node.empty) {
+            if (node.color != 0) {
+                state.hit = bounds_hit.hit;
+                state.closest_dist = bounds_hit.closest_dist;
+                state.color = uint8_t(node.color);
+            }else {
+                for(int i = 0; i < 8; i++) {
+                    node_stack[stack_index++] = oct_tree.pool[node.children[i]];
+                }
             }
         }
     }
+    return state;
+}
+
+vec4 hex_to_decimal(uint8_t col) {
+    float r = float((col >> 6) & 0xFF) / 255.0;
+    float g = float((col >> 4) & 0xFF) / 255.0;
+    float b = float((col >> 2) & 0xFF) / 255.0;
+    float a = float(col & 0xFF) / 255.0;
+    return vec4(r,g,b,a);
 }
 
 void main() {
@@ -156,10 +130,14 @@ void main() {
 	vec4 target = cam.projInverse * vec4(d.x, d.y, 1, 1) ;
 	vec4 direction = cam.viewInverse*vec4(normalize(target.xyz), 0) ;
 
-    outColor = direction;
+    Ray ray = Ray(direction.xyz, origin.xyz);
 
-    if(cam.controlls.x == 1.0) {
-        outColor = vec4(1.0, 0.0, 1.0,1.0);
+    HitInfo hit = traverse(ray);
+
+    if (hit.hit) {
+        outColor = vec4(hex_to_decimal(hit.color).rgb, 1.0);
+    } else {
+        outColor = direction;
     }
-    outDepth = 1.0;
+    outDepth = hit.closest_dist;
 }

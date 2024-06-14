@@ -16,8 +16,9 @@ use gpu_allocator::MemoryLocation;
 use ash::Device;
 
 use glam::{vec3, Vec3, Vec4};
+use std::cmp::min;
 use std::default::Default;
-use std::ffi::CString;
+use std::ffi::{CStr, CString};
 use std::time::{Duration, Instant};
 
 use raw_window_handle::{HasRawDisplayHandle, HasRawWindowHandle};
@@ -38,27 +39,40 @@ struct ComputePipeline {
     pub descriptor_layouts: Box<[vk::DescriptorSetLayout]>,
 }
 
+const DEVICE_EXTENSIONS: [&'static CStr; 9] = [
+    khr::Swapchain::name(),
+    vk::ExtDescriptorIndexingFn::name(),
+    vk::ExtScalarBlockLayoutFn::name(),
+    vk::KhrGetMemoryRequirements2Fn::name(),
+    khr::BufferDeviceAddress::name(),
+    vk::KhrSpirv14Fn::name(),
+    vk::KhrShaderFloatControlsFn::name(),
+    vk::KhrBufferDeviceAddressFn::name(),
+    KhrShaderNonSemanticInfoFn::name(),
+];
+
+const APP_NAME: &'static str = "Test";
+const WINDOW_SIZE: PhysicalSize<u32> = PhysicalSize {
+    width: 1920,
+    height: 1080,
+};
+
+const FULL_SCREEN_SCISSOR: vk::Rect2D = vk::Rect2D{
+        extent: vk::Extent2D { width: WINDOW_SIZE.width, height: WINDOW_SIZE.height },
+        offset: vk::Offset2D {x:0,y:0}
+    };
+
+const FULL_SCREEN_VIEW_PORT: vk::Viewport = vk::Viewport {
+    x: 0.0,
+    y: 0.0,
+    width: WINDOW_SIZE.width as f32,
+    height: WINDOW_SIZE.height as f32,
+    min_depth: 0.0,
+    max_depth: 1.0
+};
+
 fn main() {
-    let image_thread = std::thread::spawn(|| image::open("./src/models/skybox.png").unwrap());
-
-    let device_extensions = [
-        khr::Swapchain::name(),
-        vk::ExtDescriptorIndexingFn::name(),
-        vk::ExtScalarBlockLayoutFn::name(),
-        vk::KhrGetMemoryRequirements2Fn::name(),
-        khr::BufferDeviceAddress::name(),
-        vk::KhrSpirv14Fn::name(),
-        vk::KhrShaderFloatControlsFn::name(),
-        vk::KhrBufferDeviceAddressFn::name(),
-        KhrShaderNonSemanticInfoFn::name(),
-    ];
-
-    let device_extensions = device_extensions
-        .into_iter()
-        .map(|e| e.to_str().unwrap())
-        .collect::<Vec<_>>();
-    let device_extensions = device_extensions.as_slice();
-
+  
     let device_features: DeviceFeatures = DeviceFeatures {
         ray_tracing_pipeline: false,
         acceleration_structure: false,
@@ -69,21 +83,15 @@ fn main() {
     };
     let event_loop = EventLoop::new();
     let window = WindowBuilder::new()
-        .with_title("TEst")
-        .with_inner_size(PhysicalSize {
-            width: 1920,
-            height: 1080,
-        })
+        .with_title(APP_NAME)
+        .with_inner_size(WINDOW_SIZE)
         .build(&event_loop)
         .unwrap();
-    let window_size = window.inner_size();
     let mut ctx = Context::new(
         window.raw_window_handle(),
         window.raw_display_handle(),
-        "Test",
-        device_extensions,
         device_features,
-        window_size,
+        WINDOW_SIZE,
     )
     .unwrap();
 
@@ -91,33 +99,14 @@ fn main() {
         vec3(0.0, 0.0, 10.0),
         vec3(0.0, 0.0, -1.0),
         40.0,
-        window_size.width as f32 / window_size.height as f32,
+        WINDOW_SIZE.width as f32 / WINDOW_SIZE.height as f32,
         0.1,
         1000.0,
     );
 
-    let sampler_info = vk::SamplerCreateInfo {
-        mag_filter: vk::Filter::LINEAR,
-        min_filter: vk::Filter::LINEAR,
-        mipmap_mode: vk::SamplerMipmapMode::LINEAR,
-        address_mode_u: vk::SamplerAddressMode::MIRRORED_REPEAT,
-        address_mode_v: vk::SamplerAddressMode::MIRRORED_REPEAT,
-        address_mode_w: vk::SamplerAddressMode::MIRRORED_REPEAT,
-        max_anisotropy: 1.0,
-        border_color: vk::BorderColor::FLOAT_OPAQUE_WHITE,
-        compare_op: vk::CompareOp::NEVER,
-        ..Default::default()
-    };
-
     let mut controles = Controls {
         ..Default::default()
     };
-
-    log::trace!("Starting Image Load");
-    let image = image_thread.join().unwrap();
-    let sky_box = Image::new_from_data(&mut ctx, image, vk::Format::R8G8B8A8_SRGB).unwrap();
-    let sky_box_sampler = unsafe { ctx.device.create_sampler(&sampler_info, None) }.unwrap();
-    log::trace!("Starting Model");
 
     let mut uniform_data = UniformData {
         proj_inverse: camera.projection_matrix().inverse(),
@@ -133,15 +122,15 @@ fn main() {
             Some("Uniform Buffer"),
         )
         .unwrap();
-    uniform_buffer
-        .copy_data_to_buffer(std::slice::from_ref(&uniform_data))
-        .unwrap();
 
-    let oct_tree_buffer = ctx.create_buffer(vk::BufferUsageFlags::STORAGE_BUFFER, MemoryLocation::GpuOnly, 10000, Some("OctTreeData")).unwrap();
+    let mut oct_tree_data = Vec::new();
+    build_oct_tree(&mut oct_tree_data, 0, Vec3::ZERO, Vec3::ZERO, 0);
+
+    let oct_tree_buffer = ctx.create_gpu_only_buffer_from_data(vk::BufferUsageFlags::STORAGE_BUFFER, oct_tree_data.as_slice(), Some("OctTreeData")).unwrap();
 
     let raytracing_pipeline = create_fullscreen_quad_pipeline(&mut ctx, &uniform_buffer, &oct_tree_buffer).unwrap();
     
-    let storage_images = create_storage_images(&mut ctx, &raytracing_pipeline, window_size).unwrap();
+    let storage_images = create_storage_images(&mut ctx, &raytracing_pipeline).unwrap();
 
     let post_proccesing_pipeline =
         create_post_proccesing_pipelien(&mut ctx, &storage_images.color_buffers).unwrap();
@@ -154,8 +143,8 @@ fn main() {
                         &vk::FramebufferCreateInfo::builder()
                             .attachments(&[ctx.swapchain.images[i].1])
                             .attachment_count(1)
-                            .height(window_size.height)
-                            .width(window_size.width)
+                            .height(WINDOW_SIZE.height)
+                            .width(WINDOW_SIZE.width)
                             .layers(1)
                             .render_pass(post_proccesing_pipeline.render_pass)
                             .build(),
@@ -212,8 +201,8 @@ fn main() {
                 uniform_data.proj_inverse = camera.projection_matrix().inverse();
                 uniform_data.view_inverse = camera.view_matrix().inverse();
                 uniform_data.input.x = if controles.left_mouse {1.0} else {0.0};
-                uniform_data.input.z = window_size.width as f32;
-                uniform_data.input.w = window_size.height as f32;
+                uniform_data.input.z = WINDOW_SIZE.width as f32;
+                uniform_data.input.w = WINDOW_SIZE.height as f32;
                 uniform_buffer
                     .copy_data_to_buffer(std::slice::from_ref(&uniform_data))
                     .unwrap();
@@ -247,30 +236,14 @@ fn main() {
                             .framebuffer(storage_images.frame_buffers[i as usize])
                             .render_area(vk::Rect2D {
                                 extent: vk::Extent2D {
-                                    width: window_size.width,
-                                    height: window_size.height,
+                                    width: WINDOW_SIZE.width,
+                                    height: WINDOW_SIZE.height,
                                 },
                                 offset: vk::Offset2D { x: 0, y: 0 },
                             });
 
-                        let view_port = vk::Viewport::builder()
-                            .height(window_size.height as f32)
-                            .width(window_size.width as f32)
-                            .max_depth(1.0)
-                            .min_depth(0.0)
-                            .x(0 as f32)
-                            .y(0 as f32)
-                            .build();
-                        ctx.device.cmd_set_viewport(*cmd, 0, &[view_port]);
-
-                        let scissor = vk::Rect2D::builder()
-                            .extent(vk::Extent2D {
-                                height: window_size.height,
-                                width: window_size.width,
-                            })
-                            .offset(vk::Offset2D { x: 0, y: 0 })
-                            .build();
-                        ctx.device.cmd_set_scissor(*cmd, 0, &[scissor]);
+                        ctx.device.cmd_set_viewport(*cmd, 0, &[FULL_SCREEN_VIEW_PORT]);
+                        ctx.device.cmd_set_scissor(*cmd, 0, &[FULL_SCREEN_SCISSOR]);
 
                         ctx.device.cmd_begin_render_pass(
                             *cmd,
@@ -301,8 +274,8 @@ fn main() {
                             .framebuffer(present_frame_buffers[i as usize])
                             .render_area(vk::Rect2D {
                                 extent: vk::Extent2D {
-                                    width: window_size.width,
-                                    height: window_size.height,
+                                    width: WINDOW_SIZE.width,
+                                    height: WINDOW_SIZE.height,
                                 },
                                 offset: vk::Offset2D { x: 0, y: 0 },
                             })
@@ -312,24 +285,8 @@ fn main() {
                                 },
                             }]);
 
-                        let view_port = vk::Viewport::builder()
-                            .height(window_size.height as f32)
-                            .width(window_size.width as f32)
-                            .max_depth(1.0)
-                            .min_depth(0.0)
-                            .x(0 as f32)
-                            .y(0 as f32)
-                            .build();
-                        ctx.device.cmd_set_viewport(*cmd, 0, &[view_port]);
-
-                        let scissor = vk::Rect2D::builder()
-                            .extent(vk::Extent2D {
-                                height: window_size.height,
-                                width: window_size.width,
-                            })
-                            .offset(vk::Offset2D { x: 0, y: 0 })
-                            .build();
-                        ctx.device.cmd_set_scissor(*cmd, 0, &[scissor]);
+                        ctx.device.cmd_set_viewport(*cmd, 0, &[FULL_SCREEN_VIEW_PORT]);
+                        ctx.device.cmd_set_scissor(*cmd, 0, &[FULL_SCREEN_SCISSOR]);
 
                         ctx.device.cmd_begin_render_pass(
                             *cmd,
@@ -366,219 +323,57 @@ fn main() {
     });
 }
 
-
-fn create_ray_tracing_pipeline(
-    ctx: &Context,
-    model: &Model,
-    shaders_create_info: &[RayTracingShaderCreateInfo],
-) -> Result<RayTracingPipeline> {
-    let static_layout_bindings = [
-        vk::DescriptorSetLayoutBinding::builder()
-            .binding(0)
-            .descriptor_type(vk::DescriptorType::ACCELERATION_STRUCTURE_KHR)
-            .descriptor_count(1)
-            .stage_flags(vk::ShaderStageFlags::RAYGEN_KHR | vk::ShaderStageFlags::CLOSEST_HIT_KHR)
-            .build(),
-        vk::DescriptorSetLayoutBinding::builder()
-            .binding(1)
-            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-            .descriptor_count(1)
-            .stage_flags(vk::ShaderStageFlags::RAYGEN_KHR | vk::ShaderStageFlags::CLOSEST_HIT_KHR)
-            .build(),
-        vk::DescriptorSetLayoutBinding::builder()
-            .binding(2)
-            .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
-            .descriptor_count(1)
-            .stage_flags(vk::ShaderStageFlags::RAYGEN_KHR | vk::ShaderStageFlags::CLOSEST_HIT_KHR)
-            .build(),
-        vk::DescriptorSetLayoutBinding::builder()
-            .binding(3)
-            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-            .descriptor_count(1)
-            .stage_flags(
-                vk::ShaderStageFlags::INTERSECTION_KHR | vk::ShaderStageFlags::CLOSEST_HIT_KHR,
-            )
-            .build(),
-        vk::DescriptorSetLayoutBinding::builder()
-            .binding(4)
-            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-            .descriptor_count(1)
-            .stage_flags(vk::ShaderStageFlags::CLOSEST_HIT_KHR)
-            .build(),
-        vk::DescriptorSetLayoutBinding::builder()
-            .binding(5)
-            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-            .descriptor_count(1)
-            .stage_flags(vk::ShaderStageFlags::CLOSEST_HIT_KHR)
-            .build(),
-        vk::DescriptorSetLayoutBinding::builder()
-            .binding(6)
-            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-            .descriptor_count(1)
-            .stage_flags(vk::ShaderStageFlags::CLOSEST_HIT_KHR)
-            .build(),
-        vk::DescriptorSetLayoutBinding::builder()
-            .binding(7)
-            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-            .descriptor_count(model.images.len() as _)
-            .stage_flags(vk::ShaderStageFlags::CLOSEST_HIT_KHR)
-            .build(),
-        vk::DescriptorSetLayoutBinding::builder()
-            .binding(8)
-            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-            .descriptor_count(1)
-            .stage_flags(vk::ShaderStageFlags::MISS_KHR)
-            .build(),
-        vk::DescriptorSetLayoutBinding::builder()
-            .binding(9)
-            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-            .descriptor_count(1)
-            .stage_flags(vk::ShaderStageFlags::RAYGEN_KHR)
-            .build(),
-    ];
-
-    let dynamic_layout_bindings = [
-        vk::DescriptorSetLayoutBinding::builder()
-            .binding(1)
-            .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
-            .descriptor_count(1)
-            .stage_flags(vk::ShaderStageFlags::RAYGEN_KHR)
-            .build(),
-        vk::DescriptorSetLayoutBinding::builder()
-            .binding(2)
-            .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
-            .descriptor_count(1)
-            .stage_flags(vk::ShaderStageFlags::RAYGEN_KHR)
-            .build(),
-        vk::DescriptorSetLayoutBinding::builder()
-            .binding(3)
-            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-            .descriptor_count(1)
-            .stage_flags(vk::ShaderStageFlags::RAYGEN_KHR)
-            .build(),
-    ];
-
-    let static_dsl = ctx.create_descriptor_set_layout(&static_layout_bindings, &[])?;
-    let dynamic_dsl = ctx.create_descriptor_set_layout(&dynamic_layout_bindings, &[])?;
-    let old_image_dsl = ctx.create_descriptor_set_layout(&dynamic_layout_bindings, &[])?;
-
-    let dsls = [static_dsl, dynamic_dsl, old_image_dsl];
-
-    let push_constants = &[vk::PushConstantRange::builder()
-        .offset(0)
-        .size((size_of::<u32>() * 2) as u32)
-        .stage_flags(vk::ShaderStageFlags::RAYGEN_KHR)
-        .build()];
-
-    let pipe_layout_info = vk::PipelineLayoutCreateInfo::builder()
-        .set_layouts(&dsls)
-        .push_constant_ranges(push_constants);
-    let pipeline_layout = unsafe { ctx.device.create_pipeline_layout(&pipe_layout_info, None)? };
-
-    let mut shader_group_info = RayTracingShaderGroupInfo {
-        group_count: shaders_create_info.len() as u32,
-        ..Default::default()
-    };
-
-    let mut modules = vec![];
-    let mut stages = vec![];
-    let mut groups = vec![];
-
-    let entry_point_name: CString = CString::new("main").unwrap();
-
-    for shader in shaders_create_info.iter() {
-        let mut this_modules = vec![];
-        let mut this_stages = vec![];
-
-        shader.source.into_iter().for_each(|s| {
-            let module = module_from_bytes(&ctx.device, s.0).unwrap();
-            let stage = vk::PipelineShaderStageCreateInfo::builder()
-                .stage(s.1)
-                .module(module)
-                .name(&entry_point_name)
-                .build();
-            this_modules.push(module);
-            this_stages.push(stage);
-        });
-
-        match shader.group {
-            RayTracingShaderGroup::RayGen => shader_group_info.raygen_shader_count += 1,
-            RayTracingShaderGroup::Miss => shader_group_info.miss_shader_count += 1,
-            RayTracingShaderGroup::Hit => shader_group_info.hit_shader_count += 1,
-        };
-
-        let shader_index = stages.len();
-
-        let mut group = vk::RayTracingShaderGroupCreateInfoKHR::builder()
-            .ty(vk::RayTracingShaderGroupTypeKHR::GENERAL)
-            .general_shader(vk::SHADER_UNUSED_KHR)
-            .closest_hit_shader(vk::SHADER_UNUSED_KHR)
-            .any_hit_shader(vk::SHADER_UNUSED_KHR)
-            .intersection_shader(vk::SHADER_UNUSED_KHR);
-        group = match shader.group {
-            RayTracingShaderGroup::RayGen | RayTracingShaderGroup::Miss => {
-                group.general_shader(shader_index as _)
-            }
-            RayTracingShaderGroup::Hit => {
-                group = group
-                    .ty(vk::RayTracingShaderGroupTypeKHR::TRIANGLES_HIT_GROUP)
-                    .closest_hit_shader(shader_index as _);
-                if shader.source.len() >= 2 {
-                    group = group
-                        .ty(vk::RayTracingShaderGroupTypeKHR::TRIANGLES_HIT_GROUP)
-                        .any_hit_shader((shader_index as u32) + 1);
-                }
-                if shader.source.len() >= 3 {
-                    group = group
-                        .ty(vk::RayTracingShaderGroupTypeKHR::PROCEDURAL_HIT_GROUP)
-                        .any_hit_shader((shader_index as u32) + 1)
-                        .intersection_shader((shader_index as u32) + 2);
-                }
-
-                group
-            }
-        };
-
-        modules.append(&mut this_modules);
-        stages.append(&mut this_stages);
-        groups.push(group.build());
+#[repr(C)]
+#[derive(Default, Clone, Copy)]
+struct Octant {
+    empty: bool,
+    color: u32,
+    rt: Vec3,
+    lb: Vec3,
+    children: [u32; 8]
+}
+fn build_oct_tree(tree: &mut Vec<Octant>, depth: i32, lb: Vec3, rt: Vec3, c: u32) {
+    let mut node = Octant::default();
+    node.empty = false;
+    node.color = 0;
+    // node.lb = {
+    //     let depth = depth as f32;
+    //     match c {
+    //     0 => {vec3(lb.x,           lb.y + depth,    lb.z)},
+    //     1 => {vec3(lb.x,           lb.y + depth,  lb.z + depth)},
+    //     3 => {vec3(lb.x + depth, lb.y + depth,    lb.z)},
+    //     2 => {vec3(lb.x + depth, lb.y + depth,  lb.z + depth)},
+    //     4 => {vec3(lb.x,            lb.y,   lb.z)},
+    //     5 => {vec3(lb.x,            lb.y, lb.z + depth)},
+    //     7 => {vec3(lb.x + depth, lb.y,  lb.z)},
+    //     6 => {vec3(lb.x + depth, lb.y, lb.z + depth)},
+    //     _=> {panic!("???")}
+    // }};
+    // node.rt = {
+    //     let depth = depth as f32;
+    //     match c {
+    //         0 => {vec3(rt.x,           rt.y - depth,    rt.z)},
+    //         1 => {vec3(rt.x,           rt.y - depth,  rt.z - depth)},
+    //         3 => {vec3(rt.x - depth, rt.y - depth,    rt.z)},
+    //         2 => {vec3(rt.x - depth, rt.y - depth,  rt.z - depth)},
+    //         4 => {vec3(rt.x,            rt.y,   rt.z)},
+    //         5 => {vec3(rt.x,            rt.y, rt.z - depth)},
+    //         7 => {vec3(rt.x - depth, rt.y,  rt.z)},
+    //         6 => {vec3(rt.x - depth, rt.y, rt.z - depth)},
+    //         _=> {panic!("???")}
+    // }};
+    node.lb = vec3(4.0, 4.0, 4.0);
+    node.rt = vec3(-4.0, -4.0, -4.0);
+    if depth == 0 {
+        node.color = 0x00ff00ff;//min(rand::random::<u32>(), u32::MAX - 1) + 1;
+        tree.push(node);
+        return;
     }
-
-    let pipe_info = vk::RayTracingPipelineCreateInfoKHR::builder()
-        .layout(pipeline_layout)
-        .stages(&stages)
-        .groups(&groups)
-        .max_pipeline_ray_recursion_depth(1);
-
-    let inner = unsafe {
-        ctx.ray_tracing.pipeline_fn.create_ray_tracing_pipelines(
-            vk::DeferredOperationKHR::null(),
-            vk::PipelineCache::null(),
-            std::slice::from_ref(&pipe_info),
-            None,
-        )?[0]
-    };
-
-    Ok(RayTracingPipeline {
-        handle: inner,
-        descriptor_set_layout: static_dsl,
-        dynamic_layout: dynamic_dsl,
-        layout: pipeline_layout,
-        shader_group_info,
-    })
-}
-
-#[derive(Debug, Clone)]
-pub struct RayTracingShaderCreateInfo<'a> {
-    pub source: &'a [(&'a [u8], vk::ShaderStageFlags)],
-    pub group: RayTracingShaderGroup,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub enum RayTracingShaderGroup {
-    RayGen,
-    Miss,
-    Hit,
+    for mut c in node.children {
+        build_oct_tree(tree, depth-1, node.lb, node.rt, c);
+        c = tree.len() as u32;
+    }
+    tree.push(node);
 }
 
 struct StorageImages {
@@ -590,7 +385,6 @@ struct StorageImages {
 fn create_storage_images<'a>(
     ctx: &mut Context,
     g_buffer_pipeline: &RasterPipeline,
-    window_size: PhysicalSize<u32>,
 ) -> Result<StorageImages> {
     let size = ctx.swapchain.images.len();
     let color_buffers = (0..size)
@@ -603,8 +397,8 @@ fn create_storage_images<'a>(
                     | vk::ImageUsageFlags::INPUT_ATTACHMENT,
                 MemoryLocation::GpuOnly,
                 vk::Format::R32G32B32A32_SFLOAT,
-                window_size.width,
-                window_size.height,
+                WINDOW_SIZE.width,
+                WINDOW_SIZE.height,
             )
             .unwrap();
             let image_view = ctx.create_image_view(&image).unwrap();
@@ -621,8 +415,8 @@ fn create_storage_images<'a>(
                     | vk::ImageUsageFlags::INPUT_ATTACHMENT,
                 MemoryLocation::GpuOnly,
                 vk::Format::R32_SFLOAT,
-                window_size.width,
-                window_size.height,
+                WINDOW_SIZE.width,
+                WINDOW_SIZE.height,
             )
             .unwrap();
             let image_view = ctx.create_image_view(&image).unwrap();
@@ -639,8 +433,8 @@ fn create_storage_images<'a>(
             let create_info = vk::FramebufferCreateInfo::builder()
                 .attachment_count(2)
                 .attachments(&attachments)
-                .height(window_size.height)
-                .width(window_size.width)
+                .height(WINDOW_SIZE.height)
+                .width(WINDOW_SIZE.width)
                 .layers(1)
                 .render_pass(g_buffer_pipeline.render_pass);
             unsafe { ctx.device.create_framebuffer(&create_info, None) }.unwrap()

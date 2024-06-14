@@ -26,6 +26,8 @@ use simple_logger::SimpleLogger;
 use std::slice::from_ref;
 use winit::dpi::PhysicalSize;
 
+use crate::DEVICE_EXTENSIONS;
+
 pub const FRAMES_IN_FLIGHT: u32 = 2;
 
 pub struct Context {
@@ -54,11 +56,16 @@ impl Context {
     pub fn new(
         window_handle: RawWindowHandle,
         display_handle: RawDisplayHandle,
-        app_name: &str,
-        required_extensions: &[&str],
         required_device_features: DeviceFeatures,
         window_size: PhysicalSize<u32>,
     ) -> Result<Self> {
+        let required_extensions = DEVICE_EXTENSIONS
+            .into_iter()
+            .map(|e| e.to_str().unwrap())
+            .collect::<Vec<_>>();
+        let required_extensions = required_extensions.as_slice();
+
+
         SimpleLogger::default().env().init().unwrap();
         let entry = unsafe { Entry::load()? };
 
