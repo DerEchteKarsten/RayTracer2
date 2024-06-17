@@ -15,7 +15,7 @@ use gpu_allocator::MemoryLocation;
 
 use ash::Device;
 
-use glam::{vec3, Vec3, Vec4};
+use glam::{vec3, vec4, Vec3, Vec4, Vec4Swizzles};
 use std::cmp::min;
 use std::default::Default;
 use std::ffi::{CStr, CString};
@@ -39,7 +39,7 @@ struct ComputePipeline {
     pub descriptor_layouts: Box<[vk::DescriptorSetLayout]>,
 }
 
-const DEVICE_EXTENSIONS: [&'static CStr; 9] = [
+const DEVICE_EXTENSIONS: [&'static CStr; 10] = [
     khr::Swapchain::name(),
     vk::ExtDescriptorIndexingFn::name(),
     vk::ExtScalarBlockLayoutFn::name(),
@@ -49,6 +49,7 @@ const DEVICE_EXTENSIONS: [&'static CStr; 9] = [
     vk::KhrShaderFloatControlsFn::name(),
     vk::KhrBufferDeviceAddressFn::name(),
     KhrShaderNonSemanticInfoFn::name(),
+    vk::KhrWorkgroupMemoryExplicitLayoutFn::name()
 ];
 
 const APP_NAME: &'static str = "Test";
@@ -124,8 +125,7 @@ fn main() {
         .unwrap();
 
     let mut oct_tree_data = Vec::new();
-    build_oct_tree(&mut oct_tree_data, 0, Vec3::ZERO, Vec3::ZERO, 0);
-
+    build_oct_tree(&mut oct_tree_data, 5);
     let oct_tree_buffer = ctx.create_gpu_only_buffer_from_data(vk::BufferUsageFlags::STORAGE_BUFFER, oct_tree_data.as_slice(), Some("OctTreeData")).unwrap();
 
     let raytracing_pipeline = create_fullscreen_quad_pipeline(&mut ctx, &uniform_buffer, &oct_tree_buffer).unwrap();
@@ -324,59 +324,29 @@ fn main() {
 }
 
 #[repr(C)]
-#[derive(Default, Clone, Copy)]
+#[derive(Default, Debug, Clone, Copy)]
 struct Octant {
-    empty: bool,
-    color: u32,
-    rt: Vec3,
-    lb: Vec3,
-    children: [u32; 8]
+    children: [u32; 8],
+    empty_color: u32,
 }
-fn build_oct_tree(tree: &mut Vec<Octant>, depth: i32, lb: Vec3, rt: Vec3, c: u32) {
-    let mut node = Octant::default();
-    node.empty = false;
-    node.color = 0;
-    // node.lb = {
-    //     let depth = depth as f32;
-    //     match c {
-    //     0 => {vec3(lb.x,           lb.y + depth,    lb.z)},
-    //     1 => {vec3(lb.x,           lb.y + depth,  lb.z + depth)},
-    //     3 => {vec3(lb.x + depth, lb.y + depth,    lb.z)},
-    //     2 => {vec3(lb.x + depth, lb.y + depth,  lb.z + depth)},
-    //     4 => {vec3(lb.x,            lb.y,   lb.z)},
-    //     5 => {vec3(lb.x,            lb.y, lb.z + depth)},
-    //     7 => {vec3(lb.x + depth, lb.y,  lb.z)},
-    //     6 => {vec3(lb.x + depth, lb.y, lb.z + depth)},
-    //     _=> {panic!("???")}
-    // }};
-    // node.rt = {
-    //     let depth = depth as f32;
-    //     match c {
-    //         0 => {vec3(rt.x,           rt.y - depth,    rt.z)},
-    //         1 => {vec3(rt.x,           rt.y - depth,  rt.z - depth)},
-    //         3 => {vec3(rt.x - depth, rt.y - depth,    rt.z)},
-    //         2 => {vec3(rt.x - depth, rt.y - depth,  rt.z - depth)},
-    //         4 => {vec3(rt.x,            rt.y,   rt.z)},
-    //         5 => {vec3(rt.x,            rt.y, rt.z - depth)},
-    //         7 => {vec3(rt.x - depth, rt.y,  rt.z)},
-    //         6 => {vec3(rt.x - depth, rt.y, rt.z - depth)},
-    //         _=> {panic!("???")}
-    // }};
-    node.lb = vec3(4.0, 4.0, 4.0);
-    node.rt = vec3(-4.0, -4.0, -4.0);
-    if depth == 0 {
-        node.color = rand::random::<u32>();
-        if node.color == 0 {
-            node.color += 1;
-        }
-        tree.push(node);
-        return;
-    }
-    for mut c in node.children {
-        build_oct_tree(tree, depth-1, node.lb, node.rt, c);
-        c = tree.len() as u32;
-    }
+fn build_oct_tree(tree: &mut Vec<Octant>, depth: u32) {
+    let mut node: Octant = Octant::default();
+    let index = tree.len();
     tree.push(node);
+    
+    if depth != 0 {
+        for c in node.children.iter_mut() {
+            *c = tree.len() as u32;
+            build_oct_tree(tree, depth-1);
+        }
+    }
+    if false {// rand::random() && depth < 1 {
+        node.empty_color = 0;
+    }else {
+        node.empty_color = rand::random::<u32>();
+        if node.empty_color == 0 {node.empty_color+=1;}
+    }
+    tree[index] = node;
 }
 
 struct StorageImages {
@@ -847,7 +817,7 @@ fn create_fullscreen_quad_pipeline(
             .binding(0)
             .descriptor_count(1)
             .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
-            .stage_flags(vk::ShaderStageFlags::VERTEX)
+            .stage_flags(vk::ShaderStageFlags::FRAGMENT)
             .build(),
         vk::DescriptorSetLayoutBinding::builder()
             .binding(1)

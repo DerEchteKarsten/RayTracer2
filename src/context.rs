@@ -501,6 +501,8 @@ impl Context {
     where
         F: FnOnce(&mut Context, u32),
     {
+        let before = Instant::now();
+
         let (image_index, frame_index) = {
             let frame_index: u64 = (self.frame + 1) % FRAMES_IN_FLIGHT as u64;
             let frame = &self.frames_in_flight[frame_index as usize];
@@ -553,12 +555,10 @@ impl Context {
             ))
             .build();
 
-        let before = Instant::now();
         unsafe {
             self.device
                 .queue_submit2(self.graphics_queue, &[submit_info], frame.fence.handel)?;
         };
-        debug!("{:?}", Instant::now().duration_since(before));
 
         let rf = &[frame.render_finished];
         let sc = &[self.swapchain.vk_swapchain];
@@ -580,6 +580,7 @@ impl Context {
             }
             Ok(v) => {}
         };
+        debug!("{:?}", Instant::now().duration_since(before));
         Ok(frame_index)
     }
 
