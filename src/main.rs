@@ -125,7 +125,7 @@ fn main() {
         .unwrap();
 
     let mut oct_tree_data = Vec::new();
-    build_oct_tree(&mut oct_tree_data, 6);
+    build_oct_tree(&mut oct_tree_data, 9, 9);
     // for (n, i) in oct_tree_data.iter().enumerate() {
     //     println!("{} {:#08x}", n, i);
     // }
@@ -330,7 +330,7 @@ fn main() {
  
              */
 
-fn build_oct_tree(tree: &mut Vec<u32>, depth: u32){
+fn build_oct_tree(tree: &mut Vec<u32>, depth: u32, max_depth: u32){
     
     let mut none_leafs = 1;
     for j in 0..depth {
@@ -338,7 +338,7 @@ fn build_oct_tree(tree: &mut Vec<u32>, depth: u32){
         none_leafs = 0;
         for _ in 0..count*8 {
             let i = tree.len() as u32;
-            let node = if rand::random() {
+            let node = if rand::random::<f32>() < 1.0/(depth as f32) {
                 0xa000_0000
             }else if j == depth-1 {
                 none_leafs+=1;

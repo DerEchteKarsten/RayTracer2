@@ -3,7 +3,7 @@ use std::time::Duration;
 use glam::{vec3, Mat3, Mat4, Quat, Vec3, Vec4};
 use winit::event::{DeviceEvent, ElementState, Event, KeyboardInput, MouseButton, WindowEvent};
 
-const MOVE_SPEED: f32 = 20.0;
+const MOVE_SPEED: f32 = 2.0;
 const ANGLE_PER_POINT: f32 = 0.0009;
 
 const UP: Vec3 = vec3(0.0, 1.0, 0.0);

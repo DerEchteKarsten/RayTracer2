@@ -580,7 +580,7 @@ impl Context {
             }
             Ok(v) => {}
         };
-        // debug!("{:?}", Instant::now().duration_since(before));
+        debug!("{:?}", Instant::now().duration_since(before));
         Ok(frame_index)
     }
 

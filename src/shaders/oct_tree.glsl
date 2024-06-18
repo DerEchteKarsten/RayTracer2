@@ -62,7 +62,7 @@ bool Octree_RayMarchLeaf(vec3 o, vec3 d, out vec3 o_pos, out vec3 o_color, out v
 			vec3 t_center = half_scale_exp2 * t_coef + t_corner;
 
 			if (t_min <= tv_max) {
-				if ((cur & 0x4000_0000u) != 0) // leaf node
+				if ((cur & 0x40000000u) != 0) // leaf node
 					break;
 
 				// PUSH
