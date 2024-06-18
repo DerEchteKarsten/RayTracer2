@@ -125,7 +125,10 @@ fn main() {
         .unwrap();
 
     let mut oct_tree_data = Vec::new();
-    build_oct_tree(&mut oct_tree_data, 5);
+    build_oct_tree(&mut oct_tree_data, 6);
+    // for (n, i) in oct_tree_data.iter().enumerate() {
+    //     println!("{} {:#08x}", n, i);
+    // }
     let oct_tree_buffer = ctx.create_gpu_only_buffer_from_data(vk::BufferUsageFlags::STORAGE_BUFFER, oct_tree_data.as_slice(), Some("OctTreeData")).unwrap();
 
     let raytracing_pipeline = create_fullscreen_quad_pipeline(&mut ctx, &uniform_buffer, &oct_tree_buffer).unwrap();
@@ -323,30 +326,30 @@ fn main() {
     });
 }
 
-#[repr(C)]
-#[derive(Default, Debug, Clone, Copy)]
-struct Octant {
-    children: [u32; 8],
-    empty_color: u32,
-}
-fn build_oct_tree(tree: &mut Vec<Octant>, depth: u32) {
-    let mut node: Octant = Octant::default();
-    let index = tree.len();
-    tree.push(node);
+/*
+ 
+             */
+
+fn build_oct_tree(tree: &mut Vec<u32>, depth: u32){
     
-    if depth != 0 {
-        for c in node.children.iter_mut() {
-            *c = tree.len() as u32;
-            build_oct_tree(tree, depth-1);
+    let mut none_leafs = 1;
+    for j in 0..depth {
+        let count = none_leafs;
+        none_leafs = 0;
+        for _ in 0..count*8 {
+            let i = tree.len() as u32;
+            let node = if rand::random() {
+                0xa000_0000
+            }else if j == depth-1 {
+                none_leafs+=1;
+                0xC000_0000 + rand::random::<u32>() % 2_u32.pow(24)
+            }else {
+                none_leafs+=1;
+                0x8000_0008 + i * 8
+            };
+            tree.push(node);
         }
     }
-    if rand::random() && depth < 1 {
-        node.empty_color = 0;
-    }else {
-        node.empty_color = rand::random::<u32>();
-        if node.empty_color == 0 {node.empty_color+=1;}
-    }
-    tree[index] = node;
 }
 
 struct StorageImages {

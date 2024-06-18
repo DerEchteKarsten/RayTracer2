@@ -10,6 +10,7 @@
 // #extension GL_EXT_shader_explicit_arithmetic_types_float32 : enable
 // #extension GL_EXT_shader_explicit_arithmetic_types_float64 : enable
 
+#include "./oct_tree.glsl"
 #include "./common.glsl"
 struct Octant {
     uint32_t children[8];
@@ -221,7 +222,7 @@ HitInfo traverse2(Ray ray) {
         vec3 pos = pos_b.xyz;
 
         HitInfo bounds_hit = bounding_box(ray, pos, vec3(bounds));
-        if(!bounds_hit.hit || state.closest_dist < bounds_hit.closest_dist) {
+        if(!bounds_hit.hit || state.closest_dist < bounds_hit.closest_dist || node.empty_color == 0) {
             continue;
         } 
 
@@ -244,15 +245,16 @@ HitInfo traverse2(Ray ray) {
             for(int i = 0; i < 4; ++i) {
                 uint32_t child_node = node.children[closest_node_index];
                 Octant child = oct_tree.pool[child_node];
-                if(child.empty_color != 0) {
-                    node_stack[stack_index++] = child;
-                    bounds_stack[bounds_index++] = vec4(calc_new_pos(pos + vec3(bounds/4), closest_node_index, bounds/4.0), bounds / 2.0);
+                if(child.empty_color == 0) {
+                    continue;
                 }
+                node_stack[stack_index++] = child;
+                bounds_stack[bounds_index++] = vec4(calc_new_pos(pos + vec3(bounds/4), closest_node_index, bounds/4.0), bounds / 2.0);
                 // if (state.hit) {
                 //     break;
                 // }
                 int plane_index = closest_plane_hit(plane_hits);
-                if (plane_index == -1 || box_point(ray.org + ray.dir * plane_hits[plane_index].closest_dist, pos, pos+vec3(bounds))) {
+                if (plane_index == -1) { //|| box_point(ray.org + ray.dir * plane_hits[plane_index].closest_dist, pos, pos+vec3(bounds))) {
                     break;
                 }
                 closest_node_index ^= 0x1 << plane_index;
@@ -290,14 +292,15 @@ void main() {
     //     debugPrintfEXT("i: %d", i);
     // }}
 
-    Ray ray = Ray(direction.xyz, origin.xyz);
+    vec3 o_pos;
+    vec3 o_color;
+    vec3 o_normal;
+    bool hit = Octree_RayMarchLeaf(origin.xyz, direction.xyz, o_pos, o_color, o_normal);
 
-    HitInfo hit = traverse2(ray);
-
-    if (hit.hit) {
-        outColor = vec4(hit.color, 1.0);
+    if (hit) {
+        outColor = vec4(o_color, 1.0);
     } else {
         outColor = direction;
     }
-    outDepth = hit.closest_dist;
+    outDepth = 1.0f;
 }
