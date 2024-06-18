@@ -111,19 +111,21 @@ HitInfo ray_plane(Ray ray, vec3 normal, vec3 center, float side_length) {
     if (d < 0.0) {
         return hit;
     }
+    hit.hit = d >= 0;
+    hit.closest_dist = d;
+    return hit;
+    // vec3 intersection_point = ray.org + d * ray.dir;
     
-    vec3 intersection_point = ray.org + d * ray.dir;
+    // vec3 plane_center_to_point = intersection_point - center;
+    // vec3 u = plane_center_to_point - dot(plane_center_to_point, normal) * normal;
     
-    vec3 plane_center_to_point = intersection_point - center;
-    vec3 u = plane_center_to_point - dot(plane_center_to_point, normal) * normal;
-    
-    if (all(lessThanEqual(abs(u), vec3(side_length / 2.0)))) {
-        hit.hit = true;
-        hit.closest_dist = d;
-        return hit;
-    } else {
-        return hit;
-    }
+    // if (all(lessThanEqual(abs(u), vec3(side_length / 2.0)))) {
+    //     hit.hit = true;
+    //     hit.closest_dist = d;
+    //     return hit;
+    // } else {
+    //     return hit;
+    // }
 }
 
 int KthBit(int n, int k)
@@ -246,11 +248,11 @@ HitInfo traverse2(Ray ray) {
                     node_stack[stack_index++] = child;
                     bounds_stack[bounds_index++] = vec4(calc_new_pos(pos + vec3(bounds/4), closest_node_index, bounds/4.0), bounds / 2.0);
                 }
-                if (state.hit) {
-                    break;
-                }
+                // if (state.hit) {
+                //     break;
+                // }
                 int plane_index = closest_plane_hit(plane_hits);
-                if (plane_index == -1) {
+                if (plane_index == -1 || box_point(ray.org + ray.dir * plane_hits[plane_index].closest_dist, pos, pos+vec3(bounds))) {
                     break;
                 }
                 closest_node_index ^= 0x1 << plane_index;

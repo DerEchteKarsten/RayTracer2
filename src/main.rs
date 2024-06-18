@@ -340,7 +340,7 @@ fn build_oct_tree(tree: &mut Vec<Octant>, depth: u32) {
             build_oct_tree(tree, depth-1);
         }
     }
-    if false {// rand::random() && depth < 1 {
+    if rand::random() && depth < 1 {
         node.empty_color = 0;
     }else {
         node.empty_color = rand::random::<u32>();
