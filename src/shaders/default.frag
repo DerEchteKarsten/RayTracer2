@@ -32,6 +32,8 @@ layout(binding = 0, set = 0) uniform CameraProperties
 layout(location = 0) out vec4 outColor;
 layout(location = 1) out float outDepth;
 
+const vec3 light_dir = normalize(vec3(0.25, 1.0, 0.5));
+
 void main() {
 
     const vec2 pixelCenter = vec2(gl_FragCoord.xy) + vec2(0.5);
@@ -65,7 +67,7 @@ void main() {
     bool hit = Octree_RayMarchLeaf(origin.xyz, direction.xyz, o_pos, o_color, o_normal);
 
     if (hit) {
-        outColor = vec4(o_color, 1.0);
+        outColor = vec4(o_color * (abs(dot(o_normal, light_dir)) + 0.2), 0.0);
     } else {
         outColor = direction;
     }

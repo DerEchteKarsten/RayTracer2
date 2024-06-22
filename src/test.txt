@@ -1,0 +1,119 @@
+[
+    [
+        EMPTY
+        [
+            [
+                EMPTY
+                [ 
+                    COLOR EMPTY EMPTY EMPTY EMPTY EMPTY EMPTY EMPTY
+                ]
+                EMPTY EMPTY EMPTY EMPTY EMPTY EMPTY
+            ]
+            EMPTY EMPTY EMPTY EMPTY EMPTY EMPTY EMPTY
+        ]
+        EMPTY EMPTY EMPTY EMPTY EMPTY EMPTY
+    ]
+
+    [
+        EMPTY
+        [
+            EMPTY
+            [
+                EMPTY
+                [
+                    EMPTY COLOR EMPTY EMPTY EMPTY EMPTY EMPTY EMPTY
+                ]
+                EMPTY EMPTY EMPTY EMPTY EMPTY EMPTY
+            ]
+            EMPTY EMPTY EMPTY EMPTY EMPTY EMPTY
+        ]
+        EMPTY EMPTY EMPTY EMPTY EMPTY EMPTY
+    ]
+
+    [
+        EMPTY EMPTY EMPTY
+        [
+            EMPTY EMPTY
+            [
+                EMPTY EMPTY EMPTY
+                [
+                    EMPTY EMPTY COLOR EMPTY EMPTY EMPTY EMPTY EMPTY
+                ]
+                EMPTY EMPTY EMPTY EMPTY
+            ]
+            EMPTY EMPTY EMPTY EMPTY EMPTY
+        ]
+        EMPTY EMPTY EMPTY EMPTY
+    ]
+
+    [
+        EMPTY EMPTY EMPTY
+        [
+            EMPTY EMPTY EMPTY
+            [
+                EMPTY EMPTY EMPTY
+                [
+                    EMPTY EMPTY EMPTY COLOR EMPTY EMPTY EMPTY EMPTY
+                ]   
+                EMPTY EMPTY EMPTY 
+            ]   
+            EMPTY EMPTY EMPTY EMPTY
+        ]   
+        EMPTY EMPTY EMPTY EMPTY
+    ]  
+    [
+        EMPTY EMPTY EMPTY EMPTY EMPTY
+        [
+            EMPTY EMPTY EMPTY EMPTY
+            [
+                EMPTY EMPTY EMPTY EMPTY EMPTY
+                [
+                    EMPTY EMPTY EMPTY EMPTY COLOR EMPTY EMPTY EMPTY
+                ]   
+                EMPTY EMPTY
+            ]   
+            EMPTY EMPTY EMPTY
+        ]   
+        EMPTY EMPTY
+    ]  
+    [
+        EMPTY EMPTY EMPTY EMPTY EMPTY
+        [
+            EMPTY EMPTY EMPTY EMPTY EMPTY
+            [
+                EMPTY EMPTY EMPTY EMPTY EMPTY
+                [
+                    EMPTY EMPTY EMPTY EMPTY EMPTY COLOR EMPTY EMPTY
+                ]   
+                EMPTY EMPTY
+            ]   
+            EMPTY EMPTY
+        ]   
+        EMPTY EMPTY
+    ]
+    [
+        EMPTY EMPTY EMPTY EMPTY EMPTY EMPTY EMPTY
+        [
+            EMPTY EMPTY EMPTY EMPTY EMPTY EMPTY
+            [
+                EMPTY EMPTY EMPTY EMPTY EMPTY EMPTY EMPTY
+                [
+                    EMPTY EMPTY EMPTY EMPTY EMPTY EMPTY COLOR EMPTY
+                ]
+            ]   
+            EMPTY
+        ]  
+    ]  
+    [
+        EMPTY EMPTY EMPTY EMPTY EMPTY EMPTY EMPTY
+        [
+            EMPTY EMPTY EMPTY EMPTY EMPTY EMPTY EMPTY
+            [
+                EMPTY EMPTY EMPTY EMPTY EMPTY EMPTY EMPTY
+                [
+                    EMPTY EMPTY EMPTY EMPTY EMPTY EMPTY EMPTY COLOR
+                ]
+            ]  
+        ]  
+    ]  
+]  

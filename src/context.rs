@@ -1,6 +1,6 @@
 use std::{
     borrow::BorrowMut,
-    ffi::{c_char, CStr},
+    ffi::{c_char, CStr, CString},
     mem::{align_of, size_of, size_of_val},
     num,
     ops::Sub,
@@ -580,7 +580,7 @@ impl Context {
             }
             Ok(v) => {}
         };
-        debug!("{:?}", Instant::now().duration_since(before));
+        // debug!("{:?}", Instant::now().duration_since(before));
         Ok(frame_index)
     }
 
@@ -1999,4 +1999,143 @@ pub fn queue_submit(
     unsafe { device.queue_submit2(*queue, std::slice::from_ref(&submit_info), fence.handel)? };
 
     Ok(())
+}
+
+
+pub fn read_shader_from_bytes(bytes: &[u8]) -> Result<Vec<u32>> {
+    let mut cursor = std::io::Cursor::new(bytes);
+    Ok(ash::util::read_spv(&mut cursor)?)
+}
+
+pub fn module_from_bytes(device: &Device, source: &[u8]) -> Result<vk::ShaderModule> {
+    let source = read_shader_from_bytes(source)?;
+
+    let create_info = vk::ShaderModuleCreateInfo::builder().code(&source);
+    let res = unsafe { device.create_shader_module(&create_info, None) }?;
+    Ok(res)
+}
+
+
+struct ComputePipeline {
+    pub handel: vk::Pipeline,
+    pub descriptors: Box<[Box<[vk::DescriptorSet]>]>,
+    pub layout: vk::PipelineLayout,
+    pub descriptor_layouts: Box<[vk::DescriptorSetLayout]>,
+}
+
+struct ComputeBinding {
+    pub ty: vk::DescriptorType,
+    pub count: u32,
+}
+
+pub fn create_compute_pipeline(
+    ctx: &mut Context,
+    writes: Box<[Box<[Box<[WriteDescriptorSet]>]>]>,
+    layout: Box<[Box<[ComputeBinding]>]>,
+
+    push_constant_ranges: &[vk::PushConstantRange],
+    shader: &[u8],
+) -> ComputePipeline {
+    let mut layouts = Vec::with_capacity(layout.len());
+    for set in layout.iter() {
+        let mut bindings = Vec::with_capacity(writes.len());
+        for (i, b) in set.iter().enumerate() {
+            bindings.push(
+                vk::DescriptorSetLayoutBinding::builder()
+                    .descriptor_count(b.count)
+                    .descriptor_type(b.ty)
+                    .binding(i as u32)
+                    .stage_flags(vk::ShaderStageFlags::COMPUTE)
+                    .build(),
+            );
+        }
+        layouts.push(create_descriptor_set_layout(&ctx.device, bindings.as_slice(), &[]).unwrap());
+    }
+
+    let layout = unsafe {
+        ctx.device
+            .create_pipeline_layout(
+                &vk::PipelineLayoutCreateInfo::builder()
+                    .set_layouts(layouts.as_slice())
+                    .push_constant_ranges(push_constant_ranges)
+                    .build(),
+                None,
+            )
+            .unwrap()
+    };
+    let entry_point_name = CString::new("main").unwrap();
+    let compute_module = module_from_bytes(&ctx.device, shader).unwrap();
+    let compute_stage = vk::PipelineShaderStageCreateInfo::builder()
+        .module(compute_module)
+        .name(&entry_point_name)
+        .stage(vk::ShaderStageFlags::COMPUTE)
+        .build();
+    let create_info = vk::ComputePipelineCreateInfo::builder()
+        .stage(compute_stage)
+        .layout(layout)
+        .build();
+    let handel = unsafe {
+        ctx.device
+            .create_compute_pipelines(vk::PipelineCache::null(), &[create_info], None)
+            .unwrap()
+    }[0];
+
+    let mut descriptors = Vec::with_capacity(writes.len());
+    for (i, descriptor) in writes.iter().enumerate() {
+        let mut sets = Vec::with_capacity(descriptor.len());
+        for set in descriptor.iter() {
+            let mut pool_sizes = Vec::with_capacity(writes.len());
+            for w in set.iter() {
+                pool_sizes.push(match w.kind {
+                    WriteDescriptorSetKind::CombinedImageSampler {
+                        layout: _,
+                        sampler: _,
+                        view: _,
+                    } => vk::DescriptorPoolSize::builder()
+                        .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                        .descriptor_count(1)
+                        .build(),
+                    WriteDescriptorSetKind::StorageBuffer { buffer: _ } => {
+                        vk::DescriptorPoolSize::builder()
+                            .ty(vk::DescriptorType::STORAGE_BUFFER)
+                            .descriptor_count(1)
+                            .build()
+                    }
+                    WriteDescriptorSetKind::AccelerationStructure {
+                        acceleration_structure: _,
+                    } => vk::DescriptorPoolSize::builder()
+                        .ty(vk::DescriptorType::ACCELERATION_STRUCTURE_KHR)
+                        .descriptor_count(1)
+                        .build(),
+                    WriteDescriptorSetKind::StorageImage { view: _, layout: _ } => {
+                        vk::DescriptorPoolSize::builder()
+                            .ty(vk::DescriptorType::STORAGE_IMAGE)
+                            .descriptor_count(1)
+                            .build()
+                    }
+                    WriteDescriptorSetKind::UniformBuffer { buffer: _ } => {
+                        vk::DescriptorPoolSize::builder()
+                            .ty(vk::DescriptorType::UNIFORM_BUFFER)
+                            .descriptor_count(1)
+                            .build()
+                    }
+                })
+            }
+
+            let pool = ctx.create_descriptor_pool(1, &pool_sizes).unwrap();
+            let descriptor = allocate_descriptor_set(&ctx.device, &pool, &layouts[i]).unwrap();
+            for w in set.iter() {
+                update_descriptor_sets(ctx, &descriptor, &[w.clone()]);
+            }
+            sets.push(descriptor);
+        }
+        descriptors.push(Box::from(sets.as_slice()));
+    }
+
+    ComputePipeline {
+        descriptors: Box::from(descriptors.as_slice()),
+        handel,
+        layout,
+        descriptor_layouts: Box::from(layouts.as_slice()),
+    }
 }

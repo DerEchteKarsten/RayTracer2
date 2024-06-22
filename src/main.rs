@@ -2,8 +2,6 @@ mod context;
 use context::*;
 mod camera;
 use camera::*;
-mod gltf;
-
 
 use anyhow::Result;
 use ash::extensions::khr::{self};
@@ -11,14 +9,14 @@ use ash::vk::{
     self,
     KhrShaderNonSemanticInfoFn,
 };
+use dot_vox::Voxel;
 use gpu_allocator::MemoryLocation;
 
-use ash::Device;
 
-use glam::{vec3, vec4, Vec3, Vec4, Vec4Swizzles};
-use std::cmp::min;
+use glam::{vec3, BVec3, UVec3, Vec3, Vec4};
 use std::default::Default;
 use std::ffi::{CStr, CString};
+use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use raw_window_handle::{HasRawDisplayHandle, HasRawWindowHandle};
@@ -31,13 +29,6 @@ use winit::{
     event_loop::{ControlFlow, EventLoop},
     window::WindowBuilder,
 };
-
-struct ComputePipeline {
-    pub handel: vk::Pipeline,
-    pub descriptors: Box<[Box<[vk::DescriptorSet]>]>,
-    pub layout: vk::PipelineLayout,
-    pub descriptor_layouts: Box<[vk::DescriptorSetLayout]>,
-}
 
 const DEVICE_EXTENSIONS: [&'static CStr; 10] = [
     khr::Swapchain::name(),
@@ -123,12 +114,10 @@ fn main() {
             Some("Uniform Buffer"),
         )
         .unwrap();
+    
+    let oct_tree_data = load_model().unwrap();
+    //build_oct_tree(3);
 
-    let mut oct_tree_data = Vec::new();
-    build_oct_tree(&mut oct_tree_data, 9, 9);
-    // for (n, i) in oct_tree_data.iter().enumerate() {
-    //     println!("{} {:#08x}", n, i);
-    // }
     let oct_tree_buffer = ctx.create_gpu_only_buffer_from_data(vk::BufferUsageFlags::STORAGE_BUFFER, oct_tree_data.as_slice(), Some("OctTreeData")).unwrap();
 
     let raytracing_pipeline = create_fullscreen_quad_pipeline(&mut ctx, &uniform_buffer, &oct_tree_buffer).unwrap();
@@ -160,7 +149,7 @@ fn main() {
 
 
     let mut moved = false;
-    let mut frame: u32 = 0;
+    // let mut frame: u32 = 0;
     let mut now = Instant::now();
     let mut last_time = Instant::now();
     let mut frame_time = Duration::new(0, 0);
@@ -194,7 +183,7 @@ fn main() {
                 _ => (),
             },
             Event::MainEventsCleared => {
-                frame += 1;
+                // frame += 1;
                 let new_cam = camera.update(&controles, frame_time);
                 moved = new_cam != camera;
                 if moved {
@@ -215,11 +204,11 @@ fn main() {
                     let cmd = &ctx.cmd_buffs[i as usize];
 
                     unsafe {
-                        let frame_c = std::slice::from_raw_parts(
-                            &frame as *const u32 as *const u8,
-                            size_of::<u32>(),
-                        );
-                        let moved_c = &[if moved == true { 1 as u8 } else { 0 as u8 }, 0, 0, 0];
+                        // let frame_c = std::slice::from_raw_parts(
+                        //     &frame as *const u32 as *const u8,
+                        //     size_of::<u32>(),
+                        // );
+                        // let moved_c = &[if moved == true { 1 as u8 } else { 0 as u8 }, 0, 0, 0];
 
                         let begin_info = vk::RenderPassBeginInfo::builder()
                             .clear_values(&[
@@ -326,30 +315,218 @@ fn main() {
     });
 }
 
-/*
- 
-             */
+// let col = (((index % 8) as f32 / 8.0 as f32) * 255.0) as u32;
 
-fn build_oct_tree(tree: &mut Vec<u32>, depth: u32, max_depth: u32){
-    
-    let mut none_leafs = 1;
+#[derive(Debug, Default)]
+struct Octant {
+    children: Option<Box<[Octant;8]>>,
+    color: Option<u32>,
+}
+
+impl Clone for Octant {
+    fn clone(&self) -> Self {
+        Octant {
+            children: match self.children.as_ref() {
+                None => None,
+                Some(children) => Some(children.clone()),
+            },
+            color: self.color,
+        }
+    }
+}
+
+fn print(tree: &Octant, depth: u32, level_dim: u32, level_pos: UVec3, out_voxels: &mut Vec<(UVec3, u32)>) {
+    if let Some(color) = tree.color {
+        // println!("{} Color: {}, {}, {}", std::iter::repeat(" ").take(depth as usize).collect::<String>(), color, level_pos, level_dim);
+        out_voxels.push((level_pos, color))
+    }
+    if let Some(children) = tree.children.as_ref() {
+        // println!("{} Children: {{", std::iter::repeat(" ").take(depth as usize).collect::<String>());
+        for i in 0..8_u32 {
+            let level_dim = level_dim >> 1;
+            let cmp = BVec3::new(i != 0, (i >> 2) != 0, (i >> 3) != 0);
+            let new_pos = level_pos + (UVec3::new(cmp.x as u32 * level_dim, cmp.y as u32 * level_dim, cmp.z as u32 * level_dim));
+            // println!("{}", new_pos);
+            print(&children[i as usize], depth+1, level_dim, new_pos, out_voxels);
+        }
+    }
+    return;
+}
+
+
+fn count(tree: &Octant, depth: u32, total: &mut u32) {
+    if let Some(color) = tree.color {
+        *total+=1;
+        println!("Color: {}", color);
+    }
+    if depth == 0 {
+        return;
+    }
+    if let Some(children) = tree.children.as_ref() {
+        for i in 0..8 {
+            count(&children[i as usize], depth-1, total);
+        }
+    }
+    return;
+}
+
+
+fn filter<T>(tree: &Octant, candidates: &mut Vec<Octant>, predicate: &T) 
+where
+    T: Fn(&Octant) -> bool
+{
+    if predicate(tree) {
+        candidates.push(tree.clone());
+    }
+    if let Some(children) = tree.children.as_ref() {
+        for i in 0..8 {
+            filter(&children[i as usize], candidates, predicate);
+        }
+    }
+    return;
+}
+
+fn append_voxel_model(tree: &mut Octant, color: u32, level_pos: UVec3) {
+    append_voxel(tree, color, 32, level_pos);
+}
+
+fn append_voxel(tree: &mut Octant, color: u32, level_dim: u32, level_pos: UVec3){
+    if level_dim <= 1 {
+        if tree.color.is_some() {
+            println!("Override")
+        }else {
+            tree.color = Some(color);
+        }
+        return;
+    }
+  
+    let level_dim = level_dim >> 1;
+    let cmp = level_pos.cmpge(UVec3::new(level_dim, level_dim, level_dim));
+    let child_slot_index = cmp.x as u32 | (cmp.y as u32) << 1 | (cmp.z as u32) << 2;
+    let new_pos = level_pos - (UVec3::new(cmp.x as u32 * level_dim, cmp.y as u32 * level_dim, cmp.z as u32 * level_dim));
+
+    match tree.children.as_mut() {
+        None => {
+            let mut children: [Octant; 8] = Default::default();
+
+            append_voxel(&mut children[child_slot_index as usize], color, level_dim, new_pos); 
+            tree.children = Some(Box::new(children));
+        }
+        Some(children) => {
+            append_voxel(&mut children[child_slot_index as usize], color, level_dim, new_pos); 
+        }
+    }
+
+}
+
+fn load_model() -> Result<Vec<u32>> {
+    let mut tree = Vec::new();
+    let mut octree = Octant::default();
+    let file = dot_vox::load("./models/chr_knight.vox").unwrap();
+    let models = file.models;
+    for (n, m) in models.iter().enumerate() {
+        for v in m.voxels.iter() {
+            let color = file.palette[v.i as usize];
+            let u32_color = ((color.b as u32) << 16) | ((color.g as u32) << 8) | (color.r as u32);
+            append_voxel_model(&mut octree, u32_color, UVec3::new(v.x as u32, v.z as u32, v.y as u32));
+        }
+    }
+ 
+    let mut candidates = vec![&octree]; 
+    let mut new_candidates = vec![];
+    for _ in 0..10 {
+        let i = tree.len() as u32 + candidates.len() as u32 * 8;
+        for c in &candidates {
+            for child in c.children.as_ref().unwrap().iter() {
+                let node = if child.children.is_some() {
+                    let candidate = new_candidates.len() as u32 ;
+                    new_candidates.push(child);
+                    0x8000_0000 + i + candidate *8 
+                }else {
+                    if let Some(color) = child.color {
+                        0xC000_0000 | color
+                    } else {
+                        0x0000_0000
+                    }
+                };
+                tree.push(node);
+            }
+        }
+       
+        candidates = new_candidates.clone();
+        new_candidates = vec![]
+    }
+    // println!("{:?}", tree);
+    // for (n, i) in tree.iter().enumerate() {
+    //     println!("{} {:#08x}", n, i);
+    // }
+    // let mut out_voxel = vec![];
+    // print(&octree, 0, 8, UVec3::new(0, 0, 0), &mut out_voxel);
+
+    // let mut found_all = true;
+    // for v in out_voxel.iter() {
+    //     let mut found = false;
+    //     for vc in voxels.iter() {
+    //         if *v == *vc {
+    //             found = true;
+    //             break;
+    //         }
+    //     }
+    //     if !found {
+    //         found_all = false;
+    //         println!("not_found: {}, {}", v.0, v.1);
+    //     }
+    // }
+    // if found_all && out_voxel.len() == voxels.len() {
+    //     println!("found all, {} == {}", out_voxel.len(), voxels.len());
+    // }
+    // count(&octree, 8, &mut 0);
+    // println!("{}, {}", voxels, models[0].voxels.len());
+
+    // for j in 0..depth {
+    //     for index in 0..8_u32.pow(j) {
+    //         let i = tree.len() as u32 + 1;
+    //         let node = if j == depth-1 {
+                
+    //             if voxel_here {
+    //                 let col = rand::random::<u32>() % 2_u32.pow(24);
+    //                 0xC000_0000 + col
+    //             } else {
+    //                 0xa000_0000
+    //             }
+    //         }else {
+    //             0x8000_0000 + 8*i 
+    //         };
+    //         tree.push(node);
+    //     }
+    // }
+
+    return Ok(tree);
+}
+
+fn build_oct_tree(depth: u32) -> Vec<u32>{
+    let mut tree = Vec::new();
+    let mut none_empty = 1;
     for j in 0..depth {
-        let count = none_leafs;
-        none_leafs = 0;
+        let count = none_empty;
+        none_empty = 0;
         for _ in 0..count*8 {
-            let i = tree.len() as u32;
-            let node = if rand::random::<f32>() < 1.0/(depth as f32) {
+            let i = tree.len() as u32 + 1;
+            let node = if rand::random::<f32>() < 1.0/((depth-j+1) as f32) {
                 0xa000_0000
             }else if j == depth-1 {
-                none_leafs+=1;
-                0xC000_0000 + rand::random::<u32>() % 2_u32.pow(24)
+                none_empty+=1;
+                // let col = (((index % 8) as f32 / 8.0 as f32) * 255.0) as u32;
+                let col = rand::random::<u32>() % 2_u32.pow(24);
+                0xC000_0000 + col
             }else {
-                none_leafs+=1;
-                0x8000_0008 + i * 8
+                none_empty+=1;
+                0x8000_0000 + 8*i 
             };
             tree.push(node);
         }
     }
+    return tree;
 }
 
 struct StorageImages {
@@ -605,136 +782,6 @@ fn create_post_proccesing_pipelien(
         render_pass,
         descriptors,
     })
-}
-
-pub fn read_shader_from_bytes(bytes: &[u8]) -> Result<Vec<u32>> {
-    let mut cursor = std::io::Cursor::new(bytes);
-    Ok(ash::util::read_spv(&mut cursor)?)
-}
-
-fn module_from_bytes(device: &Device, source: &[u8]) -> Result<vk::ShaderModule> {
-    let source = read_shader_from_bytes(source)?;
-
-    let create_info = vk::ShaderModuleCreateInfo::builder().code(&source);
-    let res = unsafe { device.create_shader_module(&create_info, None) }?;
-    Ok(res)
-}
-
-struct ComputeBinding {
-    pub ty: vk::DescriptorType,
-    pub count: u32,
-}
-
-fn create_compute_pipeline(
-    ctx: &mut Context,
-    writes: Box<[Box<[Box<[WriteDescriptorSet]>]>]>,
-    layout: Box<[Box<[ComputeBinding]>]>,
-
-    push_constant_ranges: &[vk::PushConstantRange],
-    shader: &[u8],
-) -> ComputePipeline {
-    let mut layouts = Vec::with_capacity(layout.len());
-    for set in layout.iter() {
-        let mut bindings = Vec::with_capacity(writes.len());
-        for (i, b) in set.iter().enumerate() {
-            bindings.push(
-                vk::DescriptorSetLayoutBinding::builder()
-                    .descriptor_count(b.count)
-                    .descriptor_type(b.ty)
-                    .binding(i as u32)
-                    .stage_flags(vk::ShaderStageFlags::COMPUTE)
-                    .build(),
-            );
-        }
-        layouts.push(create_descriptor_set_layout(&ctx.device, bindings.as_slice(), &[]).unwrap());
-    }
-
-    let layout = unsafe {
-        ctx.device
-            .create_pipeline_layout(
-                &vk::PipelineLayoutCreateInfo::builder()
-                    .set_layouts(layouts.as_slice())
-                    .push_constant_ranges(push_constant_ranges)
-                    .build(),
-                None,
-            )
-            .unwrap()
-    };
-    let entry_point_name = CString::new("main").unwrap();
-    let compute_module = module_from_bytes(&ctx.device, shader).unwrap();
-    let compute_stage = vk::PipelineShaderStageCreateInfo::builder()
-        .module(compute_module)
-        .name(&entry_point_name)
-        .stage(vk::ShaderStageFlags::COMPUTE)
-        .build();
-    let create_info = vk::ComputePipelineCreateInfo::builder()
-        .stage(compute_stage)
-        .layout(layout)
-        .build();
-    let handel = unsafe {
-        ctx.device
-            .create_compute_pipelines(vk::PipelineCache::null(), &[create_info], None)
-            .unwrap()
-    }[0];
-
-    let mut descriptors = Vec::with_capacity(writes.len());
-    for (i, descriptor) in writes.iter().enumerate() {
-        let mut sets = Vec::with_capacity(descriptor.len());
-        for set in descriptor.iter() {
-            let mut pool_sizes = Vec::with_capacity(writes.len());
-            for w in set.iter() {
-                pool_sizes.push(match w.kind {
-                    WriteDescriptorSetKind::CombinedImageSampler {
-                        layout: _,
-                        sampler: _,
-                        view: _,
-                    } => vk::DescriptorPoolSize::builder()
-                        .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                        .descriptor_count(1)
-                        .build(),
-                    WriteDescriptorSetKind::StorageBuffer { buffer: _ } => {
-                        vk::DescriptorPoolSize::builder()
-                            .ty(vk::DescriptorType::STORAGE_BUFFER)
-                            .descriptor_count(1)
-                            .build()
-                    }
-                    WriteDescriptorSetKind::AccelerationStructure {
-                        acceleration_structure: _,
-                    } => vk::DescriptorPoolSize::builder()
-                        .ty(vk::DescriptorType::ACCELERATION_STRUCTURE_KHR)
-                        .descriptor_count(1)
-                        .build(),
-                    WriteDescriptorSetKind::StorageImage { view: _, layout: _ } => {
-                        vk::DescriptorPoolSize::builder()
-                            .ty(vk::DescriptorType::STORAGE_IMAGE)
-                            .descriptor_count(1)
-                            .build()
-                    }
-                    WriteDescriptorSetKind::UniformBuffer { buffer: _ } => {
-                        vk::DescriptorPoolSize::builder()
-                            .ty(vk::DescriptorType::UNIFORM_BUFFER)
-                            .descriptor_count(1)
-                            .build()
-                    }
-                })
-            }
-
-            let pool = ctx.create_descriptor_pool(1, &pool_sizes).unwrap();
-            let descriptor = allocate_descriptor_set(&ctx.device, &pool, &layouts[i]).unwrap();
-            for w in set.iter() {
-                update_descriptor_sets(ctx, &descriptor, &[w.clone()]);
-            }
-            sets.push(descriptor);
-        }
-        descriptors.push(Box::from(sets.as_slice()));
-    }
-
-    ComputePipeline {
-        descriptors: Box::from(descriptors.as_slice()),
-        handel,
-        layout,
-        descriptor_layouts: Box::from(layouts.as_slice()),
-    }
 }
 
 struct RasterPipeline {
