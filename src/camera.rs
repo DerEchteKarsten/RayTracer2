@@ -1,14 +1,22 @@
 use std::time::Duration;
 
-use glam::{vec3, Mat3, Mat4, Quat, Vec3, Vec4};
-use winit::event::{DeviceEvent, ElementState, Event, KeyboardInput, MouseButton, WindowEvent};
+use bevy_app::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_input::{
+    mouse::{MouseButtonInput, MouseMotion},
+    prelude::*,
+    ButtonState,
+};
+use bevy_time::Time;
+use bevy_window::{prelude::*, CursorGrabMode, PrimaryWindow};
+use glam::{vec3, Mat3, Mat4, Quat, Vec3, Vec4, Vec2};
 
 const MOVE_SPEED: f32 = 2.0;
 const ANGLE_PER_POINT: f32 = 0.0009;
 
 const UP: Vec3 = vec3(0.0, 1.0, 0.0);
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Resource)]
 pub struct Camera {
     pub position: Vec3,
     pub direction: Vec3,
@@ -18,8 +26,8 @@ pub struct Camera {
     pub z_far: f32,
 }
 
-#[derive(Clone, Copy)]
-pub struct UniformData {
+#[derive(Clone, Copy, Resource, Default)]
+pub struct CameraUniformData {
     pub view_inverse: Mat4,
     pub proj_inverse: Mat4,
     pub input: Vec4,
@@ -43,57 +51,6 @@ impl Camera {
             z_far,
         }
     }
-
-    pub fn update(self, controls: &Controls, delta_time: Duration) -> Self {
-        let delta_time = delta_time.as_secs_f32();
-        let side = self.direction.cross(UP);
-
-        // Update direction
-        let new_direction = if controls.look_around {
-            let side_rot = Quat::from_axis_angle(side, -controls.cursor_delta[1] * ANGLE_PER_POINT);
-            let y_rot = Quat::from_rotation_y(-controls.cursor_delta[0] * ANGLE_PER_POINT);
-            let rot = Mat3::from_quat(side_rot * y_rot);
-
-            (rot * self.direction).normalize()
-        } else {
-            self.direction
-        };
-
-        // Update position
-        let mut direction = Vec3::ZERO;
-
-        if controls.go_forward {
-            direction += new_direction;
-        }
-        if controls.go_backward {
-            direction -= new_direction;
-        }
-        if controls.strafe_right {
-            direction += side;
-        }
-        if controls.strafe_left {
-            direction -= side;
-        }
-        if controls.go_up {
-            direction += UP;
-        }
-        if controls.go_down {
-            direction -= UP;
-        }
-
-        let direction = if direction.length_squared() == 0.0 {
-            direction
-        } else {
-            direction.normalize()
-        };
-
-        Self {
-            position: self.position + direction * MOVE_SPEED * delta_time,
-            direction: new_direction,
-            ..self
-        }
-    }
-
     pub fn view_matrix(&self) -> Mat4 {
         Mat4::look_at_rh(
             self.position,
@@ -110,6 +67,53 @@ impl Camera {
             self.z_far,
         )
     }
+}
+
+pub fn update_camera(mut camera: ResMut<Camera>, controls: Res<Controls>, time: Res<Time>) {
+    let delta_time = time.delta_seconds();
+    let side = camera.direction.cross(UP);
+
+    // Update direction
+    let new_direction = if controls.look_around {
+        let side_rot = Quat::from_axis_angle(side, -controls.cursor_delta[1] * ANGLE_PER_POINT);
+        let y_rot = Quat::from_rotation_y(-controls.cursor_delta[0] * ANGLE_PER_POINT);
+        let rot = Mat3::from_quat(side_rot * y_rot);
+
+        (rot * camera.direction).normalize()
+    } else {
+        camera.direction
+    };
+
+    // Update position
+    let mut direction = Vec3::ZERO;
+
+    if controls.go_forward {
+        direction += new_direction;
+    }
+    if controls.go_backward {
+        direction -= new_direction;
+    }
+    if controls.strafe_right {
+        direction += side;
+    }
+    if controls.strafe_left {
+        direction -= side;
+    }
+    if controls.go_up {
+        direction += UP;
+    }
+    if controls.go_down {
+        direction -= UP;
+    }
+
+    let direction = if direction.length_squared() == 0.0 {
+        direction
+    } else {
+        direction.normalize()
+    };
+
+    camera.position += direction * MOVE_SPEED * delta_time;
+    camera.direction = new_direction;
 }
 
 #[rustfmt::skip]
@@ -145,7 +149,7 @@ pub fn perspective(fovy: f32, aspect: f32, near: f32, far: f32) -> Mat4 {
     ])
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Resource)]
 pub struct Controls {
     pub left_mouse: bool,
     pub go_forward: bool,
@@ -174,79 +178,44 @@ impl Default for Controls {
     }
 }
 
-impl Controls {
-    pub fn reset(self) -> Self {
-        Self {
-            cursor_delta: [0.0; 2],
-            ..self
+
+pub fn update_mouse_buttons(
+    mut controls: ResMut<Controls>,
+    mut windows: Query<&mut Window, With<PrimaryWindow>>,
+    mut mousebtn_evr: EventReader<MouseButtonInput>,
+) {
+    for ev in mousebtn_evr.read() {
+        if ev.button == MouseButton::Right && ev.state == ButtonState::Pressed {
+            controls.look_around = true;
+            windows.single_mut().cursor.grab_mode = CursorGrabMode::None;
         }
     }
-
-    pub fn handle_event(self, event: &Event<()>, window: &winit::window::Window) -> Self {
-        let mut new_state = self;
-
-        match event {
-            Event::WindowEvent { event, .. } => {
-                match event {
-                    WindowEvent::KeyboardInput {
-                        input:
-                            KeyboardInput {
-                                scancode, state, ..
-                            },
-                        ..
-                    } => {
-                        if *scancode == 17 {
-                            new_state.go_forward = *state == ElementState::Pressed;
-                        }
-                        if *scancode == 31 {
-                            new_state.go_backward = *state == ElementState::Pressed;
-                        }
-                        if *scancode == 32 {
-                            new_state.strafe_right = *state == ElementState::Pressed;
-                        }
-                        if *scancode == 30 {
-                            new_state.strafe_left = *state == ElementState::Pressed;
-                        }
-                        if *scancode == 57 {
-                            new_state.go_up = *state == ElementState::Pressed;
-                        }
-                        if *scancode == 42 {
-                            new_state.go_down = *state == ElementState::Pressed;
-                        }
-                    }
-                    WindowEvent::MouseInput { state, button, .. } => {
-                        if *button == MouseButton::Right && *state == ElementState::Pressed {
-                            new_state.look_around = true;
-                            window
-                                .set_cursor_grab(winit::window::CursorGrabMode::Locked)
-                                .unwrap_or(());
-                        } else if *button == MouseButton::Right && *state == ElementState::Released
-                        {
-                            new_state.look_around = false;
-                            window
-                                .set_cursor_grab(winit::window::CursorGrabMode::None)
-                                .unwrap_or(());
-                        }
-                        if *button == MouseButton::Left && *state == ElementState::Pressed {
-                            new_state.left_mouse = true;
-                        } else if *button == MouseButton::Left && *state == ElementState::Released {
-                            new_state.left_mouse = false;
-                        }
-                    }
-                    _ => {}
-                };
-            }
-            Event::DeviceEvent {
-                event: DeviceEvent::MouseMotion { delta: (x, y) },
-                ..
-            } => {
-                let x = *x as f32;
-                let y = *y as f32;
-                new_state.cursor_delta = [self.cursor_delta[0] + x, self.cursor_delta[1] + y];
-            }
-            _ => (),
+}
+pub fn update_mouse_move(
+    mut controls: ResMut<Controls>,
+    mut evr_motion: EventReader<CursorMoved>,
+) {
+    for ev in evr_motion.read() {
+        if let Some(delta) = ev.delta {
+            controls.cursor_delta = [
+                controls.cursor_delta[0] + delta.x,
+                controls.cursor_delta[1] + delta.y,
+            ];
         }
-
-        new_state
     }
+}
+
+pub fn update_keyboard(keys: Res<ButtonInput<KeyCode>>, mut controls: ResMut<Controls>,) {
+    controls.go_forward = keys.pressed(KeyCode::KeyW);
+    controls.go_backward = keys.pressed(KeyCode::KeyS);
+    controls.strafe_right = keys.pressed(KeyCode::KeyD);
+    controls.strafe_left = keys.pressed(KeyCode::KeyA);
+    controls.go_up = keys.pressed(KeyCode::Space);
+    controls.go_down = keys.pressed(KeyCode::ShiftLeft);
+}
+
+pub fn CameraPlugin(app: &mut App) {
+    app.init_resource::<Camera>()
+        .init_resource::<Controls>()
+        .add_systems(Update, (update_camera));// update_mouse_move, update_mouse_buttons, update_keyboard));
 }
