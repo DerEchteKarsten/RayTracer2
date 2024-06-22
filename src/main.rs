@@ -45,8 +45,8 @@ const DEVICE_EXTENSIONS: [&'static CStr; 10] = [
 
 const APP_NAME: &'static str = "Test";
 const WINDOW_SIZE: PhysicalSize<u32> = PhysicalSize {
-    width: 1920,
-    height: 1080,
+    width: 2560,
+    height: 1400,
 };
 
 const FULL_SCREEN_SCISSOR: vk::Rect2D = vk::Rect2D{
@@ -88,8 +88,8 @@ fn main() {
     .unwrap();
 
     let mut camera = Camera::new(
-        vec3(0.0, 0.0, 10.0),
-        vec3(0.0, 0.0, -1.0),
+        vec3(1.5, 1.25, -5.0),
+        vec3(0.0, 0.0, 1.0),
         40.0,
         WINDOW_SIZE.width as f32 / WINDOW_SIZE.height as f32,
         0.1,
@@ -115,7 +115,7 @@ fn main() {
         )
         .unwrap();
     
-    let oct_tree_data = load_model().unwrap();
+    let oct_tree_data = load_model("./models/monu2.vox").unwrap();
     //build_oct_tree(3);
 
     let oct_tree_buffer = ctx.create_gpu_only_buffer_from_data(vk::BufferUsageFlags::STORAGE_BUFFER, oct_tree_data.as_slice(), Some("OctTreeData")).unwrap();
@@ -335,25 +335,6 @@ impl Clone for Octant {
     }
 }
 
-fn print(tree: &Octant, depth: u32, level_dim: u32, level_pos: UVec3, out_voxels: &mut Vec<(UVec3, u32)>) {
-    if let Some(color) = tree.color {
-        // println!("{} Color: {}, {}, {}", std::iter::repeat(" ").take(depth as usize).collect::<String>(), color, level_pos, level_dim);
-        out_voxels.push((level_pos, color))
-    }
-    if let Some(children) = tree.children.as_ref() {
-        // println!("{} Children: {{", std::iter::repeat(" ").take(depth as usize).collect::<String>());
-        for i in 0..8_u32 {
-            let level_dim = level_dim >> 1;
-            let cmp = BVec3::new(i != 0, (i >> 2) != 0, (i >> 3) != 0);
-            let new_pos = level_pos + (UVec3::new(cmp.x as u32 * level_dim, cmp.y as u32 * level_dim, cmp.z as u32 * level_dim));
-            // println!("{}", new_pos);
-            print(&children[i as usize], depth+1, level_dim, new_pos, out_voxels);
-        }
-    }
-    return;
-}
-
-
 fn count(tree: &Octant, depth: u32, total: &mut u32) {
     if let Some(color) = tree.color {
         *total+=1;
@@ -386,10 +367,6 @@ where
     return;
 }
 
-fn append_voxel_model(tree: &mut Octant, color: u32, level_pos: UVec3) {
-    append_voxel(tree, color, 32, level_pos);
-}
-
 fn append_voxel(tree: &mut Octant, color: u32, level_dim: u32, level_pos: UVec3){
     if level_dim <= 1 {
         if tree.color.is_some() {
@@ -419,16 +396,25 @@ fn append_voxel(tree: &mut Octant, color: u32, level_dim: u32, level_pos: UVec3)
 
 }
 
-fn load_model() -> Result<Vec<u32>> {
+fn load_model(path: &str) -> Result<Vec<u32>> {
     let mut tree = Vec::new();
     let mut octree = Octant::default();
-    let file = dot_vox::load("./models/chr_knight.vox").unwrap();
+    let file = dot_vox::load(path).unwrap();
     let models = file.models;
     for (n, m) in models.iter().enumerate() {
+        let mut size = m.size.x;
+        if size < m.size.y {
+            size = m.size.y
+        }
+        if size < m.size.z {
+            size = m.size.z
+        }
+        size = 2_u32.pow(((size as f32).log2()).ceil() as u32);
         for v in m.voxels.iter() {
             let color = file.palette[v.i as usize];
             let u32_color = ((color.b as u32) << 16) | ((color.g as u32) << 8) | (color.r as u32);
-            append_voxel_model(&mut octree, u32_color, UVec3::new(v.x as u32, v.z as u32, v.y as u32));
+            let pos = UVec3::new(v.x as u32, v.z as u32, v.y as u32);
+            append_voxel(&mut octree, u32_color, size, pos);
         }
     }
  
@@ -453,54 +439,9 @@ fn load_model() -> Result<Vec<u32>> {
             }
         }
        
-        candidates = new_candidates.clone();
+        candidates = new_candidates;
         new_candidates = vec![]
     }
-    // println!("{:?}", tree);
-    // for (n, i) in tree.iter().enumerate() {
-    //     println!("{} {:#08x}", n, i);
-    // }
-    // let mut out_voxel = vec![];
-    // print(&octree, 0, 8, UVec3::new(0, 0, 0), &mut out_voxel);
-
-    // let mut found_all = true;
-    // for v in out_voxel.iter() {
-    //     let mut found = false;
-    //     for vc in voxels.iter() {
-    //         if *v == *vc {
-    //             found = true;
-    //             break;
-    //         }
-    //     }
-    //     if !found {
-    //         found_all = false;
-    //         println!("not_found: {}, {}", v.0, v.1);
-    //     }
-    // }
-    // if found_all && out_voxel.len() == voxels.len() {
-    //     println!("found all, {} == {}", out_voxel.len(), voxels.len());
-    // }
-    // count(&octree, 8, &mut 0);
-    // println!("{}, {}", voxels, models[0].voxels.len());
-
-    // for j in 0..depth {
-    //     for index in 0..8_u32.pow(j) {
-    //         let i = tree.len() as u32 + 1;
-    //         let node = if j == depth-1 {
-                
-    //             if voxel_here {
-    //                 let col = rand::random::<u32>() % 2_u32.pow(24);
-    //                 0xC000_0000 + col
-    //             } else {
-    //                 0xa000_0000
-    //             }
-    //         }else {
-    //             0x8000_0000 + 8*i 
-    //         };
-    //         tree.push(node);
-    //     }
-    // }
-
     return Ok(tree);
 }
 

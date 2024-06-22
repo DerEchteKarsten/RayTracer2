@@ -24,15 +24,24 @@ layout(binding = 0, set = 0) uniform CameraProperties
     vec4 controlls;
 } cam;
 
-#define MAX_DEPTH 6
-
-#define MAX_SIZE 1000.0
-#define EMPTY 0
-
 layout(location = 0) out vec4 outColor;
 layout(location = 1) out float outDepth;
 
-const vec3 light_dir = normalize(vec3(0.25, 1.0, 0.5));
+const float ligth_rotation = PI/1.5; 
+const float light_hight = PI/4; 
+
+const vec3 light_dir = vec3(sin(ligth_rotation)*cos(light_hight), sin(ligth_rotation)*sin(light_hight), cos(ligth_rotation));
+
+float ray_plane(vec3 origin, vec3 direction, vec3 normal, vec3 center) {
+    float denom = dot(normal, direction);
+    if (abs(denom) > 0.0001f) // your favorite epsilon
+    {
+        float t = dot((center - origin), normal) / denom;
+        if (t >= 0) return t; // you might want to allow an epsilon here too
+    }
+    return 1.0/0.0;
+}
+    const vec3 plane_normal = vec3(0.0, 1.0, 0.0);
 
 void main() {
 
@@ -42,34 +51,30 @@ void main() {
 	vec4 origin = cam.viewInverse * vec4(0,0,0,1);
 	vec4 target = cam.projInverse * vec4(d.x, d.y, 1, 1) ;
 	vec4 direction = cam.viewInverse*vec4(normalize(target.xyz), 0) ;
-    // if (gl_FragCoord.x == 0.5 && gl_FragCoord.y == 0.5)
-    // {for(int i = 0; i < 20; i++) {
-    //     Octant node = oct_tree.pool[i];
-    //     if (node.empty_color != 0) {
-    //         continue;
-    //     }
-    //     debugPrintfEXT("children: %u, %u, %u, %u, %u, %u, %u, %u,", 
-    //         node.children[0].x,
-    //         node.children[1].x,
-    //         node.children[2].x,
-    //         node.children[3].x,
-    //         node.children[4].x,
-    //         node.children[5].x,
-    //         node.children[6].x,
-    //         node.children[7].x);
-    //     debugPrintfEXT("color: %u", node.empty_color);
-    //     debugPrintfEXT("i: %d", i);
-    // }}
 
-    vec3 o_pos;
-    vec3 o_color;
-    vec3 o_normal;
+    vec3 o_pos, o_pos2;
+    vec3 o_color, o_color2;
+    vec3 o_normal, o_normal2;
     bool hit = Octree_RayMarchLeaf(origin.xyz, direction.xyz, o_pos, o_color, o_normal);
+    float plane_depth = ray_plane(origin.xyz, direction.xyz, plane_normal, vec3(0.0, 0.99999, 0.0));
+    float depth = hit ? length(origin.xyz - o_pos) : 1.0/0.0;
 
-    if (hit) {
-        outColor = vec4(o_color * (abs(dot(o_normal, light_dir)) + 0.2), 0.0);
-    } else {
-        outColor = direction;
+    if (!hit || depth > plane_depth) {
+        o_pos = origin.xyz + direction.xyz * plane_depth;
+        o_normal = plane_normal;
+        o_color = vec3(min(max(plane_depth / 100.0, 0.3), 0.8));
     }
-    outDepth = 1.0f;
+
+    bool shadow_hit = Octree_RayMarchLeaf(o_pos, light_dir, o_pos2, o_color2, o_normal2);
+    // * (abs(dot(o_normal, light_dir)) + 0.2)
+
+    if (min(depth, plane_depth) < 1.0 / 0.0) {
+        if (shadow_hit) {
+            o_color *= 0.35;
+        }
+        outColor = vec4(o_color * max(dot(o_normal, light_dir), 0.25), 0.0);
+    } else {
+        outColor = vec4(0.0, 0.0, 0.8, 0.0);
+    }
+    outDepth = min(depth, plane_depth);
 }
