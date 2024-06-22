@@ -8,7 +8,7 @@ use ash::{
     },
     Device, Entry, Instance,
 };
-use bevy_ecs::{system::Resource, world::FromWorld};
+use bevy::prelude::*;
 use gpu_allocator::{
     vulkan::{Allocation, AllocationCreateDesc, Allocator, AllocatorCreateDesc},
     AllocationSizes, AllocatorDebugSettings, MemoryLocation,
@@ -943,7 +943,7 @@ impl Image {
         renderer: &mut Renderer,
         image: DynamicImage,
         format: vk::Format,
-    ) -> Result<(Self, vk::ImageView)> {
+    ) -> Result<(ImageAndView)> {
         let (width, height) = image.dimensions();
         let image_extent = vk::Extent2D { width, height };
         let image_buffer = if format != vk::Format::R8G8B8A8_SRGB {
@@ -1016,7 +1016,8 @@ impl Image {
         })?;
 
         let image_view = create_image_view(&renderer.device, &texture_image, format);
-        Ok((
+        Ok(ImageAndView {
+            image:
             Self {
                 allocation: texture_image.allocation,
                 extent: vk::Extent3D {
@@ -1028,8 +1029,8 @@ impl Image {
                 inner: texture_image.inner,
                 mip_levls: 1,
             },
-            image_view,
-        ))
+            view: image_view,
+        })
     }
 }
 

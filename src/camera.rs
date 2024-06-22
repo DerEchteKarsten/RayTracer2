@@ -1,14 +1,7 @@
 use std::time::Duration;
 
-use bevy_app::prelude::*;
-use bevy_ecs::prelude::*;
-use bevy_input::{
-    mouse::{MouseButtonInput, MouseMotion},
-    prelude::*,
-    ButtonState,
-};
-use bevy_time::Time;
-use bevy_window::{prelude::*, CursorGrabMode, PrimaryWindow};
+use bevy::{input::{mouse::{MouseButtonInput, MouseMotion}, ButtonState}, prelude::*, window::{CursorGrabMode, PrimaryWindow}};
+
 use glam::{vec3, Mat3, Mat4, Quat, Vec3, Vec4, Vec2};
 
 const MOVE_SPEED: f32 = 2.0;
@@ -193,16 +186,18 @@ pub fn update_mouse_buttons(
 }
 pub fn update_mouse_move(
     mut controls: ResMut<Controls>,
-    mut evr_motion: EventReader<CursorMoved>,
+    mut evr_motion: EventReader<MouseMotion>,
 ) {
     for ev in evr_motion.read() {
-        if let Some(delta) = ev.delta {
-            controls.cursor_delta = [
-                controls.cursor_delta[0] + delta.x,
-                controls.cursor_delta[1] + delta.y,
-            ];
-        }
+        controls.cursor_delta = [
+            controls.cursor_delta[0] + ev.delta.x,
+            controls.cursor_delta[1] + ev.delta.y,
+        ];
     }
+}
+
+pub fn reset(mut controls: ResMut<Controls>) {
+    controls.cursor_delta = [0.0, 0.0];
 }
 
 pub fn update_keyboard(keys: Res<ButtonInput<KeyCode>>, mut controls: ResMut<Controls>,) {
@@ -217,5 +212,6 @@ pub fn update_keyboard(keys: Res<ButtonInput<KeyCode>>, mut controls: ResMut<Con
 pub fn CameraPlugin(app: &mut App) {
     app.init_resource::<Camera>()
         .init_resource::<Controls>()
-        .add_systems(Update, (update_camera));// update_mouse_move, update_mouse_buttons, update_keyboard));
+        .add_systems(PreUpdate, reset)
+        .add_systems(Update, (update_camera, update_mouse_move, update_mouse_buttons, update_keyboard));
 }

@@ -1,7 +1,7 @@
 use anyhow::Result;
 use ash::khr::{self};
 use ash::vk::{self};
-use bevy_ecs::system::Resource;
+use bevy::prelude::*;
 use dot_vox::Voxel;
 use gpu_allocator::MemoryLocation;
 

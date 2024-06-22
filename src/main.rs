@@ -3,11 +3,13 @@ use ash::khr::{
     buffer_device_address, get_memory_requirements2, shader_float_controls,
     shader_non_semantic_info, swapchain, workgroup_memory_explicit_layout,
 };
-use bevy_a11y::{AccessibilityPlugin, AccessibilityRequested};
-use bevy_app::App;
-use bevy_input::InputPlugin;
-use bevy_time::{Time, TimePlugin};
-use bevy_winit::{WinitPlugin, WinitSettings, WinitWindows};
+use bevy::a11y::{AccessibilityPlugin, AccessibilityRequested};
+use bevy::input::InputPlugin;
+use bevy::prelude::*;
+
+use bevy::time::TimePlugin;
+use bevy::window::{ExitCondition, WindowResolution};
+use bevy::winit::{WinitPlugin, WinitWindows};
 use pipelines::{
     create_fullscreen_quad_pipeline, create_post_proccesing_pipelien, create_storage_images,
     PostProccesingPipeline, RayTracingPipeline,
@@ -65,10 +67,6 @@ const FULL_SCREEN_VIEW_PORT: vk::Viewport = vk::Viewport {
     max_depth: 1.0,
 };
 
-use bevy_app::prelude::*;
-use bevy_core::prelude::*;
-use bevy_ecs::prelude::*;
-use bevy_window::{prelude::*, RequestRedraw, WindowFocused, WindowResolution};
 
 fn main() {
     App::new()
@@ -96,10 +94,10 @@ fn main() {
             InputPlugin,
             WindowPlugin {
                 close_when_requested: true,
-                exit_condition: bevy_window::ExitCondition::OnPrimaryClosed,
+                exit_condition: ExitCondition::OnPrimaryClosed,
                 primary_window: Some(Window {
                     resolution: WindowResolution::new(WINDOW_SIZE.0 as f32, WINDOW_SIZE.1 as f32),
-                    present_mode: bevy_window::PresentMode::Fifo,
+                    present_mode: bevy::window::PresentMode::Fifo,
                     ..Default::default()
                 }),
             },
@@ -111,6 +109,7 @@ fn main() {
         ))
         .add_systems(Startup, init)
         .add_systems(Update, render)
+        
         .run();
 }
 
@@ -260,6 +259,7 @@ struct FrameData {
     pub uniform_buffer: Buffer,
 }
 
+
 fn init(world: &mut World) {
     let device_features = world.get_resource::<DeviceFeatures>().unwrap();
     let windows = world.get_non_send_resource::<WinitWindows>().unwrap();
@@ -296,7 +296,7 @@ fn init(world: &mut World) {
         )
         .unwrap();
 
-    let oct_tree_data = load_model("./models/Helena.vox").unwrap();
+    let oct_tree_data = load_model("./models/monu2.vox").unwrap();
 
     let oct_tree_buffer = renderer
         .create_gpu_only_buffer_from_data(
@@ -329,7 +329,7 @@ fn init(world: &mut World) {
         &[WriteDescriptorSet {
             binding: 2,
             kind: WriteDescriptorSetKind::CombinedImageSampler {
-                view: sky_box.1,
+                view: sky_box.view,
                 sampler: sky_box_sampler,
                 layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
             },

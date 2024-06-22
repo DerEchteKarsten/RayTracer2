@@ -9,14 +9,7 @@ edition = "2021"
 anyhow = "1.0.75"
 ash = { version = "0.38.0+1.3.281", features = ["loaded", "debug"] }
 ash-window = "0.13.0"
-bevy_a11y = "0.13.2"
-bevy_app = "0.13.2"
-bevy_core = "0.13.2"
-bevy_ecs = "0.13.2"
-bevy_input = "0.13.2"
-bevy_time = "0.13.2"
-bevy_window = "0.13.2"
-bevy_winit = {version = "0.13.2", features = ["wayland", "x11"]}
+bevy = {version = "0.13.2", default-features = false, features = ["bevy_winit", "multi-threaded", "x11", "dynamic_linking", "wayland"] }
 clippy = "0.0.302"
 dot_vox = "5.1.1"
 glam = "0.28.0"
