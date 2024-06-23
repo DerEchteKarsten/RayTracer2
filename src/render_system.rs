@@ -22,15 +22,13 @@ use crate::{
     WriteDescriptorSet, WriteDescriptorSetKind, WINDOW_SIZE,
 };
 
-pub const DEVICE_EXTENSIONS: [&'static CStr; 10] = [
+pub const DEVICE_EXTENSIONS: [&'static CStr; 8] = [
     swapchain::NAME,
     ash::ext::descriptor_indexing::NAME,
     ash::ext::scalar_block_layout::NAME,
     get_memory_requirements2::NAME,
-    ash::ext::buffer_device_address::NAME,
     KHR_SPIRV_1_4_NAME,
     shader_float_controls::NAME,
-    buffer_device_address::NAME,
     shader_non_semantic_info::NAME,
     workgroup_memory_explicit_layout::NAME,
 ];
@@ -58,14 +56,9 @@ fn render(
     data: Res<FrameData>,
     raytracing_pipeline: Res<RayTracingPipeline>,
     post_proccesing_pipeline: Res<PostProccesingPipeline>,
-    camera: Res<Camera>,
     time: Res<Time>
 ) {
-    log::info!("{:?}", time.delta());
-    uniform_data.proj_inverse = camera.projection_matrix().inverse();
-    uniform_data.view_inverse = camera.view_matrix().inverse();
-    uniform_data.input.z = WINDOW_SIZE.0 as f32;
-    uniform_data.input.w = WINDOW_SIZE.1 as f32;
+    // log::info!("{:?}", time.delta());
     data.uniform_buffer
         .copy_data_to_buffer(std::slice::from_ref(&(*uniform_data)))
         .unwrap();
@@ -209,6 +202,7 @@ fn init(world: &mut World) {
         WINDOW_SIZE.1,
     )
     .unwrap();
+    let game_world = world.get_resource::<GameWorld>().unwrap();
 
     let image_thread = std::thread::spawn(|| image::open("./src/models/skybox.png").unwrap());
     let default_sampler: vk::SamplerCreateInfo = vk::SamplerCreateInfo {
@@ -233,7 +227,7 @@ fn init(world: &mut World) {
         )
         .unwrap();
 
-    let oct_tree_data = Octant::load("./models/monu2.vox").unwrap().build();
+    let oct_tree_data = &game_world.build_tree;
 
     let oct_tree_buffer = renderer
         .create_gpu_only_buffer_from_data(

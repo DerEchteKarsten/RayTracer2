@@ -71,7 +71,7 @@ impl Renderer {
             .collect::<Vec<_>>();
         let required_extensions = required_extensions.as_slice();
 
-        SimpleLogger::default().env().init().unwrap();
+        // SimpleLogger::default().env().init().unwrap();
         let entry = unsafe { Entry::load()? };
 
         let app_info = vk::ApplicationInfo::default().api_version(vk::API_VERSION_1_3);

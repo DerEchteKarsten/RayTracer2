@@ -1,20 +1,15 @@
-use bevy::{input::{mouse::{MouseButtonInput, MouseMotion}, ButtonState}, prelude::*, window::{CursorGrabMode, PrimaryWindow}};
+use bevy::{input::{mouse::{MouseButtonInput, MouseMotion}, ButtonState}, prelude::*, time::Time, window::{CursorGrabMode, PrimaryWindow}};
 
-use glam::{vec3, Mat3, Mat4, Quat, Vec3, Vec4};
+use glam::{vec3, Mat3, Mat4, Quat, Vec3, Vec3Swizzles, Vec4};
 
-const MOVE_SPEED: f32 = 2.0;
-const ANGLE_PER_POINT: f32 = 0.0009;
-
-const UP: Vec3 = vec3(0.0, 1.0, 0.0);
-
-#[derive(Debug, Default, Clone, Copy, PartialEq, Resource)]
+use crate::{components::{PhysicsBody, Player, Position}, WINDOW_SIZE};
+#[derive(Debug, Default, Clone, Copy, PartialEq, Component)]
 pub struct Camera {
-    pub position: Vec3,
-    pub direction: Vec3,
     pub fov: f32,
     pub aspect_ratio: f32,
     pub z_near: f32,
     pub z_far: f32,
+    pub is_main: bool,
 }
 
 #[derive(Clone, Copy, Resource, Default)]
@@ -26,26 +21,24 @@ pub struct CameraUniformData {
 
 impl Camera {
     pub fn new(
-        position: Vec3,
-        direction: Vec3,
         fov: f32,
         aspect_ratio: f32,
         z_near: f32,
         z_far: f32,
+        is_main: bool,
     ) -> Self {
         Self {
-            position,
-            direction: direction.normalize(),
             fov,
             aspect_ratio,
             z_near,
             z_far,
+            is_main,
         }
     }
-    pub fn view_matrix(&self) -> Mat4 {
+    pub fn view_matrix(&self, position: Vec3, direction: Vec3) -> Mat4 {
         Mat4::look_at_rh(
-            self.position,
-            self.position + self.direction,
+            position,
+            position + direction,
             vec3(0.0, 1.0, 0.0),
         )
     }
@@ -60,52 +53,7 @@ impl Camera {
     }
 }
 
-pub fn update_camera(mut camera: ResMut<Camera>, controls: Res<Controls>, time: Res<Time>) {
-    let delta_time = time.delta_seconds();
-    let side = camera.direction.cross(UP);
 
-    // Update direction
-    let new_direction = if controls.look_around {
-        let side_rot = Quat::from_axis_angle(side, -controls.cursor_delta[1] * ANGLE_PER_POINT);
-        let y_rot = Quat::from_rotation_y(-controls.cursor_delta[0] * ANGLE_PER_POINT);
-        let rot = Mat3::from_quat(side_rot * y_rot);
-
-        (rot * camera.direction).normalize()
-    } else {
-        camera.direction
-    };
-
-    // Update position
-    let mut direction = Vec3::ZERO;
-
-    if controls.go_forward {
-        direction += new_direction;
-    }
-    if controls.go_backward {
-        direction -= new_direction;
-    }
-    if controls.strafe_right {
-        direction += side;
-    }
-    if controls.strafe_left {
-        direction -= side;
-    }
-    if controls.go_up {
-        direction += UP;
-    }
-    if controls.go_down {
-        direction -= UP;
-    }
-
-    let direction = if direction.length_squared() == 0.0 {
-        direction
-    } else {
-        direction.normalize()
-    };
-
-    camera.position += direction * MOVE_SPEED * delta_time;
-    camera.direction = new_direction;
-}
 
 #[rustfmt::skip]
 pub fn perspective(fovy: f32, aspect: f32, near: f32, far: f32) -> Mat4 {
@@ -173,10 +121,17 @@ pub fn update_mouse_buttons(
     mut windows: Query<&mut Window, With<PrimaryWindow>>,
     mut mousebtn_evr: EventReader<MouseButtonInput>,
 ) {
+    let mut window = windows.single_mut();
     for ev in mousebtn_evr.read() {
         if ev.button == MouseButton::Right && ev.state == ButtonState::Pressed {
             controls.look_around = true;
-            windows.single_mut().cursor.grab_mode = CursorGrabMode::None;
+            window.cursor.grab_mode = CursorGrabMode::Confined;
+            window.cursor.visible = false;
+        }
+        if ev.button == MouseButton::Right && ev.state == ButtonState::Released {
+            controls.look_around = false;
+            window.cursor.grab_mode = CursorGrabMode::None;
+            window.cursor.visible = true;
         }
     }
 }
@@ -192,10 +147,6 @@ pub fn update_mouse_move(
     }
 }
 
-pub fn reset(mut controls: ResMut<Controls>) {
-    controls.cursor_delta = [0.0, 0.0];
-}
-
 pub fn update_keyboard(keys: Res<ButtonInput<KeyCode>>, mut controls: ResMut<Controls>,) {
     controls.go_forward = keys.pressed(KeyCode::KeyW);
     controls.go_backward = keys.pressed(KeyCode::KeyS);
@@ -205,9 +156,19 @@ pub fn update_keyboard(keys: Res<ButtonInput<KeyCode>>, mut controls: ResMut<Con
     controls.go_down = keys.pressed(KeyCode::ShiftLeft);
 }
 
+fn update_camera_matrix(query: Query<(&Camera, &Position)>, mut uniform_data: ResMut<CameraUniformData>, mut controls: ResMut<Controls>) {
+    for (camera, position) in &query {
+        if camera.is_main {
+            uniform_data.proj_inverse = camera.projection_matrix().inverse();
+            uniform_data.view_inverse = camera.view_matrix(position.position, position.rotation).inverse();
+            uniform_data.input.z = WINDOW_SIZE.0 as f32;
+            uniform_data.input.w = WINDOW_SIZE.1 as f32;
+        }
+    }
+    controls.cursor_delta = [0.0, 0.0];
+}
+
 pub fn CameraPlugin(app: &mut App) {
-    app.init_resource::<Camera>()
-        .init_resource::<Controls>()
-        .add_systems(PreUpdate, reset)
-        .add_systems(Update, (update_camera, update_mouse_move, update_mouse_buttons, update_keyboard));
+    app.init_resource::<Controls>()
+        .add_systems(PreUpdate, (update_camera_matrix.before(update_mouse_move), update_mouse_move, update_mouse_buttons, update_keyboard));
 }
