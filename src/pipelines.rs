@@ -1,15 +1,10 @@
 use anyhow::Result;
-use ash::khr::{self};
 use ash::vk::{self};
 use bevy::prelude::*;
-use dot_vox::Voxel;
 use gpu_allocator::MemoryLocation;
 
-use glam::{vec3, BVec3, UVec3, Vec3, Vec4};
 use std::default::Default;
-use std::ffi::{CStr, CString};
-use std::rc::Rc;
-use std::time::{Duration, Instant};
+use std::ffi::CString;
 
 use crate::{
     allocate_descriptor_set, allocate_descriptor_sets, update_descriptor_sets, Buffer, Image,
@@ -256,7 +251,7 @@ pub fn create_post_proccesing_pipelien(
 pub struct RayTracingPipeline {
     pub pipeline: vk::Pipeline,
     pub layout: vk::PipelineLayout,
-    pub descriptor_layout: vk::DescriptorSetLayout,
+    pub _descriptor_layout: vk::DescriptorSetLayout,
     pub render_pass: vk::RenderPass,
     pub descriptor: vk::DescriptorSet,
 }
@@ -471,7 +466,7 @@ pub fn create_fullscreen_quad_pipeline(
         pipeline,
         render_pass,
         descriptor,
-        descriptor_layout,
+        _descriptor_layout: descriptor_layout,
         layout,
     })
 }

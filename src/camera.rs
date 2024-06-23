@@ -1,8 +1,6 @@
-use std::time::Duration;
-
 use bevy::{input::{mouse::{MouseButtonInput, MouseMotion}, ButtonState}, prelude::*, window::{CursorGrabMode, PrimaryWindow}};
 
-use glam::{vec3, Mat3, Mat4, Quat, Vec3, Vec4, Vec2};
+use glam::{vec3, Mat3, Mat4, Quat, Vec3, Vec4};
 
 const MOVE_SPEED: f32 = 2.0;
 const ANGLE_PER_POINT: f32 = 0.0009;
@@ -144,7 +142,6 @@ pub fn perspective(fovy: f32, aspect: f32, near: f32, far: f32) -> Mat4 {
 
 #[derive(Debug, Clone, Copy, Resource)]
 pub struct Controls {
-    pub left_mouse: bool,
     pub go_forward: bool,
     pub go_backward: bool,
     pub strafe_right: bool,
@@ -165,7 +162,6 @@ impl Default for Controls {
             go_up: false,
             go_down: false,
             look_around: false,
-            left_mouse: false,
             cursor_delta: [0.0; 2],
         }
     }

@@ -3,7 +3,7 @@ use ash::{
     ext::debug_utils,
     khr,
     vk::{
-        self, DebugUtilsLabelEXT, DebugUtilsMessengerEXT, FramebufferMixedSamplesCombinationNV,
+        self,
         ImageView,
     },
     Device, Entry, Instance,
@@ -20,17 +20,13 @@ use std::{
     borrow::BorrowMut,
     ffi::{c_char, CStr, CString},
     mem::{align_of, size_of, size_of_val},
-    num,
-    ops::Sub,
     os::raw::c_void,
-    rc::Rc,
-    time::{Duration, Instant},
 };
 // use raw_window_handle::{RawDisplayHandle, RawWindowHandle};
 use simple_logger::SimpleLogger;
 use std::slice::from_ref;
 
-use crate::{DEVICE_EXTENSIONS, WINDOW_SIZE};
+use crate::{render_system::DEVICE_EXTENSIONS, WINDOW_SIZE};
 
 pub const FRAMES_IN_FLIGHT: u32 = 2;
 
@@ -112,7 +108,7 @@ impl Renderer {
                 .push_next(&mut validation_features);
         }
 
-        let mut instance = unsafe { entry.create_instance(&instance_info, None)? };
+        let instance = unsafe { entry.create_instance(&instance_info, None)? };
 
         //#[cfg(debug_assertions)]
         {
@@ -144,7 +140,7 @@ impl Renderer {
         let ash_surface = khr::surface::Instance::new(&entry, &instance);
 
         let physical_devices =
-            unsafe { enumerate_physical_devices(&instance, &ash_surface, &vk_surface)? };
+           enumerate_physical_devices(&instance, &ash_surface, &vk_surface)?;
         let (physical_device, graphics_queue_family, present_queue_family) =
             select_suitable_physical_device(
                 physical_devices.as_slice(),
@@ -557,7 +553,7 @@ impl Renderer {
                     debug!("Suboptimal");
                 }
             }
-            Ok(v) => {}
+            Ok(_) => {}
         };
         Ok(frame_index)
     }
@@ -637,7 +633,7 @@ impl Renderer {
         }
     }
 
-    fn create_frame(&mut self, size: (u32, u32)) -> Result<Frame> {
+    fn create_frame(&mut self) -> Result<Frame> {
         Frame::new(&self.device)
     }
 
@@ -943,9 +939,8 @@ impl Image {
         renderer: &mut Renderer,
         image: DynamicImage,
         format: vk::Format,
-    ) -> Result<(ImageAndView)> {
+    ) -> Result<ImageAndView> {
         let (width, height) = image.dimensions();
-        let image_extent = vk::Extent2D { width, height };
         let image_buffer = if format != vk::Format::R8G8B8A8_SRGB {
             let image_data = image.to_rgba32f();
             let image_data_raw = image_data.as_raw();
@@ -1017,8 +1012,7 @@ impl Image {
 
         let image_view = create_image_view(&renderer.device, &texture_image, format);
         Ok(ImageAndView {
-            image:
-            Self {
+            image: Self {
                 allocation: texture_image.allocation,
                 extent: vk::Extent3D {
                     width,
@@ -1796,14 +1790,14 @@ pub fn module_from_bytes(device: &Device, source: &[u8]) -> Result<vk::ShaderMod
     Ok(res)
 }
 
-struct ComputePipeline {
+pub struct ComputePipeline {
     pub handel: vk::Pipeline,
     pub descriptors: Box<[Box<[vk::DescriptorSet]>]>,
     pub layout: vk::PipelineLayout,
     pub descriptor_layouts: Box<[vk::DescriptorSetLayout]>,
 }
 
-struct ComputeBinding {
+pub struct ComputeBinding {
     pub ty: vk::DescriptorType,
     pub count: u32,
 }
@@ -1812,7 +1806,6 @@ pub fn create_compute_pipeline(
     renderer: &mut Renderer,
     writes: Box<[Box<[Box<[WriteDescriptorSet]>]>]>,
     layout: Box<[Box<[ComputeBinding]>]>,
-
     push_constant_ranges: &[vk::PushConstantRange],
     shader: &[u8],
 ) -> ComputePipeline {
