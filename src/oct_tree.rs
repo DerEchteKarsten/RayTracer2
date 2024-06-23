@@ -207,7 +207,7 @@ struct StackItem {
 	t_max: f32,
 }
 
-pub fn ray_voxel(uOctree: &Vec<u32>, o: Vec3, d: Vec3) -> Option<Vec3> {
+pub fn ray_voxel(uOctree: &Vec<u32>, o: Vec3, d: Vec3) -> Option<(Vec3, Vec3)> {
     let mut d = d;
     let mut stack = [StackItem {node: 0, t_max: 0.0}; (STACK_SIZE + 1) as usize];
     d.x = if f32::abs(d.x) >= EPS { d.x } else {if d.x >= 0.0 {EPS} else { -EPS }};
@@ -403,8 +403,9 @@ pub fn ray_voxel(uOctree: &Vec<u32>, o: Vec3, d: Vec3) -> Option<Vec3> {
     if norm.z != 0.0 {
         o_pos.z = if norm.z > 0.0 {pos.z + scale_exp2 + EPS * 2.0} else {pos.z - EPS};
     }
-    if scale < STACK_SIZE && t_min <= t_max {
-        Some(o_pos)
+    
+    if scale < STACK_SIZE && t_min <= t_max && o_pos.y != 1.0 {
+        Some((o_pos, norm))
     }else {
         None
     }

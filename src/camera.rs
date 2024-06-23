@@ -35,7 +35,7 @@ impl Camera {
             is_main,
         }
     }
-    pub fn view_matrix(&self, position: Vec3, direction: Vec3) -> Mat4 {
+    pub fn view_matrix(position: Vec3, direction: Vec3) -> Mat4 {
         Mat4::look_at_rh(
             position,
             position + direction,
@@ -160,7 +160,7 @@ fn update_camera_matrix(query: Query<(&Camera, &Position)>, mut uniform_data: Re
     for (camera, position) in &query {
         if camera.is_main {
             uniform_data.proj_inverse = camera.projection_matrix().inverse();
-            uniform_data.view_inverse = camera.view_matrix(position.position, position.rotation).inverse();
+            uniform_data.view_inverse = Camera::view_matrix(position.position, position.rotation).inverse();
             uniform_data.input.z = WINDOW_SIZE.0 as f32;
             uniform_data.input.w = WINDOW_SIZE.1 as f32;
         }

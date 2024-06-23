@@ -24,7 +24,15 @@ layout(binding = 0, set = 0) uniform CameraProperties
     vec4 controlls;
 } cam;
 
+struct Gizzmo {
+    vec4 color;
+    vec3 pos;
+    float radius;
+};
+
 layout(binding = 2, set = 0) uniform sampler2D skybox;
+layout(std430, set = 0, binding = 3) readonly buffer uGizzmoBuffer { Gizzmo GizzmoBuffer[]; };
+
 
 layout(location = 0) out vec4 outColor;
 layout(location = 1) out float outDepth;
@@ -69,6 +77,23 @@ float atan2(in float y, in float x)
 	return 0;
 }
 
+float raySphereIntersect(vec3 r0, vec3 rd, vec3 s0, float sr) {
+    // - r0: ray origin
+    // - rd: normalized ray direction
+    // - s0: sphere center
+    // - sr: sphere radius
+    // - Returns distance from r0 to first intersecion with sphere,
+    //   or -1.0 if no intersection.
+    float a = dot(rd, rd);
+    vec3 s0_r0 = r0 - s0;
+    float b = 2.0 * dot(rd, s0_r0);
+    float c = dot(s0_r0, s0_r0) - (sr * sr);
+    if (b*b - 4.0*a*c < 0.0) {
+        return -1.0;
+    }
+    return (-b - sqrt((b*b) - 4.0*a*c))/(2.0*a);
+}
+
 void main() {
 
     const vec2 pixelCenter = vec2(gl_FragCoord.xy) + vec2(0.5);
@@ -77,6 +102,19 @@ void main() {
 	vec4 origin = cam.viewInverse * vec4(0,0,0,1);
 	vec4 target = cam.projInverse * vec4(d.x, d.y, 1, 1) ;
 	vec4 direction = cam.viewInverse*vec4(normalize(target.xyz), 0) ;
+
+    for(int i = 0; i<10; i++) {
+        Gizzmo current = GizzmoBuffer[i];
+        if(current.radius < 0.0) {
+            continue;
+        }
+
+        if(raySphereIntersect(origin.xyz, direction.xyz, current.pos, current.radius) != -1) {
+            outColor = current.color;
+            outDepth = 1.0;
+            return;
+        }
+    }
 
     vec3 o_pos, o_pos2;
     vec3 o_color, o_color2;
@@ -93,6 +131,8 @@ void main() {
 
     bool shadow_hit = Octree_RayMarchLeaf(o_pos, light_dir, o_pos2, o_color2, o_normal2);
     // * (abs(dot(o_normal, light_dir)) + 0.2)
+
+
 
     if (min(depth, plane_depth) < 1.0 / 0.0) {
         if (shadow_hit) {

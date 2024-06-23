@@ -1028,7 +1028,7 @@ impl Image {
     }
 }
 
-fn copy_buffer(device: &Device, cmd: &vk::CommandBuffer, src_buffer: &Buffer, dst_buffer: &Buffer) {
+pub fn copy_buffer(device: &Device, cmd: &vk::CommandBuffer, src_buffer: &Buffer, dst_buffer: &Buffer) {
     unsafe {
         let region = vk::BufferCopy::default().size(src_buffer.size);
         device.cmd_copy_buffer(
