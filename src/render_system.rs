@@ -1,4 +1,4 @@
-use std::{ffi::CStr, mem::{size_of, size_of_val}};
+use std::{ffi::CStr, mem::{size_of, size_of_val}, time::Duration};
 
 use ash::{
     ext::buffer_device_address,
@@ -57,12 +57,14 @@ fn render(
     post_proccesing_pipeline: Res<PostProccesingPipeline>,
     time: Res<Time>
 ) {
-    // log::info!("{:?}", time.delta());
+    log::info!("{:?}", time.delta());
     data.uniform_buffer
         .copy_data_to_buffer(std::slice::from_ref(&(*uniform_data)))
         .unwrap();
 
     gizzmo_buffer.update(&mut renderer);
+
+    // std::thread::sleep(Duration::from_millis(100));
 
     renderer
         .render(|renderer, i| {
@@ -207,7 +209,7 @@ pub struct GizzmoBuffer{
 }
 
 impl GizzmoBuffer {
-    pub fn draw_gizzmo(&mut self, i: usize, color: glam::Vec3, pos: glam::Vec3, radius: f32) {
+    pub fn sphere(&mut self, i: usize, color: glam::Vec3, pos: glam::Vec3, radius: f32) {
         self.data[i as usize].color = glam::vec4(color.x, color.y, color.z, 1.0);
         self.data[i as usize].position = pos;
         self.data[i as usize].radius = radius;

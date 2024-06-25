@@ -42,6 +42,10 @@ const float light_hight = PI/4;
 
 const vec3 light_dir = vec3(sin(ligth_rotation)*cos(light_hight), sin(ligth_rotation)*sin(light_hight), cos(ligth_rotation));
 
+vec3 polar_form(float theta, float thi) {
+    return vec3(sin(theta)*cos(thi), sin(theta)*sin(thi), cos(theta));
+}
+
 float ray_plane(vec3 origin, vec3 direction, vec3 normal, vec3 center) {
     float denom = dot(normal, direction);
     if (abs(denom) > 0.0001f)
@@ -94,6 +98,8 @@ float raySphereIntersect(vec3 r0, vec3 rd, vec3 s0, float sr) {
     return (-b - sqrt((b*b) - 4.0*a*c))/(2.0*a);
 }
 
+const int max_rays = 3;
+
 void main() {
 
     const vec2 pixelCenter = vec2(gl_FragCoord.xy) + vec2(0.5);
@@ -129,15 +135,19 @@ void main() {
         o_color = vec3(min(max(plane_depth / 100.0, 0.3), 0.8));
     }
 
-    bool shadow_hit = Octree_RayMarchLeaf(o_pos, light_dir, o_pos2, o_color2, o_normal2);
+    uint rngState = uint((gl_FragCoord.y * cam.controlls.z) + gl_FragCoord.x);
+
+    int hits = 0;
+    for(int i = 0; i<max_rays; i++) {
+        bool shadow_hit = Octree_RayMarchLeaf(o_pos + (o_normal * 0.0001), polar_form(ligth_rotation + (((RandomValue(rngState) * 2.0) - 1.0) * 0.5), light_hight + ((RandomValue(rngState) * 2.0) - 1.0) * 0.5), o_pos2, o_color2, o_normal2);
+        if (!shadow_hit) {
+            hits++;
+        }
+    }
     // * (abs(dot(o_normal, light_dir)) + 0.2)
 
-
-
     if (min(depth, plane_depth) < 1.0 / 0.0) {
-        if (shadow_hit) {
-            o_color *= 0.35;
-        }
+        o_color *= max(float(hits) / max_rays, 0.1);
         outColor = vec4(o_color * max(dot(o_normal, light_dir), 0.25), 0.0);
     } else {
         float u = (0.5 + atan2(direction.z, direction.x)/(2*PI));

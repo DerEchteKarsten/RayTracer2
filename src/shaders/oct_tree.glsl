@@ -16,7 +16,7 @@ bool Octree_RayMarchLeaf(vec3 o, vec3 d, out vec3 o_pos, out vec3 o_color, out v
 	// Precompute the coefficients of tx(x), ty(y), and tz(z).
 	// The octree is assumed to reside at coordinates [1, 2].
 	vec3 t_coef = 1.0f / -abs(d);
-	vec3 t_bias = t_coef * o;
+	vec3 t_bias = t_coef * o;//(o + vec3(0.5, 0.0, 1.0));
 
 	uint oct_mask = 0u;
 	if (d.x > 0.0f)

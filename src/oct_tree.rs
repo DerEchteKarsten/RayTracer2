@@ -197,6 +197,25 @@ impl Octant {
     
         return Ok((octree, size));
     }
+
+    pub fn trace(&self, org: glam::Vec3, dir: glam::Vec3, level_dim: u32, level_pos: Vec3, depth: &mut f32) {
+        let box_hit = ray_box(org, dir, level_pos - Vec3::splat((level_dim ) as f32),level_pos + Vec3::splat((level_dim)as f32));
+        if box_hit == f32::INFINITY || box_hit > *depth {
+            return;
+        }
+        if self.color.is_some() {
+            *depth = box_hit;
+        }
+        if level_dim <= 1 || (self.color.is_none() && self.children.is_none()){
+            return;
+        }
+        let level_dim = level_dim / 4;
+        if let Some(children) = self.children.as_ref() {
+            for (i, c) in children.iter().enumerate() {
+                c.trace(org, dir, level_dim, level_pos + (level_dim as f32) * vec3((i & 0b001 == 1)as u32 as f32, (i & 0b010 == 1) as u32 as f32, (i & 0b100 == 1) as u32 as f32), depth);
+            }
+        }
+    }
 }
 const STACK_SIZE: u32 = 23;
 const EPS: f32 = 3.552713678800501e-15;
