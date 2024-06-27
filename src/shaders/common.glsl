@@ -1,5 +1,8 @@
 #extension GL_AMD_gpu_shader_half_float : enable
 #define PI 3.1415926
+#include "./oct_tree.glsl"
+
+#define INFINITY 1.0 / 0.0
 
 // float RandomValue(inout uint state) {
 // 	float res = fract(sin(dot(vec2(state, state), vec2(12.9898, 78.233))) * 43758.5453);
@@ -90,4 +93,31 @@ void unpack(in vec4 g_buffer, out vec4 albedo, out vec4 normal, out float roughn
 	roughness = roughness_metalness.x;
 	metalness = roughness_metalness.y;
     emissive = unpackUnorm4x8(floatBitsToUint(g_buffer.w));
+}
+
+float ray_plane(vec3 origin, vec3 direction, vec3 normal, vec3 center) {
+    float denom = dot(normal, direction);
+    if (abs(denom) > 0.0001f)
+    {
+        float t = dot((center - origin), normal) / denom;
+        if (t >= 0) return t;
+    }
+    return 1.0/0.0;
+}
+const vec3 plane_normal = vec3(0.0, 1.0, 0.0);
+
+
+float ray_cast(in vec3 org, in vec3 dir, out vec3 o_pos, out vec3 o_normal, out vec3 o_color) {
+	bool hit = Octree_RayMarchLeaf(org, dir, o_pos, o_color, o_normal);
+	float hit_depth = length(org - o_pos);
+    float plane_depth = ray_plane(org, dir, plane_normal, vec3(0.0, 0.99999, 0.0));
+
+	float depth = min(hit ? hit_depth : INFINITY, plane_depth);
+
+    if (depth == plane_depth) {
+        o_pos = org + dir * plane_depth;
+        o_normal = plane_normal;
+        o_color = vec3(min(max(plane_depth / 100.0, 0.3), 0.8));
+    }
+	return depth;
 }

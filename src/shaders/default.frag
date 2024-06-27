@@ -10,8 +10,8 @@
 // #extension GL_EXT_shader_explicit_arithmetic_types_float32 : enable
 // #extension GL_EXT_shader_explicit_arithmetic_types_float64 : enable
 
-#include "./oct_tree.glsl"
-#include "./common.glsl"
+#include "./restir.glsl"
+
 struct Octant {
     uint32_t children[8];
     uint32_t empty_color;
@@ -31,31 +31,15 @@ struct Gizzmo {
 };
 
 layout(binding = 2, set = 0) uniform sampler2D skybox;
+
 layout(std430, set = 0, binding = 3) readonly buffer uGizzmoBuffer { Gizzmo GizzmoBuffer[]; };
 
+layout( push_constant ) uniform Frame {
+	uint frame;
+} f;
 
 layout(location = 0) out vec4 outColor;
 layout(location = 1) out float outDepth;
-
-const float ligth_rotation = PI/1.5; 
-const float light_hight = PI/4; 
-
-const vec3 light_dir = vec3(sin(ligth_rotation)*cos(light_hight), sin(ligth_rotation)*sin(light_hight), cos(ligth_rotation));
-
-vec3 polar_form(float theta, float thi) {
-    return vec3(sin(theta)*cos(thi), sin(theta)*sin(thi), cos(theta));
-}
-
-float ray_plane(vec3 origin, vec3 direction, vec3 normal, vec3 center) {
-    float denom = dot(normal, direction);
-    if (abs(denom) > 0.0001f)
-    {
-        float t = dot((center - origin), normal) / denom;
-        if (t >= 0) return t;
-    }
-    return 1.0/0.0;
-}
-    const vec3 plane_normal = vec3(0.0, 1.0, 0.0);
 
 
 float atan2(in float y, in float x)
@@ -122,37 +106,23 @@ void main() {
         }
     }
 
-    vec3 o_pos, o_pos2;
-    vec3 o_color, o_color2;
-    vec3 o_normal, o_normal2;
-    bool hit = Octree_RayMarchLeaf(origin.xyz, direction.xyz, o_pos, o_color, o_normal);
-    float plane_depth = ray_plane(origin.xyz, direction.xyz, plane_normal, vec3(0.0, 0.99999, 0.0));
-    float depth = hit ? length(origin.xyz - o_pos) : 1.0/0.0;
+    vec3 o_pos, o_color, o_normal, o_pos2, o_color2, o_normal2;
+    float depth = ray_cast(origin.xyz, direction.xyz, o_pos, o_normal, o_color);
 
-    if (!hit || depth > plane_depth) {
-        o_pos = origin.xyz + direction.xyz * plane_depth;
-        o_normal = plane_normal;
-        o_color = vec3(min(max(plane_depth / 100.0, 0.3), 0.8));
-    }
-
-    uint rngState = uint((gl_FragCoord.y * cam.controlls.z) + gl_FragCoord.x);
-
-    int hits = 0;
-    for(int i = 0; i<max_rays; i++) {
-        bool shadow_hit = Octree_RayMarchLeaf(o_pos + (o_normal * 0.0001), polar_form(ligth_rotation + (((RandomValue(rngState) * 2.0) - 1.0) * 0.5), light_hight + ((RandomValue(rngState) * 2.0) - 1.0) * 0.5), o_pos2, o_color2, o_normal2);
-        if (!shadow_hit) {
-            hits++;
-        }
-    }
-    // * (abs(dot(o_normal, light_dir)) + 0.2)
-
-    if (min(depth, plane_depth) < 1.0 / 0.0) {
-        o_color *= max(float(hits) / max_rays, 0.1);
-        outColor = vec4(o_color * max(dot(o_normal, light_dir), 0.25), 0.0);
-    } else {
+    if (depth >= INFINITY) {
         float u = (0.5 + atan2(direction.z, direction.x)/(2*PI));
         float v = (0.5 - asin(direction.y)/PI);
         outColor = texture(skybox, vec2(u, v));
+        outDepth = INFINITY;
+        return;
     }
-    outDepth = min(depth, plane_depth);
+
+    uint rngState = uint((gl_FragCoord.y * cam.controlls.z) + gl_FragCoord.x) + uint(f.frame) * 23145;
+    Reservoir reservoir = Reservoir(0, 0.0, 0, 0.0);
+    outColor = vec4(RIS(reservoir, o_pos, o_normal, o_color, rngState), 0.0);
+    // const vec3 light_dir =  polar_form(ligth_rotation, light_hight);
+    // float depth2 = ray_cast(o_pos + o_normal * 0.0001, light_dir, o_pos2, o_normal2, o_color2);
+    // outColor = vec4(max(dot(o_normal, light_dir), 0.3) * (depth2 == INFINITY ? o_color : o_color * 0.4), 1.0); 
+
+    outDepth = depth;
 }

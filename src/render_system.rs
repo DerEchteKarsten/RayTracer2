@@ -1,4 +1,4 @@
-use std::{ffi::CStr, mem::{size_of, size_of_val}, time::Duration};
+use std::{f32::consts::PI, ffi::CStr, mem::{size_of, size_of_val}, time::Duration};
 
 use ash::{
     ext::buffer_device_address,
@@ -8,8 +8,8 @@ use ash::{
     },
     vk::{self, DescriptorType, ShaderStageFlags, KHR_SPIRV_1_4_NAME},
 };
-use bevy::{prelude::*, winit::WinitWindows};
-use glam::vec4;
+use bevy::{app::{App, Startup, Update}, prelude::{NonSendMut, Res, ResMut, Resource, World}, time::Time, winit::WinitWindows};
+use glam::*;
 use gpu_allocator::MemoryLocation;
 use raw_window_handle::{HasRawDisplayHandle, HasRawWindowHandle};
 
@@ -52,12 +52,11 @@ fn render(
     mut renderer: NonSendMut<Renderer>,
     uniform_data: Res<CameraUniformData>,
     mut gizzmo_buffer: ResMut<GizzmoBuffer>,
-    data: Res<FrameData>,
+    mut data: ResMut<FrameData>,
     raytracing_pipeline: Res<RayTracingPipeline>,
     post_proccesing_pipeline: Res<PostProccesingPipeline>,
     time: Res<Time>
 ) {
-    log::info!("{:?}", time.delta());
     data.uniform_buffer
         .copy_data_to_buffer(std::slice::from_ref(&(*uniform_data)))
         .unwrap();
@@ -65,17 +64,16 @@ fn render(
     gizzmo_buffer.update(&mut renderer);
 
     // std::thread::sleep(Duration::from_millis(100));
-
+    data.frame += 1;
     renderer
         .render(|renderer, i| {
             let cmd = &renderer.cmd_buffs[i as usize];
 
             unsafe {
-                // let frame_c = std::slice::from_raw_parts(
-                //     &frame as *const u32 as *const u8,
-                //     size_of::<u32>(),
-                // );
-                // let moved_c = &[if moved == true { 1 as u8 } else { 0 as u8 }, 0, 0, 0];
+                let frame_c = std::slice::from_raw_parts(
+                    &data.frame as *const u32 as *const u8,
+                    size_of::<u32>(),
+                );
 
                 let begin_info = vk::RenderPassBeginInfo::default()
                     .clear_values(&[
@@ -128,6 +126,9 @@ fn render(
                     &[raytracing_pipeline.descriptor],
                     &[],
                 );
+
+                renderer.device.cmd_push_constants(*cmd, raytracing_pipeline.layout, vk::ShaderStageFlags::FRAGMENT, 0, frame_c);
+
                 renderer.device.cmd_draw(*cmd, 6, 1, 0, 0);
 
                 renderer.device.cmd_end_render_pass(*cmd);
@@ -190,6 +191,7 @@ struct FrameData {
     pub depth_buffers: Vec<ImageAndView>,
     pub present_frame_buffers: Vec<vk::Framebuffer>,
     pub uniform_buffer: Buffer,
+    pub frame: u32,
 }
 
 #[repr(C)]
@@ -224,6 +226,50 @@ impl GizzmoBuffer {
         // info!("{:?}", self.data);
         self.dirty = false;
     }
+}
+
+const ligth_rotation: f32 = PI/1.5; 
+const light_hight: f32 = PI/4.0; 
+
+fn polar_form(theta: f32, thi: f32) -> glam::Vec3 {
+    return vec3(f32::sin(theta)*f32::cos(thi), f32::sin(theta)*f32::sin(thi), f32::cos(theta));
+}
+
+fn angle_axis3x3(angle: f32, axis: glam::Vec3) -> glam::Mat3 {
+    let s = f32::sin(angle);
+    let c = f32::cos(angle);
+
+    let t = 1.0 - c;
+    let x = axis.x;
+    let y = axis.y;
+    let z = axis.z;
+
+    return glam::Mat3::from_cols(
+        vec3(t * x * x + c,      t * x * y - s * z,  t * x * z + s * y),
+        vec3(t * x * y + s * z,  t * y * y + c,      t * y * z - s * x),
+        vec3(t * x * z - s * y,  t * y * z + s * x,  t * z * z + c)
+    );
+}
+
+fn get_cone_sample(direction: glam::Vec3, angle: f32) -> glam::Vec3 {
+    let cos_angle = f32::cos(angle);
+
+    // Generate points on the spherical cap around the north pole [1].
+    // [1] See https://math.stackexchange.com/a/205589/81266
+    let z = rand::random::<f32>() * (1.0 - cos_angle) + cos_angle;
+    let phi = rand::random::<f32>() * 2.0 * PI;
+
+    let x = f32::sqrt(1.0 - z * z) * f32::cos(phi);
+    let y = f32::sqrt(1.0 - z * z) * f32::sin(phi);
+    let north = vec3(0., 0., 1.);
+
+    // Find the rotation axis `u` and rotation angle `rot` [1]
+    let axis = Vec3::normalize(Vec3::cross(north, Vec3::normalize(direction)));
+    let angle = f32::acos(Vec3::dot(Vec3::normalize(direction), north));
+    // Convert rotation axis and angle to 3x3 rotation matrix [2]
+    let r = Affine3A::from_axis_angle(axis, angle);
+
+    return r.matrix3 * vec3(x, y, z);
 }
 
 fn init(world: &mut World) {
@@ -302,6 +348,17 @@ fn init(world: &mut World) {
         }
     };
 
+    let light_dir = polar_form(ligth_rotation, light_hight);
+    let mut light_data = vec![];
+
+    for _ in 0..100 {
+        let dir = get_cone_sample(light_dir, 0.1);
+        println!("{}", dir);
+        light_data.push(dir.xyzx());
+    }
+
+    let lights_buffer = renderer.create_gpu_only_buffer_from_data(vk::BufferUsageFlags::STORAGE_BUFFER, light_data.as_slice(), Some("lights_buffer")).unwrap();
+
     let image = image_thread.join().unwrap();
     let sky_box = Image::new_from_data(&mut renderer, image, vk::Format::R8G8B8A8_SRGB).unwrap();
     let sky_box_sampler =
@@ -324,13 +381,20 @@ fn init(world: &mut World) {
             descriptor_type: vk::DescriptorType::STORAGE_BUFFER,
             stage_flags: ShaderStageFlags::FRAGMENT,
             ..Default::default()
+        },
+        vk::DescriptorSetLayoutBinding {
+            binding: 4,
+            descriptor_count: 1,
+            descriptor_type: vk::DescriptorType::STORAGE_BUFFER,
+            stage_flags: ShaderStageFlags::FRAGMENT,
+            ..Default::default()
         }],
         &[vk::DescriptorPoolSize {
             descriptor_count: 1,
             ty: DescriptorType::COMBINED_IMAGE_SAMPLER,
         },
         vk::DescriptorPoolSize {
-            descriptor_count: 1,
+            descriptor_count: 2,
             ty: DescriptorType::STORAGE_BUFFER,
         }],
         &[WriteDescriptorSet {
@@ -344,6 +408,10 @@ fn init(world: &mut World) {
         WriteDescriptorSet {
             binding: 3,
             kind: WriteDescriptorSetKind::StorageBuffer { buffer: gizzmo_buffer.buffer.inner }
+        },
+        WriteDescriptorSet {
+            binding: 4,
+            kind: WriteDescriptorSetKind::StorageBuffer { buffer: lights_buffer.inner }
         }],
     )
     .unwrap();
@@ -381,6 +449,7 @@ fn init(world: &mut World) {
         frame_buffers,
         present_frame_buffers,
         uniform_buffer,
+        frame: 0,
     });
     world.insert_resource(raytracing_pipeline);
     world.insert_resource(post_proccesing_pipeline);

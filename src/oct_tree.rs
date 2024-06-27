@@ -1,6 +1,7 @@
 use anyhow::Result;
 use bevy::prelude::Resource;
-use glam::{uvec3, vec3, UVec3, Vec3};
+use dot_vox::{DotVoxData, SceneNode};
+use glam::{ivec3, uvec3, vec3, IVec3, UVec3, Vec3};
 
 #[derive(Debug, Default)]
 pub struct Octant {
@@ -177,24 +178,18 @@ impl Octant {
     
     pub fn load(path: &str) -> Result<(Self, u32)> {
         let mut octree = Self::default();
-        let file = dot_vox::load(path).unwrap();
-        let models = file.models;
-        let m = models.first().unwrap();
-        let mut size = m.size.x;
-        if size < m.size.y {
-            size = m.size.y
-        }
-        if size < m.size.z {
-            size = m.size.z
-        }
-        size = 2_u32.pow(((size as f32).log2()).ceil() as u32);
-        for v in m.voxels.iter() {
-            let color = file.palette[v.i as usize];
-            let u32_color = ((color.b as u32) << 16) | ((color.g as u32) << 8) | (color.r as u32);
-            let pos = UVec3::new(size -1 - v.x as u32, v.z as u32, v.y as u32);
-            octree.append_voxel(u32_color, size, pos);
-        }
-    
+        let mut file = dot_vox::load(path).unwrap();
+        let size = 512;
+        let node = file.scenes.first().unwrap().clone();
+        traverse_scene(&node, &mut file, &mut octree, size, ivec3(0, 0, 0));
+        // let mut size = m.size.x;
+        // if size < m.size.y {
+        //     size = m.size.y
+        // }
+        // if size < m.size.z {
+        //     size = m.size.z
+        // }
+        // size = 2_u32.pow(((size as f32).log2()).ceil() as u32);
         return Ok((octree, size));
     }
 
@@ -217,6 +212,39 @@ impl Octant {
         }
     }
 }
+
+fn traverse_scene(node: &SceneNode, file: &mut DotVoxData, octree: &mut Octant, size: u32, transform: IVec3) {
+    match node {
+        SceneNode::Group { attributes, children } => {
+            for c in children {
+                let child_node = file.scenes[*c as usize].clone();
+                traverse_scene(&child_node, file, octree, size, transform)
+            }
+        },
+        SceneNode::Shape { attributes, models } => {
+            for m in models {
+                let model = &file.models[m.model_id as usize];
+                for v in model.voxels.iter() {
+                    let color = file.palette[v.i as usize];
+                    let u32_color = ((color.b as u32) << 16) | ((color.g as u32) << 8) | (color.r as u32);
+                    let pos = UVec3::new(v.x as u32, v.z as u32, v.y as u32).as_ivec3() + transform;
+                    octree.append_voxel(u32_color, size, (pos + ivec3(size as i32/2, size as i32/2, size as i32/2)).as_uvec3());
+                }
+            }
+        },
+        SceneNode::Transform { attributes, frames, child, layer_id } => {
+            let child_node = &file.scenes[(*child) as usize].clone();
+            let attribs = &frames.first().unwrap().attributes;
+            let attribs_val = attribs.get("_t");
+            let transform_string = attribs_val.cloned().unwrap_or("0 0 0".to_owned());
+            let components = transform_string.split(" ").map(|s| {s.parse::<i32>().unwrap_or(0)}).collect::<Vec<_>>();
+            let parsed_transform = IVec3::new(components[0], components[2], components[1]);
+            println!("{:?}", attribs);
+            traverse_scene(child_node, file, octree, size, transform + parsed_transform);
+        },
+    }
+}
+
 const STACK_SIZE: u32 = 23;
 const EPS: f32 = 3.552713678800501e-15;
 

@@ -333,14 +333,20 @@ pub fn create_fullscreen_quad_pipeline(
             .binding(1)
             .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
             .descriptor_count(1)
-            .stage_flags(vk::ShaderStageFlags::FRAGMENT | vk::ShaderStageFlags::VERTEX),
+            .stage_flags(vk::ShaderStageFlags::FRAGMENT),
     ];
 
     descriptor_bindings.extend_from_slice(bindings);
 
     let descriptor_layout = ctx.create_descriptor_set_layout(&descriptor_bindings, &[])?;
     let set_layouts = [descriptor_layout];
-    let layout_info = vk::PipelineLayoutCreateInfo::default().set_layouts(&set_layouts);
+    let layout_info = vk::PipelineLayoutCreateInfo::default()
+        .set_layouts(&set_layouts)
+        .push_constant_ranges(&[vk::PushConstantRange {
+            offset: 0,
+            size: 4,
+            stage_flags: vk::ShaderStageFlags::FRAGMENT
+        }]);
     let layout = unsafe { ctx.device.create_pipeline_layout(&layout_info, None) }?;
 
     let color_blend_attachments = [

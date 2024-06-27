@@ -70,8 +70,12 @@ fn render(cam: Res<CameraUniformData>, world: Res<GameWorld>) {
     panic!()
 }
 
+fn fps(time: Res<Time>) {
+    println!("{:?}", time.delta());
+}
+
 fn main() {
-    let model = oct_tree::Octant::load("./models/map.vox").unwrap();
+    let model = oct_tree::Octant::load("./models/VoxelGraveyard_DemoScene.vox").unwrap();
     App::new()
         .insert_resource(AccessibilityRequested::default())
         .insert_resource(DeviceFeatures {
@@ -111,6 +115,7 @@ fn main() {
             RenderPlugin,
             PlayerPlugin,
         ))
+        .add_systems(Update, fps)
         .add_systems(Startup, setup)
         // .add_systems(PostUpdate, render)
         .run();

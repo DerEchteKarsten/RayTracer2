@@ -542,7 +542,6 @@ impl Renderer {
             .wait_semaphores(rf)
             .swapchains(sc)
             .image_indices(&image_indices);
-
         match unsafe {
             self.swapchain
                 .ash_swapchain
