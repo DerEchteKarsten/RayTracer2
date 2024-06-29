@@ -1,4 +1,9 @@
-use std::{f32::consts::PI, ffi::CStr, mem::{size_of, size_of_val}, time::Duration};
+use std::{
+    f32::consts::PI,
+    ffi::CStr,
+    mem::{size_of, size_of_val},
+    time::Duration,
+};
 
 use ash::{
     ext::buffer_device_address,
@@ -8,16 +13,25 @@ use ash::{
     },
     vk::{self, DescriptorType, ShaderStageFlags, KHR_SPIRV_1_4_NAME},
 };
-use bevy::{app::{App, Startup, Update}, prelude::{NonSendMut, Res, ResMut, Resource, World}, time::Time, winit::WinitWindows};
+use bevy::{
+    app::{App, Startup, Update},
+    prelude::{NonSendMut, Res, ResMut, Resource, World},
+    time::Time,
+    winit::WinitWindows,
+};
 use glam::*;
 use gpu_allocator::MemoryLocation;
 use raw_window_handle::{HasRawDisplayHandle, HasRawWindowHandle};
 
 use crate::{
-    copy_buffer, oct_tree::*, pipelines::{
+    copy_buffer,
+    oct_tree::*,
+    pipelines::{
         create_fullscreen_quad_pipeline, create_post_proccesing_pipelien, create_storage_images,
         PostProccesingPipeline, RayTracingPipeline,
-    }, Buffer, Camera, CameraUniformData, DeviceFeatures, Image, ImageAndView, Renderer, WriteDescriptorSet, WriteDescriptorSetKind, WINDOW_SIZE
+    },
+    Buffer, Camera, CameraUniformData, DeviceFeatures, Image, ImageAndView, Renderer,
+    WriteDescriptorSet, WriteDescriptorSetKind, WINDOW_SIZE,
 };
 
 pub const DEVICE_EXTENSIONS: [&'static CStr; 8] = [
@@ -55,7 +69,7 @@ fn render(
     mut data: ResMut<FrameData>,
     raytracing_pipeline: Res<RayTracingPipeline>,
     post_proccesing_pipeline: Res<PostProccesingPipeline>,
-    time: Res<Time>
+    time: Res<Time>,
 ) {
     data.uniform_buffer
         .copy_data_to_buffer(std::slice::from_ref(&(*uniform_data)))
@@ -127,7 +141,13 @@ fn render(
                     &[],
                 );
 
-                renderer.device.cmd_push_constants(*cmd, raytracing_pipeline.layout, vk::ShaderStageFlags::FRAGMENT, 0, frame_c);
+                renderer.device.cmd_push_constants(
+                    *cmd,
+                    raytracing_pipeline.layout,
+                    vk::ShaderStageFlags::FRAGMENT,
+                    0,
+                    frame_c,
+                );
 
                 renderer.device.cmd_draw(*cmd, 6, 1, 0, 0);
 
@@ -203,7 +223,7 @@ pub struct Gizzmo {
 }
 
 #[derive(Resource)]
-pub struct GizzmoBuffer{
+pub struct GizzmoBuffer {
     pub staging: Buffer,
     pub buffer: Buffer,
     pub data: [Gizzmo; 10],
@@ -217,22 +237,28 @@ impl GizzmoBuffer {
         self.data[i as usize].radius = radius;
         self.dirty = true;
     }
-    
+
     pub fn update(&mut self, renderer: &mut Renderer) {
         self.staging.copy_data_to_buffer(&self.data).unwrap();
-        renderer.execute_one_time_commands(|cmd_buffer| {
-            copy_buffer(&renderer.device, cmd_buffer, &self.staging, &self.buffer);
-        }).unwrap();
+        renderer
+            .execute_one_time_commands(|cmd_buffer| {
+                copy_buffer(&renderer.device, cmd_buffer, &self.staging, &self.buffer);
+            })
+            .unwrap();
         // info!("{:?}", self.data);
         self.dirty = false;
     }
 }
 
-const ligth_rotation: f32 = PI/1.5; 
-const light_hight: f32 = PI/4.0; 
+const ligth_rotation: f32 = PI / 1.5;
+const light_hight: f32 = PI / 4.0;
 
 fn polar_form(theta: f32, thi: f32) -> glam::Vec3 {
-    return vec3(f32::sin(theta)*f32::cos(thi), f32::sin(theta)*f32::sin(thi), f32::cos(theta));
+    return vec3(
+        f32::sin(theta) * f32::cos(thi),
+        f32::sin(theta) * f32::sin(thi),
+        f32::cos(theta),
+    );
 }
 
 fn angle_axis3x3(angle: f32, axis: glam::Vec3) -> glam::Mat3 {
@@ -245,9 +271,9 @@ fn angle_axis3x3(angle: f32, axis: glam::Vec3) -> glam::Mat3 {
     let z = axis.z;
 
     return glam::Mat3::from_cols(
-        vec3(t * x * x + c,      t * x * y - s * z,  t * x * z + s * y),
-        vec3(t * x * y + s * z,  t * y * y + c,      t * y * z - s * x),
-        vec3(t * x * z - s * y,  t * y * z + s * x,  t * z * z + c)
+        vec3(t * x * x + c, t * x * y - s * z, t * x * z + s * y),
+        vec3(t * x * y + s * z, t * y * y + c, t * y * z - s * x),
+        vec3(t * x * z - s * y, t * y * z + s * x, t * z * z + c),
     );
 }
 
@@ -286,7 +312,7 @@ fn init(world: &mut World) {
     .unwrap();
     let game_world = world.get_resource::<GameWorld>().unwrap();
 
-    let image_thread = std::thread::spawn(|| image::open("./src/models/skybox.png").unwrap());
+    let image_thread = std::thread::spawn(|| image::open("./src/models/skybox.exr").unwrap());
     let default_sampler: vk::SamplerCreateInfo = vk::SamplerCreateInfo {
         mag_filter: vk::Filter::LINEAR,
         min_filter: vk::Filter::LINEAR,
@@ -320,26 +346,41 @@ fn init(world: &mut World) {
         .unwrap();
 
     let gizzmo_buffer = {
-        let data = [Gizzmo {position: glam::Vec3::ZERO, radius: -1.0, color: vec4(1.0, 0.0, 0.0, 1.0)}; 10];
+        let data = [Gizzmo {
+            position: glam::Vec3::ZERO,
+            radius: -1.0,
+            color: vec4(1.0, 0.0, 0.0, 1.0),
+        }; 10];
         let size = size_of_val(&data);
-        let gizzmo_staging_buffer = renderer.create_buffer(
-            vk::BufferUsageFlags::TRANSFER_SRC,
-            MemoryLocation::CpuToGpu,
-            size as u64,
-            Some("Gizzmo Staging Buffer"),
-        ).unwrap();
+        let gizzmo_staging_buffer = renderer
+            .create_buffer(
+                vk::BufferUsageFlags::TRANSFER_SRC,
+                MemoryLocation::CpuToGpu,
+                size as u64,
+                Some("Gizzmo Staging Buffer"),
+            )
+            .unwrap();
         gizzmo_staging_buffer.copy_data_to_buffer(&data).unwrap();
 
-        let buffer = renderer.create_buffer(
-            vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
-            MemoryLocation::GpuOnly,
-            size as u64,
-            Some("Gizzmo Buffer"),
-        ).unwrap();
+        let buffer = renderer
+            .create_buffer(
+                vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
+                MemoryLocation::GpuOnly,
+                size as u64,
+                Some("Gizzmo Buffer"),
+            )
+            .unwrap();
 
-        renderer.execute_one_time_commands(|cmd_buffer| {
-            copy_buffer(&renderer.device, cmd_buffer, &gizzmo_staging_buffer, &buffer);
-        }).unwrap();
+        renderer
+            .execute_one_time_commands(|cmd_buffer| {
+                copy_buffer(
+                    &renderer.device,
+                    cmd_buffer,
+                    &gizzmo_staging_buffer,
+                    &buffer,
+                );
+            })
+            .unwrap();
         GizzmoBuffer {
             buffer,
             data,
@@ -351,16 +392,22 @@ fn init(world: &mut World) {
     let light_dir = polar_form(ligth_rotation, light_hight);
     let mut light_data = vec![];
 
-    for _ in 0..100 {
+    for _ in 0..20 {
         let dir = get_cone_sample(light_dir, 0.1);
-        println!("{}", dir);
         light_data.push(dir.xyzx());
     }
 
-    let lights_buffer = renderer.create_gpu_only_buffer_from_data(vk::BufferUsageFlags::STORAGE_BUFFER, light_data.as_slice(), Some("lights_buffer")).unwrap();
+    let lights_buffer = renderer
+        .create_gpu_only_buffer_from_data(
+            vk::BufferUsageFlags::STORAGE_BUFFER,
+            light_data.as_slice(),
+            Some("lights_buffer"),
+        )
+        .unwrap();
 
     let image = image_thread.join().unwrap();
-    let sky_box = Image::new_from_data(&mut renderer, image, vk::Format::R8G8B8A8_SRGB).unwrap();
+    let sky_box =
+        Image::new_from_data(&mut renderer, image, vk::Format::R32G32B32A32_SFLOAT).unwrap();
     let sky_box_sampler =
         unsafe { renderer.device.create_sampler(&default_sampler, None) }.unwrap();
 
@@ -368,51 +415,61 @@ fn init(world: &mut World) {
         &mut renderer,
         &uniform_buffer,
         &oct_tree_buffer,
-        &[vk::DescriptorSetLayoutBinding {
-            binding: 2,
-            descriptor_count: 1,
-            descriptor_type: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
-            stage_flags: ShaderStageFlags::FRAGMENT,
-            ..Default::default()
-        },
-        vk::DescriptorSetLayoutBinding {
-            binding: 3,
-            descriptor_count: 1,
-            descriptor_type: vk::DescriptorType::STORAGE_BUFFER,
-            stage_flags: ShaderStageFlags::FRAGMENT,
-            ..Default::default()
-        },
-        vk::DescriptorSetLayoutBinding {
-            binding: 4,
-            descriptor_count: 1,
-            descriptor_type: vk::DescriptorType::STORAGE_BUFFER,
-            stage_flags: ShaderStageFlags::FRAGMENT,
-            ..Default::default()
-        }],
-        &[vk::DescriptorPoolSize {
-            descriptor_count: 1,
-            ty: DescriptorType::COMBINED_IMAGE_SAMPLER,
-        },
-        vk::DescriptorPoolSize {
-            descriptor_count: 2,
-            ty: DescriptorType::STORAGE_BUFFER,
-        }],
-        &[WriteDescriptorSet {
-            binding: 2,
-            kind: WriteDescriptorSetKind::CombinedImageSampler {
-                view: sky_box.view,
-                sampler: sky_box_sampler,
-                layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+        &[
+            vk::DescriptorSetLayoutBinding {
+                binding: 2,
+                descriptor_count: 1,
+                descriptor_type: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
+                stage_flags: ShaderStageFlags::FRAGMENT,
+                ..Default::default()
             },
-        },
-        WriteDescriptorSet {
-            binding: 3,
-            kind: WriteDescriptorSetKind::StorageBuffer { buffer: gizzmo_buffer.buffer.inner }
-        },
-        WriteDescriptorSet {
-            binding: 4,
-            kind: WriteDescriptorSetKind::StorageBuffer { buffer: lights_buffer.inner }
-        }],
+            vk::DescriptorSetLayoutBinding {
+                binding: 3,
+                descriptor_count: 1,
+                descriptor_type: vk::DescriptorType::STORAGE_BUFFER,
+                stage_flags: ShaderStageFlags::FRAGMENT,
+                ..Default::default()
+            },
+            vk::DescriptorSetLayoutBinding {
+                binding: 4,
+                descriptor_count: 1,
+                descriptor_type: vk::DescriptorType::STORAGE_BUFFER,
+                stage_flags: ShaderStageFlags::FRAGMENT,
+                ..Default::default()
+            },
+        ],
+        &[
+            vk::DescriptorPoolSize {
+                descriptor_count: 1,
+                ty: DescriptorType::COMBINED_IMAGE_SAMPLER,
+            },
+            vk::DescriptorPoolSize {
+                descriptor_count: 2,
+                ty: DescriptorType::STORAGE_BUFFER,
+            },
+        ],
+        &[
+            WriteDescriptorSet {
+                binding: 2,
+                kind: WriteDescriptorSetKind::CombinedImageSampler {
+                    view: sky_box.view,
+                    sampler: sky_box_sampler,
+                    layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                },
+            },
+            WriteDescriptorSet {
+                binding: 3,
+                kind: WriteDescriptorSetKind::StorageBuffer {
+                    buffer: gizzmo_buffer.buffer.inner,
+                },
+            },
+            WriteDescriptorSet {
+                binding: 4,
+                kind: WriteDescriptorSetKind::StorageBuffer {
+                    buffer: lights_buffer.inner,
+                },
+            },
+        ],
     )
     .unwrap();
 
@@ -456,6 +513,5 @@ fn init(world: &mut World) {
 }
 
 pub fn RenderPlugin(app: &mut App) {
-    app.add_systems(Startup, init)
-    .add_systems(Update, render);
+    app.add_systems(Startup, init).add_systems(Update, render);
 }

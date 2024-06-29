@@ -2,10 +2,7 @@ use anyhow::Result;
 use ash::{
     ext::debug_utils,
     khr,
-    vk::{
-        self,
-        ImageView,
-    },
+    vk::{self, ImageView},
     Device, Entry, Instance,
 };
 use bevy::prelude::*;
@@ -139,8 +136,7 @@ impl Renderer {
         .unwrap();
         let ash_surface = khr::surface::Instance::new(&entry, &instance);
 
-        let physical_devices =
-           enumerate_physical_devices(&instance, &ash_surface, &vk_surface)?;
+        let physical_devices = enumerate_physical_devices(&instance, &ash_surface, &vk_surface)?;
         let (physical_device, graphics_queue_family, present_queue_family) =
             select_suitable_physical_device(
                 physical_devices.as_slice(),
@@ -1027,7 +1023,12 @@ impl Image {
     }
 }
 
-pub fn copy_buffer(device: &Device, cmd: &vk::CommandBuffer, src_buffer: &Buffer, dst_buffer: &Buffer) {
+pub fn copy_buffer(
+    device: &Device,
+    cmd: &vk::CommandBuffer,
+    src_buffer: &Buffer,
+    dst_buffer: &Buffer,
+) {
     unsafe {
         let region = vk::BufferCopy::default().size(src_buffer.size);
         device.cmd_copy_buffer(
@@ -1595,10 +1596,6 @@ fn new_device(
             .collect::<Vec<_>>()
     };
 
-    let mut ray_tracing_feature =
-        vk::PhysicalDeviceRayTracingPipelineFeaturesKHR::default().ray_tracing_pipeline(true);
-    let mut acceleration_struct_feature =
-        vk::PhysicalDeviceAccelerationStructureFeaturesKHR::default().acceleration_structure(true);
     let mut vulkan_12_features = vk::PhysicalDeviceVulkan12Features::default()
         .runtime_descriptor_array(true)
         .buffer_device_address(true)
@@ -1612,8 +1609,6 @@ fn new_device(
 
     let mut features = vk::PhysicalDeviceFeatures2::default()
         .features(features)
-        .push_next(&mut acceleration_struct_feature)
-        .push_next(&mut ray_tracing_feature)
         .push_next(&mut vulkan_12_features)
         .push_next(&mut vulkan_13_features);
 

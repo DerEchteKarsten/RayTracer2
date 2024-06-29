@@ -345,7 +345,7 @@ pub fn create_fullscreen_quad_pipeline(
         .push_constant_ranges(&[vk::PushConstantRange {
             offset: 0,
             size: 4,
-            stage_flags: vk::ShaderStageFlags::FRAGMENT
+            stage_flags: vk::ShaderStageFlags::FRAGMENT,
         }]);
     let layout = unsafe { ctx.device.create_pipeline_layout(&layout_info, None) }?;
 

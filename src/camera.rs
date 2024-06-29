@@ -1,8 +1,19 @@
-use bevy::{input::{mouse::{MouseButtonInput, MouseMotion}, ButtonState}, prelude::*, time::Time, window::{CursorGrabMode, PrimaryWindow}};
+use bevy::{
+    input::{
+        mouse::{MouseButtonInput, MouseMotion},
+        ButtonState,
+    },
+    prelude::*,
+    time::Time,
+    window::{CursorGrabMode, PrimaryWindow},
+};
 
 use glam::{vec3, Mat3, Mat4, Quat, Vec3, Vec3Swizzles, Vec4};
 
-use crate::{components::{PhysicsBody, Player, Position}, WINDOW_SIZE};
+use crate::{
+    components::{PhysicsBody, Player, Position},
+    WINDOW_SIZE,
+};
 #[derive(Debug, Default, Clone, Copy, PartialEq, Component)]
 pub struct Camera {
     pub fov: f32,
@@ -20,13 +31,7 @@ pub struct CameraUniformData {
 }
 
 impl Camera {
-    pub fn new(
-        fov: f32,
-        aspect_ratio: f32,
-        z_near: f32,
-        z_far: f32,
-        is_main: bool,
-    ) -> Self {
+    pub fn new(fov: f32, aspect_ratio: f32, z_near: f32, z_far: f32, is_main: bool) -> Self {
         Self {
             fov,
             aspect_ratio,
@@ -36,11 +41,7 @@ impl Camera {
         }
     }
     pub fn view_matrix(position: Vec3, direction: Vec3) -> Mat4 {
-        Mat4::look_at_rh(
-            position,
-            position + direction,
-            vec3(0.0, 1.0, 0.0),
-        )
+        Mat4::look_at_rh(position, position + direction, vec3(0.0, 1.0, 0.0))
     }
 
     pub fn projection_matrix(&self) -> Mat4 {
@@ -52,8 +53,6 @@ impl Camera {
         )
     }
 }
-
-
 
 #[rustfmt::skip]
 pub fn perspective(fovy: f32, aspect: f32, near: f32, far: f32) -> Mat4 {
@@ -115,7 +114,6 @@ impl Default for Controls {
     }
 }
 
-
 pub fn update_mouse_buttons(
     mut controls: ResMut<Controls>,
     mut windows: Query<&mut Window, With<PrimaryWindow>>,
@@ -135,10 +133,7 @@ pub fn update_mouse_buttons(
         }
     }
 }
-pub fn update_mouse_move(
-    mut controls: ResMut<Controls>,
-    mut evr_motion: EventReader<MouseMotion>,
-) {
+pub fn update_mouse_move(mut controls: ResMut<Controls>, mut evr_motion: EventReader<MouseMotion>) {
     for ev in evr_motion.read() {
         controls.cursor_delta = [
             controls.cursor_delta[0] + ev.delta.x,
@@ -147,7 +142,7 @@ pub fn update_mouse_move(
     }
 }
 
-pub fn update_keyboard(keys: Res<ButtonInput<KeyCode>>, mut controls: ResMut<Controls>,) {
+pub fn update_keyboard(keys: Res<ButtonInput<KeyCode>>, mut controls: ResMut<Controls>) {
     controls.go_forward = keys.pressed(KeyCode::KeyW);
     controls.go_backward = keys.pressed(KeyCode::KeyS);
     controls.strafe_right = keys.pressed(KeyCode::KeyD);
@@ -156,11 +151,16 @@ pub fn update_keyboard(keys: Res<ButtonInput<KeyCode>>, mut controls: ResMut<Con
     controls.go_down = keys.pressed(KeyCode::ShiftLeft);
 }
 
-fn update_camera_matrix(query: Query<(&Camera, &Position)>, mut uniform_data: ResMut<CameraUniformData>, mut controls: ResMut<Controls>) {
+fn update_camera_matrix(
+    query: Query<(&Camera, &Position)>,
+    mut uniform_data: ResMut<CameraUniformData>,
+    mut controls: ResMut<Controls>,
+) {
     for (camera, position) in &query {
         if camera.is_main {
             uniform_data.proj_inverse = camera.projection_matrix().inverse();
-            uniform_data.view_inverse = Camera::view_matrix(position.position, position.rotation).inverse();
+            uniform_data.view_inverse =
+                Camera::view_matrix(position.position, position.rotation).inverse();
             uniform_data.input.z = WINDOW_SIZE.0 as f32;
             uniform_data.input.w = WINDOW_SIZE.1 as f32;
         }
@@ -169,6 +169,13 @@ fn update_camera_matrix(query: Query<(&Camera, &Position)>, mut uniform_data: Re
 }
 
 pub fn CameraPlugin(app: &mut App) {
-    app.init_resource::<Controls>()
-        .add_systems(PreUpdate, (update_camera_matrix.before(update_mouse_move), update_mouse_move, update_mouse_buttons, update_keyboard));
+    app.init_resource::<Controls>().add_systems(
+        PreUpdate,
+        (
+            update_camera_matrix.before(update_mouse_move),
+            update_mouse_move,
+            update_mouse_buttons,
+            update_keyboard,
+        ),
+    );
 }
