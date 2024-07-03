@@ -242,7 +242,7 @@ fn traverse_scene(
     octree: &mut Octant,
     size: u32,
     transform: Vec3,
-    rotation: Option<u8>
+    rotation: Option<u8>,
 ) {
     match node {
         SceneNode::Group {
@@ -261,27 +261,61 @@ fn traverse_scene(
                     let color = file.palette[v.i as usize];
                     let u32_color =
                         ((color.b as u32) << 16) | ((color.g as u32) << 8) | (color.r as u32);
-                    let mut pos = Vec3::new(v.x as f32, v.z as f32, v.y as f32) - (vec3(model.size.x as f32, model.size.z as f32, model.size.y as f32) / 2.0);
+                    let mut pos = Vec3::new(v.x as f32, v.z as f32, v.y as f32)
+                        - (vec3(
+                            model.size.x as f32,
+                            model.size.z as f32,
+                            model.size.y as f32,
+                        ) / 2.0);
                     if let Some(rotation) = rotation {
                         let mut arry = [0_f32; 9];
                         let mut mask = 0u8;
-                        arry[(rotation & 0b00000_0011) as usize] = 1.0; mask |= match rotation & 0b0000_0011 {0 => {0b1}, 1 => {0b10}, 2 => {0b100} _=>{0}};
-                        arry[(rotation & 0b00000_1100) as usize + 3] = 1.0; mask |= match rotation & 0b0000_1100 {0 => {0b1}, 1 => {0b10}, 2 => {0b100} _=>{0}};
+                        arry[(rotation & 0b00000_0011) as usize] = 1.0;
+                        mask |= match rotation & 0b0000_0011 {
+                            0 => 0b1,
+                            1 => 0b10,
+                            2 => 0b100,
+                            _ => 0,
+                        };
+                        arry[(rotation & 0b00000_1100) as usize + 3] = 1.0;
+                        mask |= match rotation & 0b0000_1100 {
+                            0 => 0b1,
+                            1 => 0b10,
+                            2 => 0b100,
+                            _ => 0,
+                        };
                         arry[mask.trailing_ones() as usize + 6] = 1.0;
 
                         let rot_mat = Mat3::from_cols_array(&arry);
                         let rot_mat = Mat3::from_cols(
-                            rot_mat.col(2) * if (rotation & 0b0100_0000u8) == 1 {-1.0} else {1.0},
-                            rot_mat.col(0) * if (rotation & 0b0001_0000u8) == 1 {-1.0} else {1.0},
-                            rot_mat.col(1) * if (rotation & 0b0010_0000u8) == 1 {1.0} else {-1.0},
-                        ).transpose();
+                            rot_mat.col(2)
+                                * if (rotation & 0b0100_0000u8) == 1 {
+                                    -1.0
+                                } else {
+                                    1.0
+                                },
+                            rot_mat.col(0)
+                                * if (rotation & 0b0001_0000u8) == 1 {
+                                    -1.0
+                                } else {
+                                    1.0
+                                },
+                            rot_mat.col(1)
+                                * if (rotation & 0b0010_0000u8) == 1 {
+                                    1.0
+                                } else {
+                                    -1.0
+                                },
+                        )
+                        .transpose();
                         pos = rot_mat * pos;
                     }
                     pos += transform;
                     octree.append_voxel(
                         u32_color,
                         size,
-                        (pos + vec3(size as f32 / 2.0, size as f32 / 2.0, size as f32 / 2.0)).as_uvec3(),
+                        (pos + vec3(size as f32 / 2.0, size as f32 / 2.0, size as f32 / 2.0))
+                            .as_uvec3(),
                     );
                 }
             }
@@ -300,10 +334,24 @@ fn traverse_scene(
                 .split(" ")
                 .map(|s| s.parse::<i32>().unwrap_or(0))
                 .collect::<Vec<_>>();
-            let rot = attribs.get("_r").cloned().and_then(|r| {r.parse::<u8>().ok()});
-            let parsed_transform = Vec3::new(-components[0] as f32, components[2] as f32, components[1] as f32);
+            let rot = attribs
+                .get("_r")
+                .cloned()
+                .and_then(|r| r.parse::<u8>().ok());
+            let parsed_transform = Vec3::new(
+                -components[0] as f32,
+                components[2] as f32,
+                components[1] as f32,
+            );
             // println!("{:?}, {}", attribs, rot);
-            traverse_scene(child_node, file, octree, size, transform + parsed_transform, rot);
+            traverse_scene(
+                child_node,
+                file,
+                octree,
+                size,
+                transform + parsed_transform,
+                rot,
+            );
         }
     }
 }

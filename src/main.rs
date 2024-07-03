@@ -25,7 +25,7 @@ use glam::{vec2, vec3, Vec3, Vec4Swizzles};
 use std::default::Default;
 
 const APP_NAME: &'static str = "Test";
-const WINDOW_SIZE: (u32, u32) = (2000, 1000);
+const WINDOW_SIZE: (u32, u32) = (1920, 1000);
 
 fn setup(mut commands: Commands) {
     let position = vec3(1.5, 10.0, 1.5);

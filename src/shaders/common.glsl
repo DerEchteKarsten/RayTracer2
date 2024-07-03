@@ -10,6 +10,8 @@
 // 	return res / 4294967295.0;
 // }
 
+#define SKYBOX 4294967295
+
 uint NextRandom(inout uint state) {
 	state = state * 747796405 + 2891336453;
 	uint result = ((state >> ((state >> 28) + 4)) ^ state) * 277803737;
@@ -107,17 +109,29 @@ float ray_plane(vec3 origin, vec3 direction, vec3 normal, vec3 center) {
 const vec3 plane_normal = vec3(0.0, 1.0, 0.0);
 
 
-float ray_cast(in vec3 org, in vec3 dir, out vec3 o_pos, out vec3 o_normal, out vec3 o_color) {
-	bool hit = Octree_RayMarchLeaf(org, dir, o_pos, o_color, o_normal);
+struct HitInfo {
+	vec3 pos;
+	vec3 normal;
+	vec3 color;
+	uint voxel_id;
+	float depth;
+};
+
+bool ray_cast(in vec3 org, in vec3 dir, out HitInfo hit_info) {
+	vec3 o_pos, o_color, o_normal;
+	uint o_voxel_id;
+	bool hit = Octree_RayMarchLeaf(org, dir, o_pos, o_color, o_normal, o_voxel_id);
 	float hit_depth = length(org - o_pos);
-    float plane_depth = ray_plane(org, dir, plane_normal, vec3(0.0, 0.99999, 0.0));
+    // float plane_depth = ray_plane(org, dir, plane_normal, vec3(0.0, 0.99999, 0.0));
 
-	float depth = min(hit ? hit_depth : INFINITY, plane_depth);
+	// float depth = min(hit ? hit_depth : INFINITY, plane_depth);
 
-    if (depth == plane_depth) {
-        o_pos = org + dir * plane_depth;
-        o_normal = plane_normal;
-        o_color = vec3(min(max(plane_depth / 100.0, 0.3), 0.8));
-    }
-	return depth;
+    // if (depth == plane_depth) {
+    //     o_pos = org + dir * plane_depth;
+    //     o_normal = plane_normal;
+    //     o_color = vec3(min(max(plane_depth / 100.0, 0.3), 0.8));
+	// 	o_voxel_id = PLANE;
+    // }
+	hit_info = HitInfo(o_pos, o_normal, o_color, o_voxel_id, hit_depth);
+	return hit;
 }

@@ -1,14 +1,43 @@
 #include "./common.glsl"
+ 
+struct Sample {
+    vec3 primary_point, primary_normal;
+    vec3 sampled_point, sampled_normal;
+    vec3 radiance_sampled;
+};
 
-struct Reservoir
+struct GIReservoir
+{
+    Sample z;
+    float w;
+    uint M;
+    float W;
+};
+ 
+
+struct RISReservoir
 {
     uint Y; // index of most important light
     float W_y; // light weight
     float W_sum; // sum of all weights for all lights processed
     float M; // number of lights processed for this reservoir
 };
- 
-bool UpdateReservoir(inout Reservoir reservoir, uint X, float w, float c, inout uint rngState)
+
+void UpdateReservoir(inout GIReservoir self, Sample s_new, float w_n, inout uint rngState ) {
+    self.w += w_n;
+    self.M += 1;
+    if (RandomValue(rngState) < (w_n / self.w)) {
+        self.z = s_new;
+    }
+}
+
+void Merge(inout GIReservoir self, in GIReservoir r, float p_hat, inout uint rngState) {
+    uint M_o = self.M;
+    UpdateReservoir(self, r.z, p_hat * r.W * r.M, rngState);
+    self.M = M_o + r.M;
+}
+
+bool UpdateReservoir(inout RISReservoir reservoir, uint X, float w, float c, inout uint rngState)
 {
     reservoir.W_sum += w;
     reservoir.M += c;
@@ -29,7 +58,7 @@ vec3 polar_form(float theta, float thi) {
 }
 
 
-bool IsReservoirValid(in Reservoir reservoir) {
+bool IsReservoirValid(in RISReservoir reservoir) {
     return true;
 }
 
@@ -78,8 +107,9 @@ vec3 getConeSample(inout uint randSeed, vec3 direction, float coneAngle) {
 }
 const int random_lights = 8;
 
-vec3 RIS(inout Reservoir reservoir, in vec3 origin, in vec3 normal, in vec3 color, inout uint rngState) {
 
+vec3 RIS(in vec3 origin, in vec3 normal, in vec3 color, inout uint rngState) {
+    RISReservoir reservoir = RISReservoir(0, 0.0, 0.0, 0.0);
     float pdf = 1.0 / lights.length();
     float p_hat = 0;
     
@@ -98,8 +128,8 @@ vec3 RIS(inout Reservoir reservoir, in vec3 origin, in vec3 normal, in vec3 colo
     if (IsReservoirValid(reservoir))
     {
         vec3 light = lights[reservoir.Y].xyz;
-        vec3 o_pos, o_normal, o_color;
-        bool hit = ray_cast(origin + normal * 0.0001, light, o_pos, o_normal, o_color) == INFINITY;
+        HitInfo hit_info;
+        bool hit = ray_cast(origin + normal * 0.0001, light, hit_info);
 
         float shadowFactor = float(hit); // is this ray occluded?
                     

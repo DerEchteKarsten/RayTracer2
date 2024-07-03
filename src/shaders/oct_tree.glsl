@@ -1,4 +1,4 @@
-layout(std430, set = 0, binding = 1) readonly buffer uuOctree { uint uOctree[]; };
+layout(std430, set = 0, binding = 0) readonly buffer uuOctree { uint uOctree[]; };
 
 #define STACK_SIZE 23
 #define EPS 3.552713678800501e-15
@@ -8,7 +8,7 @@ struct StackItem {
 } stack[STACK_SIZE + 1];
 
 
-bool Octree_RayMarchLeaf(vec3 o, vec3 d, out vec3 o_pos, out vec3 o_color, out vec3 o_normal) {
+bool Octree_RayMarchLeaf(vec3 o, vec3 d, out vec3 o_pos, out vec3 o_color, out vec3 o_normal, out uint voxel_id) {
 	d.x = abs(d.x) >= EPS ? d.x : (d.x >= 0 ? EPS : -EPS);
 	d.y = abs(d.y) >= EPS ? d.y : (d.y >= 0 ? EPS : -EPS);
 	d.z = abs(d.z) >= EPS ? d.z : (d.z >= 0 ? EPS : -EPS);
@@ -45,10 +45,11 @@ bool Octree_RayMarchLeaf(vec3 o, vec3 d, out vec3 o_pos, out vec3 o_color, out v
 
 	uint scale = STACK_SIZE - 1;
 	float scale_exp2 = 0.5f; // exp2( scale - STACK_SIZE )
-
+	uint index = 0;
 	while (scale < STACK_SIZE) {
 		if (cur == 0u)
-			cur = uOctree[parent + (child_slot_index ^ oct_mask)];
+			index = parent + (child_slot_index ^ oct_mask);
+			cur = uOctree[index];
 		// Determine maximum t-value of the cube by evaluating
 		// tx(), ty(), and tz() at its corner.
 
@@ -171,6 +172,7 @@ bool Octree_RayMarchLeaf(vec3 o, vec3 d, out vec3 o_pos, out vec3 o_color, out v
 		o_pos.z = norm.z > 0 ? pos.z + scale_exp2 + EPS * 2 : pos.z - EPS;
 	o_normal = norm;
 	o_color = vec3(cur & 0xffu, (cur >> 8u) & 0xffu, (cur >> 16u) & 0xffu) * 0.00392156862745098f; // (...) / 255.0f
+	voxel_id = index;
 
 	return scale < STACK_SIZE && t_min <= t_max;
 }

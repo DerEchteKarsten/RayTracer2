@@ -27,8 +27,7 @@ use crate::{
     copy_buffer,
     oct_tree::*,
     pipelines::{
-        create_fullscreen_quad_pipeline, create_post_proccesing_pipelien, create_storage_images,
-        PostProccesingPipeline, RayTracingPipeline,
+        create_frame_buffers, create_main_render_pass, create_raytracing_pipeline, MainPass,
     },
     Buffer, Camera, CameraUniformData, DeviceFeatures, Image, ImageAndView, Renderer,
     WriteDescriptorSet, WriteDescriptorSetKind, WINDOW_SIZE,
@@ -67,8 +66,7 @@ fn render(
     uniform_data: Res<CameraUniformData>,
     mut gizzmo_buffer: ResMut<GizzmoBuffer>,
     mut data: ResMut<FrameData>,
-    raytracing_pipeline: Res<RayTracingPipeline>,
-    post_proccesing_pipeline: Res<PostProccesingPipeline>,
+    main_pass: Res<MainPass>,
     time: Res<Time>,
 ) {
     data.uniform_buffer
@@ -89,22 +87,72 @@ fn render(
                     size_of::<u32>(),
                 );
 
+                // renderer.device.cmd_bind_pipeline(
+                //     *cmd,
+                //     vk::PipelineBindPoint::COMPUTE,
+                //     main_pass.temporal_reuse.pipeline,
+                // );
+                // renderer.device.cmd_bind_descriptor_sets(
+                //     *cmd,
+                //     vk::PipelineBindPoint::COMPUTE,
+                //     main_pass.temporal_reuse.layout,
+                //     0,
+                //     &[
+                //         main_pass.temporal_reuse.descriptors[i as usize],
+                //         main_pass.temporal_reuse.descriptors2
+                //             [renderer.last_swapchain_image_index as usize],
+                //     ],
+                //     &[],
+                // );
+                // renderer.device.cmd_dispatch(*cmd, 100, 100, 1);
+
+                // renderer.device.cmd_pipeline_barrier(
+                //     *cmd,
+                //     vk::PipelineStageFlags::COMPUTE_SHADER,
+                //     vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS,
+                //     vk::DependencyFlags::DEVICE_GROUP,
+                //     &[],
+                //     &[],
+                //     &[],
+                // );
+                renderer.device.cmd_fill_buffer(
+                    *cmd,
+                    main_pass.hash_map_buffers[i as usize].inner,
+                    0,
+                    main_pass.hash_map_buffers[i as usize].size,
+                    0,
+                );
+                renderer.device.cmd_pipeline_barrier(
+                    *cmd,
+                    vk::PipelineStageFlags::TRANSFER,
+                    vk::PipelineStageFlags::TOP_OF_PIPE,
+                    vk::DependencyFlags::DEVICE_GROUP,
+                    &[],
+                    &[
+                        vk::BufferMemoryBarrier::default()
+                        .buffer(main_pass.hash_map_buffers[i as usize].inner)
+                        .src_access_mask(vk::AccessFlags::MEMORY_WRITE)
+                        .dst_access_mask(vk::AccessFlags::MEMORY_READ)
+                        .offset(0)
+                        .size(main_pass.hash_map_buffers[i as usize].size)
+                        ],
+                    &[],
+                );
                 let begin_info = vk::RenderPassBeginInfo::default()
                     .clear_values(&[
+                        vk::ClearValue {
+                            color: vk::ClearColorValue {
+                                uint32: [0, 0, 0, 0],
+                            },
+                        },
                         vk::ClearValue {
                             color: vk::ClearColorValue {
                                 float32: [0.0, 0.0, 0.0, 1.0],
                             },
                         },
-                        vk::ClearValue {
-                            depth_stencil: vk::ClearDepthStencilValue {
-                                depth: 1.0,
-                                stencil: 0,
-                            },
-                        },
                     ])
-                    .render_pass(raytracing_pipeline.render_pass)
-                    .framebuffer(data.frame_buffers[i as usize])
+                    .render_pass(main_pass.render_pass)
+                    .framebuffer(main_pass.frame_buffers[i as usize])
                     .render_area(vk::Rect2D {
                         extent: vk::Extent2D {
                             width: WINDOW_SIZE.0,
@@ -129,71 +177,51 @@ fn render(
                 renderer.device.cmd_bind_pipeline(
                     *cmd,
                     vk::PipelineBindPoint::GRAPHICS,
-                    raytracing_pipeline.pipeline,
+                    main_pass.ray_tracing.pipeline,
                 );
 
                 renderer.device.cmd_bind_descriptor_sets(
                     *cmd,
                     vk::PipelineBindPoint::GRAPHICS,
-                    raytracing_pipeline.layout,
+                    main_pass.ray_tracing.layout,
                     0,
-                    &[raytracing_pipeline.descriptor],
+                    &[
+                        main_pass.ray_tracing.descriptors[0],
+                        main_pass.ray_tracing.descriptors2
+                            [i as usize],
+                    ],
                     &[],
                 );
 
                 renderer.device.cmd_push_constants(
                     *cmd,
-                    raytracing_pipeline.layout,
+                    main_pass.ray_tracing.layout,
                     vk::ShaderStageFlags::FRAGMENT,
                     0,
                     frame_c,
                 );
 
                 renderer.device.cmd_draw(*cmd, 6, 1, 0, 0);
-
-                renderer.device.cmd_end_render_pass(*cmd);
-
-                let begin_info = vk::RenderPassBeginInfo::default()
-                    .render_pass(post_proccesing_pipeline.render_pass)
-                    .framebuffer(data.present_frame_buffers[i as usize])
-                    .render_area(vk::Rect2D {
-                        extent: vk::Extent2D {
-                            width: WINDOW_SIZE.0,
-                            height: WINDOW_SIZE.1,
-                        },
-                        offset: vk::Offset2D { x: 0, y: 0 },
-                    })
-                    .clear_values(&[vk::ClearValue {
-                        color: vk::ClearColorValue {
-                            float32: [0.0, 0.0, 0.0, 1.0],
-                        },
-                    }]);
-
+                
                 renderer
                     .device
-                    .cmd_set_viewport(*cmd, 0, &[FULL_SCREEN_VIEW_PORT]);
-                renderer
-                    .device
-                    .cmd_set_scissor(*cmd, 0, &[FULL_SCREEN_SCISSOR]);
-
-                renderer.device.cmd_begin_render_pass(
-                    *cmd,
-                    &begin_info,
-                    vk::SubpassContents::INLINE,
-                );
+                    .cmd_next_subpass(*cmd, vk::SubpassContents::INLINE);
 
                 renderer.device.cmd_bind_pipeline(
                     *cmd,
                     vk::PipelineBindPoint::GRAPHICS,
-                    post_proccesing_pipeline.pipeline,
+                    main_pass.post_proccesing.pipeline,
                 );
 
                 renderer.device.cmd_bind_descriptor_sets(
                     *cmd,
                     vk::PipelineBindPoint::GRAPHICS,
-                    post_proccesing_pipeline.layout,
+                    main_pass.post_proccesing.layout,
                     0,
-                    &[post_proccesing_pipeline.descriptors[i as usize]],
+                    &[
+                        main_pass.post_proccesing.descriptors[0],
+                        main_pass.post_proccesing.descriptors2[i as usize],
+                    ],
                     &[],
                 );
                 renderer.device.cmd_draw(*cmd, 6, 1, 0, 0);
@@ -206,10 +234,6 @@ fn render(
 
 #[derive(Resource)]
 struct FrameData {
-    pub frame_buffers: Vec<vk::Framebuffer>,
-    pub color_buffers: Vec<ImageAndView>,
-    pub depth_buffers: Vec<ImageAndView>,
-    pub present_frame_buffers: Vec<vk::Framebuffer>,
     pub uniform_buffer: Buffer,
     pub frame: u32,
 }
@@ -411,18 +435,13 @@ fn init(world: &mut World) {
     let sky_box_sampler =
         unsafe { renderer.device.create_sampler(&default_sampler, None) }.unwrap();
 
-    let raytracing_pipeline = create_fullscreen_quad_pipeline(
+    let main_pass = create_main_render_pass(
         &mut renderer,
-        &uniform_buffer,
         &oct_tree_buffer,
+        &uniform_buffer,
+        &sky_box,
+        &sky_box_sampler,
         &[
-            vk::DescriptorSetLayoutBinding {
-                binding: 2,
-                descriptor_count: 1,
-                descriptor_type: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
-                stage_flags: ShaderStageFlags::FRAGMENT,
-                ..Default::default()
-            },
             vk::DescriptorSetLayoutBinding {
                 binding: 3,
                 descriptor_count: 1,
@@ -438,25 +457,11 @@ fn init(world: &mut World) {
                 ..Default::default()
             },
         ],
+        &[vk::DescriptorPoolSize {
+            descriptor_count: 2,
+            ty: DescriptorType::STORAGE_BUFFER,
+        }],
         &[
-            vk::DescriptorPoolSize {
-                descriptor_count: 1,
-                ty: DescriptorType::COMBINED_IMAGE_SAMPLER,
-            },
-            vk::DescriptorPoolSize {
-                descriptor_count: 2,
-                ty: DescriptorType::STORAGE_BUFFER,
-            },
-        ],
-        &[
-            WriteDescriptorSet {
-                binding: 2,
-                kind: WriteDescriptorSetKind::CombinedImageSampler {
-                    view: sky_box.view,
-                    sampler: sky_box_sampler,
-                    layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-                },
-            },
             WriteDescriptorSet {
                 binding: 3,
                 kind: WriteDescriptorSetKind::StorageBuffer {
@@ -473,43 +478,13 @@ fn init(world: &mut World) {
     )
     .unwrap();
 
-    let (frame_buffers, color_buffers, depth_buffers) =
-        create_storage_images(&mut renderer, &raytracing_pipeline).unwrap();
-
-    let post_proccesing_pipeline =
-        create_post_proccesing_pipelien(&mut renderer, &color_buffers).unwrap();
-
-    let present_frame_buffers = {
-        (0..renderer.swapchain.images.len())
-            .map(|i| unsafe {
-                renderer
-                    .device
-                    .create_framebuffer(
-                        &vk::FramebufferCreateInfo::default()
-                            .attachments(&[renderer.swapchain.images[i].view])
-                            .attachment_count(1)
-                            .height(WINDOW_SIZE.1)
-                            .width(WINDOW_SIZE.0)
-                            .layers(1)
-                            .render_pass(post_proccesing_pipeline.render_pass),
-                        None,
-                    )
-                    .unwrap()
-            })
-            .collect::<Vec<vk::Framebuffer>>()
-    };
     world.insert_resource(gizzmo_buffer);
     world.insert_non_send_resource(renderer);
     world.insert_resource(FrameData {
-        color_buffers,
-        depth_buffers,
-        frame_buffers,
-        present_frame_buffers,
         uniform_buffer,
         frame: 0,
     });
-    world.insert_resource(raytracing_pipeline);
-    world.insert_resource(post_proccesing_pipeline);
+    world.insert_resource(main_pass);
 }
 
 pub fn RenderPlugin(app: &mut App) {

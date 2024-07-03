@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Ok, Result};
 use ash::vk::{self};
 use bevy::prelude::*;
 use gpu_allocator::MemoryLocation;
@@ -7,129 +7,192 @@ use std::default::Default;
 use std::ffi::CString;
 
 use crate::{
-    allocate_descriptor_set, allocate_descriptor_sets, update_descriptor_sets, Buffer, Image,
-    ImageAndView, Renderer, WriteDescriptorSet, WriteDescriptorSetKind, WINDOW_SIZE,
+    allocate_descriptor_set, allocate_descriptor_sets, create_descriptor_pool,
+    create_descriptor_set_layout, update_descriptor_sets, Buffer, Image, ImageAndView, Renderer,
+    WriteDescriptorSet, WriteDescriptorSetKind, WINDOW_SIZE,
 };
 
-pub fn create_storage_images<'a>(
-    ctx: &mut Renderer,
-    g_buffer_pipeline: &RayTracingPipeline,
-) -> Result<(Vec<vk::Framebuffer>, Vec<ImageAndView>, Vec<ImageAndView>)> {
-    let size = ctx.swapchain.images.len();
-    let color_buffers = (0..size)
-        .map(|_| {
-            let image = Image::new_2d(
-                &ctx.device,
-                &mut ctx.allocator,
-                vk::ImageUsageFlags::COLOR_ATTACHMENT
-                    | vk::ImageUsageFlags::STORAGE
-                    | vk::ImageUsageFlags::INPUT_ATTACHMENT,
-                MemoryLocation::GpuOnly,
-                vk::Format::R32G32B32A32_SFLOAT,
-                WINDOW_SIZE.0,
-                WINDOW_SIZE.1,
-            )
-            .unwrap();
-            let image_view = ctx.create_image_view(&image).unwrap();
-            ImageAndView {
-                image,
-                view: image_view,
-            }
-        })
-        .collect::<Vec<ImageAndView>>();
-    let depth_buffers = (0..size)
-        .map(|_| {
-            let image = Image::new_2d(
-                &ctx.device,
-                &mut ctx.allocator,
-                vk::ImageUsageFlags::COLOR_ATTACHMENT
-                    | vk::ImageUsageFlags::STORAGE
-                    | vk::ImageUsageFlags::INPUT_ATTACHMENT,
-                MemoryLocation::GpuOnly,
-                vk::Format::R32_SFLOAT,
-                WINDOW_SIZE.0,
-                WINDOW_SIZE.1,
-            )
-            .unwrap();
-            let image_view = ctx.create_image_view(&image).unwrap();
-            ImageAndView {
-                image,
-                view: image_view,
-            }
-        })
-        .collect::<Vec<ImageAndView>>();
+pub fn create_compute_pipeline(
+    renderer: &mut Renderer,
+    hash_map_buffers: &Vec<Buffer>,
+) -> Result<Pipeline> {
+    let bindings = [vk::DescriptorSetLayoutBinding {
+        descriptor_count: 1,
+        descriptor_type: vk::DescriptorType::STORAGE_BUFFER,
+        binding: 0,
+        ..Default::default()
+    }];
 
+    let descriptor_set_layout = renderer.create_descriptor_set_layout(&bindings, &[])?;
+    let descriptor_set_layout2 = renderer.create_descriptor_set_layout(&bindings, &[])?;
+
+    let set_layouts = [descriptor_set_layout, descriptor_set_layout2];
+    let layout_info = vk::PipelineLayoutCreateInfo::default().set_layouts(&set_layouts);
+    let layout = unsafe { renderer.device.create_pipeline_layout(&layout_info, None) }?;
+
+    let create_info = vk::ComputePipelineCreateInfo::default()
+        .layout(layout)
+        .stage(
+            renderer
+                .create_shader_stage(
+                    vk::ShaderStageFlags::COMPUTE,
+                    "./src/shaders/temp_reuse.comp.spv".to_owned(),
+                )
+                .0,
+        );
+
+    let pipeline = unsafe {
+        renderer
+            .device
+            .create_compute_pipelines(vk::PipelineCache::null(), &[create_info], None)
+    }
+    .unwrap();
+
+    let pool_sizes = [vk::DescriptorPoolSize::default()
+        .descriptor_count(2 * renderer.swapchain.images.len() as u32)
+        .ty(vk::DescriptorType::STORAGE_BUFFER)];
+    let descriptor_pool =
+        renderer.create_descriptor_pool(renderer.swapchain.images.len() as u32 * 2, &pool_sizes)?;
+    let descriptors = allocate_descriptor_sets(
+        &renderer.device,
+        &descriptor_pool,
+        &descriptor_set_layout,
+        renderer.swapchain.images.len() as u32,
+    )?;
+    let descriptors2 = allocate_descriptor_sets(
+        &renderer.device,
+        &descriptor_pool,
+        &descriptor_set_layout2,
+        renderer.swapchain.images.len() as u32,
+    )?;
+
+    for i in 0..renderer.swapchain.images.len() {
+        let writes = [WriteDescriptorSet {
+            binding: 0,
+            kind: WriteDescriptorSetKind::StorageBuffer {
+                buffer: hash_map_buffers[i].inner,
+            },
+        }];
+
+        update_descriptor_sets(renderer, &descriptors[i], &writes);
+        update_descriptor_sets(renderer, &descriptors2[i], &writes);
+    }
+
+    Ok(Pipeline {
+        descriptors2,
+        descriptors,
+        layout,
+        pipeline: *pipeline.first().unwrap(),
+    })
+}
+
+pub fn create_frame_buffers<'a>(
+    ctx: &mut Renderer,
+    render_pass: &vk::RenderPass,
+) -> Result<(Vec<vk::Framebuffer>, Vec<ImageAndView>)> {
+    let size = ctx.swapchain.images.len();
+    let voxel_index_buffers = (0..size)
+        .map(|_| {
+            let image = Image::new_2d(
+                &ctx.device,
+                &mut ctx.allocator,
+                vk::ImageUsageFlags::COLOR_ATTACHMENT
+                    | vk::ImageUsageFlags::STORAGE
+                    | vk::ImageUsageFlags::INPUT_ATTACHMENT,
+                MemoryLocation::GpuOnly,
+                vk::Format::R32_UINT,
+                WINDOW_SIZE.0,
+                WINDOW_SIZE.1,
+            )
+            .unwrap();
+            let image_view = ctx.create_image_view(&image).unwrap();
+            ImageAndView {
+                image,
+                view: image_view,
+            }
+        })
+        .collect::<Vec<ImageAndView>>();
     let frame_buffers = (0..size)
         .map(|i| {
-            let attachments = [color_buffers[i].view, depth_buffers[i].view];
+            let attachments = [voxel_index_buffers[i].view, ctx.swapchain.images[i].view];
             let create_info = vk::FramebufferCreateInfo::default()
                 .attachment_count(2)
                 .attachments(&attachments)
                 .height(WINDOW_SIZE.1)
                 .width(WINDOW_SIZE.0)
                 .layers(1)
-                .render_pass(g_buffer_pipeline.render_pass);
+                .render_pass(*render_pass);
             unsafe { ctx.device.create_framebuffer(&create_info, None) }.unwrap()
         })
         .collect::<Vec<vk::Framebuffer>>();
 
-    Ok((frame_buffers, color_buffers, depth_buffers))
+    Ok((frame_buffers, voxel_index_buffers))
 }
 
-#[derive(Resource)]
-pub struct PostProccesingPipeline {
+pub struct Pipeline {
     pub pipeline: vk::Pipeline,
     pub layout: vk::PipelineLayout,
     pub descriptors: Vec<vk::DescriptorSet>,
-    pub render_pass: vk::RenderPass,
+    pub descriptors2: Vec<vk::DescriptorSet>,
 }
 
-pub fn create_post_proccesing_pipelien(
+#[derive(Resource)]
+pub struct MainPass {
+    pub ray_tracing: Pipeline,
+    pub post_proccesing: Pipeline,
+    pub temporal_reuse: Pipeline,
+    pub render_pass: vk::RenderPass,
+    pub voxel_index_buffers: Vec<ImageAndView>,
+    pub frame_buffers: Vec<vk::Framebuffer>,
+    pub hash_map_buffers: Vec<Buffer>,
+}
+
+pub fn create_post_proccesing_pipeline(
     ctx: &mut Renderer,
+    render_pass: &vk::RenderPass,
     storage_images: &Vec<ImageAndView>,
-) -> Result<PostProccesingPipeline> {
-    let attachments = [vk::AttachmentDescription::default()
-        .samples(vk::SampleCountFlags::TYPE_1)
-        .final_layout(vk::ImageLayout::PRESENT_SRC_KHR)
-        .initial_layout(vk::ImageLayout::UNDEFINED)
-        .format(ctx.swapchain.format)
-        .load_op(vk::AttachmentLoadOp::CLEAR)
-        .store_op(vk::AttachmentStoreOp::STORE)
-        .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
-        .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)];
-    let color_attachments = [vk::AttachmentReference::default()
-        .attachment(0)
-        .layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)];
-    let subpasses = [vk::SubpassDescription::default()
-        .color_attachments(&color_attachments)
-        .pipeline_bind_point(vk::PipelineBindPoint::GRAPHICS)];
+    hash_map_buffers: &Vec<Buffer>,
+    oct_tree_buffer: &Buffer,
+    uniform_buffer: &Buffer,
+    sky_box: &ImageAndView,
+    sky_box_sampler: &vk::Sampler,
+) -> Result<Pipeline> {
+    let static_descriptor_bindings = [
+        vk::DescriptorSetLayoutBinding::default()
+            .binding(0)
+            .descriptor_count(1)
+            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+            .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+        vk::DescriptorSetLayoutBinding::default()
+            .binding(1)
+            .descriptor_count(1)
+            .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+            .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+        vk::DescriptorSetLayoutBinding::default()
+            .binding(2)
+            .descriptor_count(1)
+            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+            .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+    ];
 
-    let dependencys = [vk::SubpassDependency::default()
-        .src_subpass(vk::SUBPASS_EXTERNAL)
-        .dst_subpass(0)
-        .dst_stage_mask(vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT)
-        .src_stage_mask(vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT)
-        .src_access_mask(vk::AccessFlags::empty())
-        .dst_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE)];
-
-    let render_pass_create_info = vk::RenderPassCreateInfo::default()
-        .attachments(&attachments)
-        .dependencies(&dependencys)
-        .subpasses(&subpasses);
-
-    let render_pass = unsafe {
-        ctx.device
-            .create_render_pass(&render_pass_create_info, None)?
-    };
-
-    let descriptor_bindings = [vk::DescriptorSetLayoutBinding::default()
-        .binding(0)
-        .descriptor_count(1)
-        .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
-        .stage_flags(vk::ShaderStageFlags::FRAGMENT)];
+    let descriptor_bindings = [
+        vk::DescriptorSetLayoutBinding::default()
+            .binding(0)
+            .descriptor_count(1)
+            .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
+            .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+        vk::DescriptorSetLayoutBinding::default()
+            .binding(1)
+            .descriptor_count(1)
+            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+            .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+    ];
 
     let descriptor_layout = ctx.create_descriptor_set_layout(&descriptor_bindings, &[])?;
-    let descriptor_layouts = [descriptor_layout];
+    let static_descriptor_layout =
+        ctx.create_descriptor_set_layout(&static_descriptor_bindings, &[])?;
+
+    let descriptor_layouts = [static_descriptor_layout, descriptor_layout];
     let layout_info = vk::PipelineLayoutCreateInfo::default()
         .set_layouts(&descriptor_layouts)
         .push_constant_ranges(&[]);
@@ -205,141 +268,133 @@ pub fn create_post_proccesing_pipelien(
         .layout(layout)
         .rasterization_state(&rasterization_state)
         .multisample_state(&multisample_state)
-        .render_pass(render_pass)
+        .render_pass(*render_pass)
         .stages(&stages)
         .viewport_state(&viewport_state)
-        .subpass(0);
+        .subpass(1);
     let pipeline = unsafe {
         ctx.device
             .create_graphics_pipelines(vk::PipelineCache::null(), &[pipeline_create_info], None)
             .unwrap()
     }[0];
 
-    let pool_sizes = [vk::DescriptorPoolSize::default()
-        .descriptor_count(ctx.swapchain.images.len() as u32)
-        .ty(vk::DescriptorType::STORAGE_IMAGE)];
+    let pool_sizes = [
+        vk::DescriptorPoolSize::default()
+            .descriptor_count(1)
+            .ty(vk::DescriptorType::UNIFORM_BUFFER),
+        vk::DescriptorPoolSize::default()
+            .descriptor_count(ctx.swapchain.images.len() as u32)
+            .ty(vk::DescriptorType::STORAGE_IMAGE),
+        vk::DescriptorPoolSize::default()
+            .descriptor_count(ctx.swapchain.images.len() as u32 + 1)
+            .ty(vk::DescriptorType::STORAGE_BUFFER),
+        vk::DescriptorPoolSize::default()
+            .descriptor_count(1)
+            .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER),
+    ];
 
     let descriptor_pool =
-        ctx.create_descriptor_pool((ctx.swapchain.images.len() as u32) * 2, &pool_sizes)?;
+        ctx.create_descriptor_pool((ctx.swapchain.images.len() as u32) + 1, &pool_sizes)?;
     let descriptors = allocate_descriptor_sets(
         &ctx.device,
         &descriptor_pool,
         &descriptor_layout,
         ctx.swapchain.images.len() as u32,
     )?;
+    let static_descriptor =
+        allocate_descriptor_set(&ctx.device, &descriptor_pool, &static_descriptor_layout)?;
     for i in 0..ctx.swapchain.images.len() {
-        let write = WriteDescriptorSet {
-            binding: 0,
-            kind: WriteDescriptorSetKind::StorageImage {
-                view: storage_images[i].view,
-                layout: vk::ImageLayout::GENERAL,
+        let writes = [
+            WriteDescriptorSet {
+                binding: 0,
+                kind: WriteDescriptorSetKind::StorageImage {
+                    view: storage_images[i].view,
+                    layout: vk::ImageLayout::GENERAL,
+                },
             },
-        };
+            WriteDescriptorSet {
+                binding: 1,
+                kind: WriteDescriptorSetKind::StorageBuffer {
+                    buffer: hash_map_buffers[i].inner,
+                },
+            },
+        ];
 
-        update_descriptor_sets(ctx, &descriptors[i], &[write]);
+        update_descriptor_sets(ctx, &descriptors[i], &writes);
     }
+    let write = [
+        WriteDescriptorSet {
+            binding: 0,
+            kind: WriteDescriptorSetKind::StorageBuffer {
+                buffer: oct_tree_buffer.inner,
+            },
+        },
+        WriteDescriptorSet {
+            binding: 1,
+            kind: WriteDescriptorSetKind::UniformBuffer {
+                buffer: uniform_buffer.inner,
+            },
+        },
+        WriteDescriptorSet {
+            binding: 2,
+            kind: WriteDescriptorSetKind::CombinedImageSampler {
+                view: sky_box.view,
+                sampler: *sky_box_sampler,
+                layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+            },
+        },
+    ];
+    update_descriptor_sets(ctx, &static_descriptor, &write);
 
-    Ok(PostProccesingPipeline {
+    Ok(Pipeline {
+        descriptors2: descriptors,
         pipeline,
         layout,
-        render_pass,
-        descriptors,
+        descriptors: vec![static_descriptor],
     })
 }
 
-#[derive(Resource)]
-pub struct RayTracingPipeline {
-    pub pipeline: vk::Pipeline,
-    pub layout: vk::PipelineLayout,
-    pub _descriptor_layout: vk::DescriptorSetLayout,
-    pub render_pass: vk::RenderPass,
-    pub descriptor: vk::DescriptorSet,
-}
-
-pub fn create_fullscreen_quad_pipeline(
-    ctx: &mut Renderer,
-    uniform_buffer: &Buffer,
+pub fn create_raytracing_pipeline(
+    renderer: &mut Renderer,
+    render_pass: &vk::RenderPass,
+    hash_map_buffers: &Vec<Buffer>,
     oct_tree_buffer: &Buffer,
+    uniform_buffer: &Buffer,
+    sky_box: &ImageAndView,
+    sky_box_sampler: &vk::Sampler,
     bindings: &[vk::DescriptorSetLayoutBinding],
     sizes: &[vk::DescriptorPoolSize],
     own_writes: &[WriteDescriptorSet],
-) -> Result<RayTracingPipeline> {
-    let attachments = [
-        vk::AttachmentDescription::default()
-            .samples(vk::SampleCountFlags::TYPE_1)
-            .final_layout(vk::ImageLayout::GENERAL)
-            .initial_layout(vk::ImageLayout::UNDEFINED)
-            .format(vk::Format::R32G32B32A32_SFLOAT)
-            .load_op(vk::AttachmentLoadOp::CLEAR)
-            .store_op(vk::AttachmentStoreOp::STORE)
-            .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
-            .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE),
-        vk::AttachmentDescription::default()
-            .samples(vk::SampleCountFlags::TYPE_1)
-            .final_layout(vk::ImageLayout::GENERAL)
-            .initial_layout(vk::ImageLayout::UNDEFINED)
-            .format(vk::Format::R32_SFLOAT)
-            .load_op(vk::AttachmentLoadOp::CLEAR)
-            .store_op(vk::AttachmentStoreOp::STORE)
-            .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
-            .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE),
-    ];
-    let color_attachments = [
-        vk::AttachmentReference::default()
-            .attachment(0)
-            .layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL),
-        vk::AttachmentReference::default()
-            .attachment(1)
-            .layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL),
-    ];
-    let subpasses = [vk::SubpassDescription::default()
-        .color_attachments(&color_attachments)
-        .pipeline_bind_point(vk::PipelineBindPoint::GRAPHICS)];
-
-    let dependencys = [vk::SubpassDependency::default()
-        .src_subpass(vk::SUBPASS_EXTERNAL)
-        .dst_subpass(0)
-        .dst_stage_mask(
-            vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
-                | vk::PipelineStageFlags::LATE_FRAGMENT_TESTS,
-        )
-        .src_stage_mask(
-            vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
-                | vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS,
-        )
-        .src_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE)
-        .dst_access_mask(
-            vk::AccessFlags::COLOR_ATTACHMENT_WRITE
-                | vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE,
-        )];
-
-    let render_pass_create_info = vk::RenderPassCreateInfo::default()
-        .attachments(&attachments)
-        .dependencies(&dependencys)
-        .subpasses(&subpasses);
-
-    let render_pass = unsafe {
-        ctx.device
-            .create_render_pass(&render_pass_create_info, None)?
-    };
-
+) -> Result<Pipeline> {
     let mut descriptor_bindings = vec![
         vk::DescriptorSetLayoutBinding::default()
             .binding(0)
             .descriptor_count(1)
-            .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
             .stage_flags(vk::ShaderStageFlags::FRAGMENT),
         vk::DescriptorSetLayoutBinding::default()
             .binding(1)
-            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
             .descriptor_count(1)
+            .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+            .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+        vk::DescriptorSetLayoutBinding::default()
+            .binding(2)
+            .descriptor_count(1)
+            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
             .stage_flags(vk::ShaderStageFlags::FRAGMENT),
     ];
+    let dynamic_bindings = [vk::DescriptorSetLayoutBinding::default()
+        .binding(0)
+        .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+        .descriptor_count(1)
+        .stage_flags(vk::ShaderStageFlags::FRAGMENT)];
 
     descriptor_bindings.extend_from_slice(bindings);
 
-    let descriptor_layout = ctx.create_descriptor_set_layout(&descriptor_bindings, &[])?;
-    let set_layouts = [descriptor_layout];
+    let descriptor_layout = renderer.create_descriptor_set_layout(&descriptor_bindings, &[])?;
+    let dynamic_layout = renderer.create_descriptor_set_layout(&dynamic_bindings, &[])?;
+
+    let set_layouts = [descriptor_layout, dynamic_layout];
     let layout_info = vk::PipelineLayoutCreateInfo::default()
         .set_layouts(&set_layouts)
         .push_constant_ranges(&[vk::PushConstantRange {
@@ -347,26 +402,16 @@ pub fn create_fullscreen_quad_pipeline(
             size: 4,
             stage_flags: vk::ShaderStageFlags::FRAGMENT,
         }]);
-    let layout = unsafe { ctx.device.create_pipeline_layout(&layout_info, None) }?;
+    let layout = unsafe { renderer.device.create_pipeline_layout(&layout_info, None) }?;
 
-    let color_blend_attachments = [
-        vk::PipelineColorBlendAttachmentState::default()
-            .blend_enable(false)
-            .color_write_mask(
-                vk::ColorComponentFlags::R
-                    | vk::ColorComponentFlags::G
-                    | vk::ColorComponentFlags::B
-                    | vk::ColorComponentFlags::A,
-            ),
-        vk::PipelineColorBlendAttachmentState::default()
-            .blend_enable(false)
-            .color_write_mask(
-                vk::ColorComponentFlags::R
-                    | vk::ColorComponentFlags::G
-                    | vk::ColorComponentFlags::B
-                    | vk::ColorComponentFlags::A,
-            ),
-    ];
+    let color_blend_attachments = [vk::PipelineColorBlendAttachmentState::default()
+        .blend_enable(false)
+        .color_write_mask(
+            vk::ColorComponentFlags::R
+                | vk::ColorComponentFlags::G
+                | vk::ColorComponentFlags::B
+                | vk::ColorComponentFlags::A,
+        )];
 
     let color_blend_state = vk::PipelineColorBlendStateCreateInfo::default()
         .attachments(&color_blend_attachments)
@@ -407,11 +452,11 @@ pub fn create_fullscreen_quad_pipeline(
     let entry_point_name: CString = CString::new("main").unwrap();
     let stages = [
         vk::PipelineShaderStageCreateInfo::default()
-            .module(ctx.create_shader_module("./src/shaders/default.frag.spv".to_string()))
+            .module(renderer.create_shader_module("./src/shaders/default.frag.spv".to_string()))
             .stage(vk::ShaderStageFlags::FRAGMENT)
             .name(&entry_point_name),
         vk::PipelineShaderStageCreateInfo::default()
-            .module(ctx.create_shader_module("./src/shaders/default.vert.spv".to_string()))
+            .module(renderer.create_shader_module("./src/shaders/default.vert.spv".to_string()))
             .stage(vk::ShaderStageFlags::VERTEX)
             .name(&entry_point_name),
     ];
@@ -429,50 +474,219 @@ pub fn create_fullscreen_quad_pipeline(
         .layout(layout)
         .rasterization_state(&rasterization_state)
         .multisample_state(&multisample_state)
-        .render_pass(render_pass)
+        .render_pass(*render_pass)
         .stages(&stages)
         .viewport_state(&viewport_state)
         .subpass(0);
     let pipeline = unsafe {
-        ctx.device
+        renderer
+            .device
             .create_graphics_pipelines(vk::PipelineCache::null(), &[pipeline_create_info], None)
             .unwrap()
     }[0];
 
-    let mut pool_sizes = vec![
+    let mut static_sizes = vec![
+        vk::DescriptorPoolSize::default()
+            .descriptor_count(renderer.swapchain.images.len() as u32 + 1)
+            .ty(vk::DescriptorType::STORAGE_BUFFER),
         vk::DescriptorPoolSize::default()
             .descriptor_count(1)
             .ty(vk::DescriptorType::UNIFORM_BUFFER),
         vk::DescriptorPoolSize::default()
-            .descriptor_count(2)
-            .ty(vk::DescriptorType::STORAGE_BUFFER),
+            .descriptor_count(1)
+            .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER),
     ];
-    pool_sizes.extend_from_slice(sizes);
-    let descriptor_pool = ctx.create_descriptor_pool(1, &pool_sizes)?;
-    let descriptor = allocate_descriptor_set(&ctx.device, &descriptor_pool, &descriptor_layout)?;
+    static_sizes.extend_from_slice(&sizes);
 
-    let writes = vec![
+    let descriptor_pool = renderer
+        .create_descriptor_pool(renderer.swapchain.images.len() as u32 + 1, &static_sizes)?;
+    let descriptors =
+        allocate_descriptor_set(&renderer.device, &descriptor_pool, &descriptor_layout)?;
+    let old_descriptors = allocate_descriptor_sets(
+        &renderer.device,
+        &descriptor_pool,
+        &dynamic_layout,
+        renderer.swapchain.images.len() as u32,
+    )?;
+
+    let writes = [
         WriteDescriptorSet {
             binding: 0,
+            kind: WriteDescriptorSetKind::StorageBuffer {
+                buffer: oct_tree_buffer.inner,
+            },
+        },
+        WriteDescriptorSet {
+            binding: 1,
             kind: WriteDescriptorSetKind::UniformBuffer {
                 buffer: uniform_buffer.inner,
             },
         },
         WriteDescriptorSet {
-            binding: 1,
-            kind: WriteDescriptorSetKind::StorageBuffer {
-                buffer: oct_tree_buffer.inner,
+            binding: 2,
+            kind: WriteDescriptorSetKind::CombinedImageSampler {
+                view: sky_box.view,
+                sampler: *sky_box_sampler,
+                layout: vk::ImageLayout::GENERAL,
             },
         },
     ];
-    update_descriptor_sets(ctx, &descriptor, &writes);
-    update_descriptor_sets(ctx, &descriptor, &own_writes);
 
-    Ok(RayTracingPipeline {
+    update_descriptor_sets(renderer, &descriptors, &own_writes);
+    update_descriptor_sets(renderer, &descriptors, &writes);
+    for i in 0..renderer.swapchain.images.len() {
+        let writes = [WriteDescriptorSet {
+            binding: 0,
+            kind: WriteDescriptorSetKind::StorageBuffer {
+                buffer: hash_map_buffers[i].inner,
+            },
+        }];
+        update_descriptor_sets(renderer, &old_descriptors[i], &writes);
+    }
+
+    Ok(Pipeline {
+        descriptors2: old_descriptors,
         pipeline,
-        render_pass,
-        descriptor,
-        _descriptor_layout: descriptor_layout,
+        descriptors: vec![descriptors],
         layout,
+    })
+}
+
+pub fn create_main_render_pass(
+    renderer: &mut Renderer,
+    oct_tree_buffer: &Buffer,
+    unifrom_buffer: &Buffer,
+    sky_box: &ImageAndView,
+    sky_box_sampler: &vk::Sampler,
+    bindings: &[vk::DescriptorSetLayoutBinding],
+    sizes: &[vk::DescriptorPoolSize],
+    own_writes: &[WriteDescriptorSet],
+) -> Result<MainPass> {
+    let attachments = [
+        vk::AttachmentDescription::default()
+            .samples(vk::SampleCountFlags::TYPE_1)
+            .final_layout(vk::ImageLayout::GENERAL)
+            .initial_layout(vk::ImageLayout::UNDEFINED)
+            .format(vk::Format::R32_UINT)
+            .load_op(vk::AttachmentLoadOp::CLEAR)
+            .store_op(vk::AttachmentStoreOp::STORE)
+            .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
+            .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE),
+        vk::AttachmentDescription::default()
+            .samples(vk::SampleCountFlags::TYPE_1)
+            .final_layout(vk::ImageLayout::PRESENT_SRC_KHR)
+            .initial_layout(vk::ImageLayout::UNDEFINED)
+            .format(renderer.swapchain.format)
+            .load_op(vk::AttachmentLoadOp::CLEAR)
+            .store_op(vk::AttachmentStoreOp::STORE)
+            .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
+            .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE),
+    ];
+
+    let attachments1 = [vk::AttachmentReference::default()
+        .attachment(0)
+        .layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)];
+    let attachments2 = [vk::AttachmentReference::default()
+        .attachment(1)
+        .layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)];
+
+    let input_attachments = [vk::AttachmentReference::default()
+        .attachment(0)
+        .layout(vk::ImageLayout::GENERAL)];
+
+    let subpasses = [
+        vk::SubpassDescription::default()
+            .color_attachments(&attachments1)
+            .pipeline_bind_point(vk::PipelineBindPoint::GRAPHICS),
+        vk::SubpassDescription::default()
+            .input_attachments(&input_attachments)
+            .color_attachments(&attachments2)
+            .pipeline_bind_point(vk::PipelineBindPoint::GRAPHICS),
+    ];
+
+    let dependencys = [
+        vk::SubpassDependency::default()
+            .src_subpass(vk::SUBPASS_EXTERNAL)
+            .dst_subpass(0)
+            .src_stage_mask(
+                vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
+                    | vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS,
+            )
+            .dst_stage_mask(
+                vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
+                    | vk::PipelineStageFlags::LATE_FRAGMENT_TESTS,
+            )
+            .src_access_mask(vk::AccessFlags::empty())
+            .dst_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE),
+        vk::SubpassDependency::default()
+            .src_subpass(0)
+            .dst_subpass(1)
+            .src_stage_mask(
+                vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
+                    | vk::PipelineStageFlags::LATE_FRAGMENT_TESTS,
+            )
+            .dst_stage_mask(
+                vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
+                    | vk::PipelineStageFlags::LATE_FRAGMENT_TESTS,
+            )
+            .src_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_READ)
+            .dst_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE),
+    ];
+
+    let render_pass_create_info = vk::RenderPassCreateInfo::default()
+        .attachments(&attachments)
+        .dependencies(&dependencys)
+        .subpasses(&subpasses);
+
+    let render_pass = unsafe {
+        renderer
+            .device
+            .create_render_pass(&render_pass_create_info, None)?
+    };
+
+    let (frame_buffers, voxel_index_buffers) = create_frame_buffers(renderer, &render_pass)?;
+
+    let mut hash_map_buffers = vec![];
+
+    for _ in 0..renderer.swapchain.images.len() {
+        hash_map_buffers.push(renderer.create_buffer(
+            vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
+            MemoryLocation::GpuOnly,
+            100000 * 20,
+            Some("hashmap_buffer"),
+        )?);
+    }
+
+    let ray_tracing_pipeline = create_raytracing_pipeline(
+        renderer,
+        &render_pass,
+        &hash_map_buffers,
+        oct_tree_buffer,
+        unifrom_buffer,
+        sky_box,
+        sky_box_sampler,
+        bindings,
+        sizes,
+        own_writes,
+    )?;
+    let post_proccesing_pipeline = create_post_proccesing_pipeline(
+        renderer,
+        &render_pass,
+        &voxel_index_buffers,
+        &hash_map_buffers,
+        oct_tree_buffer,
+        unifrom_buffer,
+        sky_box,
+        sky_box_sampler,
+    )?;
+    let temporal_reuse_pipeline = create_compute_pipeline(renderer, &hash_map_buffers)?;
+    Ok(MainPass {
+        hash_map_buffers,
+        ray_tracing: ray_tracing_pipeline,
+        temporal_reuse: temporal_reuse_pipeline,
+        post_proccesing: post_proccesing_pipeline,
+        render_pass,
+        frame_buffers,
+        voxel_index_buffers,
     })
 }

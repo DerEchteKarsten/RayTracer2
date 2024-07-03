@@ -1,6 +1,23 @@
+#extension GL_GOOGLE_include_directive : enable
+#extension GL_EXT_debug_printf : enable
+
 layout(location = 0) out vec4 outColor;
 
-layout (binding = 0, set=0, rgba32f) uniform readonly image2D inputImage;
+#include "./restir.glsl"
+
+layout(binding = 1, set = 0) uniform CameraProperties 
+{
+	mat4 viewInverse;
+	mat4 projInverse;
+    vec4 controlls;
+} cam;
+#define khashmapCapacity 100000
+
+layout(binding = 2, set = 0) uniform sampler2D skybox;
+layout(binding = 0, set = 1) buffer uHashMapBuffer { uint[khashmapCapacity] keys; RISReservoir[khashmapCapacity] values; };
+layout (binding = 0, set=1, r32ui) uniform readonly uimage2D inputImage;
+
+#include "./hash_map.glsl"
 
 #define AGX_LOOK 0
 
@@ -86,12 +103,65 @@ vec3 agxLook(vec3 val) {
 
 const float gamma = 2.2;
 
-void main() {
-    vec3 col = imageLoad(inputImage, ivec2(gl_FragCoord)).rgb;
 
-    col = agx(col);
-    col = agxLook(col);
-    col = agxEotf(col);
-    vec3 gamma_cor = pow(col, vec3(1.0 / gamma));
-    outColor = vec4(col, 1.0);
+float atan2(in float y, in float x)
+{
+	if (x > 0) {
+		return atan(y/x);
+	}
+	if (x < 0 && y >= 0){
+		return atan(y/x) + PI;
+	}
+	if (x < 0 && y < 0) {
+		return atan(y/x) - PI;
+	}
+	if (x == 0 && y > 0) {
+		return PI/2;
+	}
+	if (x == 0 && y < 0) {
+		return -PI/2;
+	}
+	if (x == 0 && y == 0) {
+		return 0;
+	}
+	return 0;
+}
+
+
+void main() {
+ 	const vec2 pixelCenter = vec2(gl_FragCoord.xy) + vec2(0.5);
+	const vec2 inUV = pixelCenter/vec2(cam.controlls.zw);
+	vec2 d = inUV * 2.0 - 1.0;
+	vec4 origin = cam.viewInverse * vec4(0,0,0,1);
+	vec4 target = cam.projInverse * vec4(d.x, d.y, 1, 1) ;
+	vec4 direction = cam.viewInverse*vec4(normalize(target.xyz), 0) ;
+
+  uint index = imageLoad(inputImage, ivec2(gl_FragCoord.xy)).r;
+  uint col_packed = uOctree[index];
+	vec3 col;
+	if(index == SKYBOX) {
+		float u = (0.5 + atan2(direction.x, direction.z)/(2*PI));
+    float v = (0.5 - asin(direction.y)/PI);
+		col = texture(skybox, vec2(u, v)).rgb;
+	}else {
+    col = vec3(col_packed & 0xffu, (col_packed >> 8u) & 0xffu, (col_packed >> 16u) & 0xffu) * 0.00392156862745098f; // (...) / 255.0f
+	}
+
+  RISReservoir reservoir;
+  // uint rngState = uint((gl_FragCoord.y * cam.controlls.z) + gl_FragCoord.x);
+  if(index != SKYBOX) {
+    if(gpu_hashmap_get(index, reservoir)) {
+      col = vec3(0.0, 1.0, 0.0);
+      // col = reservoir.W * reservoir.z.radiance_sampled * dot(reservoir.z.sampled_normal, reservoir.z.primary_point - reservoir.z.sampled_point);
+    }else {
+      col = vec3(1.0, 0.0, 0.0);
+    }
+  }
+
+
+  col = agx(col);
+  col = agxLook(col);
+  col = agxEotf(col);
+  vec3 gamma_cor = pow(col, vec3(1.0 / gamma));
+  outColor = vec4(col, 1.0);
 }

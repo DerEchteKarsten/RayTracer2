@@ -10,3 +10,4 @@ compile $base/src/shaders/post_processing.vert
 compile $base/src/shaders/post_processing.frag
 compile $base/src/shaders/default.frag
 compile $base/src/shaders/default.vert
+compile $base/src/shaders/temp_reuse.comp

@@ -17,29 +17,31 @@ struct Octant {
     uint32_t empty_color;
 };
 
-layout(binding = 0, set = 0) uniform CameraProperties 
-{
-	mat4 viewInverse;
-	mat4 projInverse;
-    vec4 controlls;
-} cam;
-
 struct Gizzmo {
     vec4 color;
     vec3 pos;
     float radius;
 };
 
-layout(binding = 2, set = 0) uniform sampler2D skybox;
+layout(binding = 1, set = 0) uniform CameraProperties 
+{
+	mat4 viewInverse;
+	mat4 projInverse;
+    vec4 controlls;
+} cam;
+#define khashmapCapacity 100000
 
+layout(binding = 0, set = 1) buffer uHashMapBuffer { uint[khashmapCapacity] keys; RISReservoir[khashmapCapacity] values; };
+layout(binding = 2, set = 0) uniform sampler2D skybox;
 layout(std430, set = 0, binding = 3) readonly buffer uGizzmoBuffer { Gizzmo GizzmoBuffer[]; };
 
 layout( push_constant ) uniform Frame {
 	uint frame;
 } f;
 
-layout(location = 0) out vec4 outColor;
-layout(location = 1) out float outDepth;
+layout(location = 0) out uint out_voxel_id;
+
+#include "./hash_map.glsl"
 
 
 float atan2(in float y, in float x)
@@ -93,36 +95,60 @@ void main() {
 	vec4 target = cam.projInverse * vec4(d.x, d.y, 1, 1) ;
 	vec4 direction = cam.viewInverse*vec4(normalize(target.xyz), 0) ;
 
-    for(int i = 0; i<10; i++) {
-        Gizzmo current = GizzmoBuffer[i];
-        if(current.radius < 0.0) {
-            continue;
+    // uint index = uint(gl_FragCoord.y) * uint(cam.controlls.z) + uint(gl_FragCoord.x);
+    // if (index < khashmapCapacity && hashmap[index].key != kEmpty) {
+    //     // debugPrintfEXT("not empty, %i", hashmap[index].key);
+    // }
+
+    // for(int i = 0; i<10; i++) {
+    //     Gizzmo current = GizzmoBuffer[i];
+    //     if(current.radius < 0.0) {
+    //         continue;
+    //     }
+
+    //     if(raySphereIntersect(origin.xyz, direction.xyz, current.pos, current.radius) != -1) {
+    //         outColor = current.color;
+    //         outDepth = 1.0;
+    //         return;
+    //     }
+    // }
+
+    HitInfo hit_info;
+    bool hit = ray_cast(origin.xyz, direction.xyz, hit_info);
+
+    if (!hit) {
+        out_voxel_id = SKYBOX;//texture(skybox, vec2(u, v));
+    }else {
+        uint rngState = uint((gl_FragCoord.y * cam.controlls.z) + gl_FragCoord.x) + uint(f.frame) * 23145;
+
+        Sample s; //= Sample(vec3(0.0), vec3(0.0), vec3(0.0), vec3(0.0), vec3(0.0));
+        s.primary_point = hit_info.pos;
+        s.primary_normal = hit_info.normal;
+
+        vec3 dir = RandomDirection(rngState);
+        // bool hit = ray_cast(hit_info.pos, dir, hit_info);
+        if (!hit) {
+            float u = (0.5 + atan2(direction.x, direction.z)/(2*PI));
+            float v = (0.5 - asin(direction.y)/PI);
+            vec3 radiance = vec3(10.0, 10.0, 10.0);//texture(skybox, vec2(u, v)).rgb;
+
+            s.sampled_point = origin.xyz + dir * 10000.0;
+            s.sampled_normal = -dir;
+            s.radiance_sampled = radiance;
+        }else {
+            s.sampled_point = hit_info.pos;
+            s.sampled_normal = hit_info.normal;
+            s.radiance_sampled = vec3(1.0);//RIS(hit_info.pos, hit_info.normal, hit_info.color, rngState);
         }
 
-        if(raySphereIntersect(origin.xyz, direction.xyz, current.pos, current.radius) != -1) {
-            outColor = current.color;
-            outDepth = 1.0;
-            return;
-        }
+        // GIReservoir reservoir = vEmpty;
+        // float w = length(s.radiance_sampled) / max(dot(s.primary_normal, dir), 0.0);
+        // UpdateReservoir(reservoir, s, w, rngState);
+        // reservoir.W = reservoir.w / (reservoir.M * length(reservoir.z.radiance_sampled));
+        RISReservoir reservoir = vEmpty;
+        gpu_hashmap_insert(hit_info.voxel_id, reservoir, rngState);
+        out_voxel_id = hit_info.voxel_id;
     }
 
-    vec3 o_pos, o_color, o_normal, o_pos2, o_color2, o_normal2;
-    float depth = ray_cast(origin.xyz, direction.xyz, o_pos, o_normal, o_color);
-
-    if (depth >= INFINITY) {
-        float u = (0.5 + atan2(direction.z, direction.x)/(2*PI));
-        float v = (0.5 - asin(direction.y)/PI);
-        outColor = texture(skybox, vec2(u, v));
-        outDepth = INFINITY;
-        return;
-    }
-
-    uint rngState = uint((gl_FragCoord.y * cam.controlls.z) + gl_FragCoord.x) + uint(f.frame) * 23145;
-    Reservoir reservoir = Reservoir(0, 0.0, 0, 0.0);
-    outColor = vec4(RIS(reservoir, o_pos, o_normal, o_color, rngState), 0.0);
-    // const vec3 light_dir =  polar_form(ligth_rotation, light_hight);
-    // float depth2 = ray_cast(o_pos + o_normal * 0.0001, light_dir, o_pos2, o_normal2, o_color2);
-    // outColor = vec4(max(dot(o_normal, light_dir), 0.3) * (depth2 == INFINITY ? o_color : o_color * 0.4), 1.0); 
-
-    outDepth = depth;
+    // outColor = vec4(, 0.0);
 }
