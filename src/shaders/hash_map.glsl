@@ -1,6 +1,9 @@
 #define kEmpty 0
-#define vEmpty RISReservoir(0, 0.0, 0.0, 0.0)
-// #define vEmpty GIReservoir(Sample(vec3(0), vec3(0), vec3(0), vec3(0), vec3(0)), 0.0, 0, 0.0)
+#extension GL_EXT_nonuniform_qualifier : enable
+
+// #define vEmpty vec3(0.0)
+// #define vEmpty RISReservoir(0, 0.0, 0.0, 0.0)
+#define vEmpty GIReservoir(Sample(vec3(0), vec3(0), vec3(0), vec3(0), vec3(0)), 0.0, 0, 0.0)
 uint hash(uint x)
 {
     x ^= x >> 17;
@@ -37,27 +40,24 @@ float evalJacobian(vec3 secondary, vec3 secondary_normal, vec3 primary_one, vec3
 
     return (cos(theta_one) / denom1) * (pow(length(dir2), 2) / denom2);
 }
-void gpu_hashmap_insert(uint key, RISReservoir qn, inout uint rngState)
+void gpu_hashmap_insert(uint key, GIReservoir qn, inout uint rngState)
 {
     uint slot = mod_u32(hash(key), (khashmapCapacity-1));
     while (true)
     {
         uint prev = atomicCompSwap(keys[slot], kEmpty, key);
         if (prev == kEmpty || keys[slot] == key) {
-            if (values[slot] == vEmpty) {
-               values[slot] = qn;
-            //    total_sampels[slot] = 1;
-            } else {
-                // GIReservoir q = values[slot];
-                // float Jacobian = evalJacobian(qn.z.sampled_point, qn.z.sampled_normal, q.z.primary_point, qn.z.primary_point);
-                // float p_hat = length(qn.z.radiance_sampled) / Jacobian;
-                // Merge(q, qn, p_hat, rngState);
-                // if(length(q.z.radiance_sampled) > EPS) {
-                //     atomicAdd(total_sampels[slot], qn.M);
-                // }
-                // q.W = q.w/(total_sampels[slot]*length(q.z.radiance_sampled));
-                // values[slot] = q;
+            if (values[slot].M == 0) {
                 values[slot] = qn;
+                total_sampels[slot] = 1;
+            } else {
+                float Jacobian = evalJacobian(qn.z.sampled_point, qn.z.sampled_normal, values[slot].z.primary_point, qn.z.primary_point);
+                float p_hat = length(qn.z.radiance_sampled) / Jacobian;
+                Merge(values[slot], qn, p_hat, rngState);
+                if(length(qn.z.radiance_sampled) > 0.0) {
+                    atomicAdd(total_sampels[slot], 1);
+                }
+                values[slot].W += qn.w;
             }
             return;
         }
@@ -66,13 +66,14 @@ void gpu_hashmap_insert(uint key, RISReservoir qn, inout uint rngState)
     // debugPrintfEXT("full");
 }
 
-bool gpu_hashmap_get(uint key, out RISReservoir reservoir)
+bool gpu_hashmap_get(uint key, out GIReservoir reservoir, out uint total_sampel)
 {
     uint slot = mod_u32(hash(key), (khashmapCapacity-1));
     while (true)
     {
         if (keys[slot] == key) {
             reservoir = values[slot];
+            total_sampel = total_sampels[slot];
             return true;
         }else if (keys[slot] == kEmpty) {
             return false;

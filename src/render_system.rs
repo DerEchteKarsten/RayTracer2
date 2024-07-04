@@ -202,10 +202,11 @@ fn render(
                 );
 
                 renderer.device.cmd_draw(*cmd, 6, 1, 0, 0);
-                
+
                 renderer
                     .device
                     .cmd_next_subpass(*cmd, vk::SubpassContents::INLINE);
+
 
                 renderer.device.cmd_bind_pipeline(
                     *cmd,

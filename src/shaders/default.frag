@@ -31,7 +31,7 @@ layout(binding = 1, set = 0) uniform CameraProperties
 } cam;
 #define khashmapCapacity 100000
 
-layout(binding = 0, set = 1) buffer uHashMapBuffer { uint[khashmapCapacity] keys; RISReservoir[khashmapCapacity] values; };
+layout(binding = 0, set = 1) buffer uHashMapBuffer { uint[khashmapCapacity] keys; GIReservoir[khashmapCapacity] values; uint[khashmapCapacity] total_sampels; };
 layout(binding = 2, set = 0) uniform sampler2D skybox;
 layout(std430, set = 0, binding = 3) readonly buffer uGizzmoBuffer { Gizzmo GizzmoBuffer[]; };
 
@@ -115,6 +115,15 @@ void main() {
 
     HitInfo hit_info;
     bool hit = ray_cast(origin.xyz, direction.xyz, hit_info);
+    uint face_id = 0;
+    if (hit_info.normal.x > 0)
+        face_id |= 0x1;
+    if (hit_info.normal.y > 0)
+        face_id |= 0x2;
+    if (hit_info.normal.z > 0)
+        face_id |= 0x4;
+
+    out_voxel_id = face_id << 28 | hit_info.voxel_id;
 
     if (!hit) {
         out_voxel_id = SKYBOX;//texture(skybox, vec2(u, v));
@@ -126,11 +135,11 @@ void main() {
         s.primary_normal = hit_info.normal;
 
         vec3 dir = RandomDirection(rngState);
-        // bool hit = ray_cast(hit_info.pos, dir, hit_info);
+        bool hit = ray_cast(hit_info.pos, dir, hit_info);
         if (!hit) {
             float u = (0.5 + atan2(direction.x, direction.z)/(2*PI));
             float v = (0.5 - asin(direction.y)/PI);
-            vec3 radiance = vec3(10.0, 10.0, 10.0);//texture(skybox, vec2(u, v)).rgb;
+            vec3 radiance = texture(skybox, vec2(u, v)).rgb;
 
             s.sampled_point = origin.xyz + dir * 10000.0;
             s.sampled_normal = -dir;
@@ -138,16 +147,15 @@ void main() {
         }else {
             s.sampled_point = hit_info.pos;
             s.sampled_normal = hit_info.normal;
-            s.radiance_sampled = vec3(1.0);//RIS(hit_info.pos, hit_info.normal, hit_info.color, rngState);
+            s.radiance_sampled = RIS(hit_info.pos, hit_info.normal, hit_info.color, rngState);
         }
 
-        // GIReservoir reservoir = vEmpty;
-        // float w = length(s.radiance_sampled) / max(dot(s.primary_normal, dir), 0.0);
-        // UpdateReservoir(reservoir, s, w, rngState);
-        // reservoir.W = reservoir.w / (reservoir.M * length(reservoir.z.radiance_sampled));
-        RISReservoir reservoir = vEmpty;
+        GIReservoir reservoir = vEmpty;
+        float w = length(s.radiance_sampled) / max(dot(s.primary_normal, dir), 0.0);
+        UpdateReservoir(reservoir, s, w, rngState);
+        reservoir.W += reservoir.w;
+
         gpu_hashmap_insert(hit_info.voxel_id, reservoir, rngState);
-        out_voxel_id = hit_info.voxel_id;
     }
 
     // outColor = vec4(, 0.0);

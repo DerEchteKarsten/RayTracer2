@@ -652,7 +652,7 @@ pub fn create_main_render_pass(
         hash_map_buffers.push(renderer.create_buffer(
             vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
             MemoryLocation::GpuOnly,
-            100000 * 20,
+            100000 * 1000,
             Some("hashmap_buffer"),
         )?);
     }

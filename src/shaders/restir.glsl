@@ -63,7 +63,7 @@ bool IsReservoirValid(in RISReservoir reservoir) {
 }
 
 vec3 light_radiance(vec3 dir, vec3 normal, vec3 color, float area) {
-    return max(dot(normal, dir), 0.0) * color * vec3(area);
+    return max(dot(normal, dir), 0.0) * color * vec3(area) * vec3(3.0);
 }
 
 mat3 angleAxis3x3(float angle, vec3 axis)

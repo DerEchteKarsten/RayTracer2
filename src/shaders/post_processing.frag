@@ -14,7 +14,7 @@ layout(binding = 1, set = 0) uniform CameraProperties
 #define khashmapCapacity 100000
 
 layout(binding = 2, set = 0) uniform sampler2D skybox;
-layout(binding = 0, set = 1) buffer uHashMapBuffer { uint[khashmapCapacity] keys; RISReservoir[khashmapCapacity] values; };
+layout(binding = 1, set = 1) buffer uHashMapBuffer { uint[khashmapCapacity] keys; GIReservoir[khashmapCapacity] values; uint[khashmapCapacity] total_sampels; };
 layout (binding = 0, set=1, r32ui) uniform readonly uimage2D inputImage;
 
 #include "./hash_map.glsl"
@@ -147,17 +147,18 @@ void main() {
     col = vec3(col_packed & 0xffu, (col_packed >> 8u) & 0xffu, (col_packed >> 16u) & 0xffu) * 0.00392156862745098f; // (...) / 255.0f
 	}
 
-  RISReservoir reservoir;
+  GIReservoir reservoir;
+  uint total_sampel;
   // uint rngState = uint((gl_FragCoord.y * cam.controlls.z) + gl_FragCoord.x);
   if(index != SKYBOX) {
-    if(gpu_hashmap_get(index, reservoir)) {
-      col = vec3(0.0, 1.0, 0.0);
-      // col = reservoir.W * reservoir.z.radiance_sampled * dot(reservoir.z.sampled_normal, reservoir.z.primary_point - reservoir.z.sampled_point);
+    index &= 0x07ffffff;
+    if(gpu_hashmap_get(index, reservoir, total_sampel)) {
+      // col = vec3(0.0, 1.0, 0.0);
+      col *= reservoir.z.radiance_sampled;// * (reservoir.W / (length(reservoir.z.radiance_sampled) * total_sampel)); //* dot(reservoir.z.sampled_normal, reservoir.z.primary_point - reservoir.z.sampled_point);
     }else {
       col = vec3(1.0, 0.0, 0.0);
     }
   }
-
 
   col = agx(col);
   col = agxLook(col);
