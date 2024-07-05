@@ -1,5 +1,6 @@
 #define kEmpty 0
-#define MAX_AGE 10000000
+#define MAX_AGE 10000
+#define MAX_ACCUM 100000
 
 #extension GL_EXT_shader_atomic_float : require
 
@@ -41,31 +42,39 @@ float evalJacobian(vec3 secondary, vec3 secondary_normal, vec3 primary_one, vec3
     return (cos(theta_one) / denom1) * (pow(length(dir2), 2) / denom2);
 }
 
-void gpu_hashmap_insert(uint key, vec3 radiance)
+void gpu_hashmap_insert(uint key, uint64_t now, vec3 radiance)
 {
     uint slot = mod_u32(hash(key), (khashmapCapacity-1));
     while (true)
     {
-        uint prev = atomicCompSwap(keys[slot], kEmpty, key);
-        if (prev == kEmpty || keys[slot] == key) {
-            if(length(vec3(values[slot]) / 100.0) > MAX_AGE) {
-                values[slot] = ivec3((vec3(values[slot]) / float(total_sampels[slot])) * 100);
-                total_sampels[slot] = 1;
-            }else {
-                atomicAdd(values[slot].r, int(radiance.r * 100));
-                atomicAdd(values[slot].g, int(radiance.g * 100));
-                atomicAdd(values[slot].b, int(radiance.b * 100));
+        bool insert = false;
+        if(now - last_seen[slot] >= MAX_AGE ) {
+            keys[slot] = key;
+            values[slot] = ivec3(0);
+            last_seen[slot] = now;
+            total_sampels[slot] = 0;
+            insert = true;
+        }else {
+            insert = atomicCompSwap(keys[slot], kEmpty, key) == kEmpty || keys[slot] == key;
+        }
+        
+        if (insert) {
+            last_seen[slot] = now;
 
-                atomicAdd(total_sampels[slot], 1);
-            }
+            atomicAdd(values[slot].r, int(radiance.r * 100));
+            atomicAdd(values[slot].g, int(radiance.g * 100));
+            atomicAdd(values[slot].b, int(radiance.b * 100));
+
+            atomicAdd(total_sampels[slot], 1);
             return;
         }
+
         slot = mod_u32(slot +1, (khashmapCapacity-1));
     }
     // debugPrintfEXT("full");
 }
 
-bool gpu_hashmap_get(uint key, out vec3 radiance, out uint total_sampel)
+bool gpu_hashmap_get(uint key, uint64_t now, out vec3 radiance, out uint total_sampel)
 {
     uint slot = mod_u32(hash(key), (khashmapCapacity-1));
     while (true)
@@ -73,6 +82,7 @@ bool gpu_hashmap_get(uint key, out vec3 radiance, out uint total_sampel)
         if (keys[slot] == key) {
             radiance = values[slot] / 100.0;
             total_sampel = total_sampels[slot];
+            last_seen[slot] = now;
             return true;
         }else if (keys[slot] == kEmpty) {
             return false;

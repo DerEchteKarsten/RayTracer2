@@ -21,6 +21,7 @@ use bevy::{
 };
 use glam::*;
 use gpu_allocator::MemoryLocation;
+use log::info;
 use raw_window_handle::{HasRawDisplayHandle, HasRawWindowHandle};
 
 use crate::{
@@ -89,55 +90,18 @@ fn render(
                     size_of::<u32>(),
                 );
 
-                // renderer.device.cmd_bind_pipeline(
-                //     *cmd,
-                //     vk::PipelineBindPoint::COMPUTE,
-                //     main_pass.temporal_reuse.pipeline,
-                // );
-                // renderer.device.cmd_bind_descriptor_sets(
-                //     *cmd,
-                //     vk::PipelineBindPoint::COMPUTE,
-                //     main_pass.temporal_reuse.layout,
-                //     0,
-                //     &[
-                //         main_pass.temporal_reuse.descriptors[i as usize],
-                //         main_pass.temporal_reuse.descriptors2
-                //             [renderer.last_swapchain_image_index as usize],
-                //     ],
-                //     &[],
-                // );
-                // renderer.device.cmd_dispatch(*cmd, 100, 100, 1);
-
-                // renderer.device.cmd_pipeline_barrier(
-                //     *cmd,
-                //     vk::PipelineStageFlags::COMPUTE_SHADER,
-                //     vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS,
-                //     vk::DependencyFlags::DEVICE_GROUP,
-                //     &[],
-                //     &[],
-                //     &[],
-                // );
-                // renderer.device.cmd_fill_buffer(
-                //     *cmd,
-                //     main_pass.hash_map_buffers[i as usize].inner,
-                //     0,
-                //     main_pass.hash_map_buffers[i as usize].size,
-                //     0,
-                // );
                 renderer.device.cmd_pipeline_barrier(
                     *cmd,
                     vk::PipelineStageFlags::TRANSFER,
                     vk::PipelineStageFlags::TOP_OF_PIPE,
                     vk::DependencyFlags::DEVICE_GROUP,
                     &[],
-                    &[
-                        vk::BufferMemoryBarrier::default()
-                        .buffer(main_pass.hash_map_buffers[i as usize].inner)
+                    &[vk::BufferMemoryBarrier::default()
+                        .buffer(main_pass.hash_map_buffer.inner)
                         .src_access_mask(vk::AccessFlags::MEMORY_WRITE)
                         .dst_access_mask(vk::AccessFlags::MEMORY_READ)
                         .offset(0)
-                        .size(main_pass.hash_map_buffers[i as usize].size)
-                        ],
+                        .size(main_pass.hash_map_buffer.size)],
                     &[],
                 );
                 let begin_info = vk::RenderPassBeginInfo::default()
@@ -187,11 +151,7 @@ fn render(
                     vk::PipelineBindPoint::GRAPHICS,
                     main_pass.ray_tracing.layout,
                     0,
-                    &[
-                        main_pass.ray_tracing.descriptors[0],
-                        main_pass.ray_tracing.descriptors2
-                            [i as usize],
-                    ],
+                    &[main_pass.ray_tracing.descriptors[0]],
                     &[],
                 );
 
@@ -208,7 +168,6 @@ fn render(
                 renderer
                     .device
                     .cmd_next_subpass(*cmd, vk::SubpassContents::INLINE);
-
 
                 renderer.device.cmd_bind_pipeline(
                     *cmd,
@@ -227,6 +186,14 @@ fn render(
                     ],
                     &[],
                 );
+                renderer.device.cmd_push_constants(
+                    *cmd,
+                    main_pass.post_proccesing.layout,
+                    vk::ShaderStageFlags::FRAGMENT,
+                    0,
+                    frame_c,
+                );
+
                 renderer.device.cmd_draw(*cmd, 6, 1, 0, 0);
 
                 renderer.device.cmd_end_render_pass(*cmd);
@@ -417,6 +384,7 @@ fn init(world: &mut World) {
     };
 
     let light_dir = polar_form(ligth_rotation, light_hight);
+    info!("{}", light_dir);
     let mut light_data = vec![];
 
     for _ in 0..20 {
@@ -446,14 +414,14 @@ fn init(world: &mut World) {
         &sky_box_sampler,
         &[
             vk::DescriptorSetLayoutBinding {
-                binding: 3,
+                binding: 4,
                 descriptor_count: 1,
                 descriptor_type: vk::DescriptorType::STORAGE_BUFFER,
                 stage_flags: ShaderStageFlags::FRAGMENT,
                 ..Default::default()
             },
             vk::DescriptorSetLayoutBinding {
-                binding: 4,
+                binding: 5,
                 descriptor_count: 1,
                 descriptor_type: vk::DescriptorType::STORAGE_BUFFER,
                 stage_flags: ShaderStageFlags::FRAGMENT,
@@ -466,13 +434,13 @@ fn init(world: &mut World) {
         }],
         &[
             WriteDescriptorSet {
-                binding: 3,
+                binding: 4,
                 kind: WriteDescriptorSetKind::StorageBuffer {
                     buffer: gizzmo_buffer.buffer.inner,
                 },
             },
             WriteDescriptorSet {
-                binding: 4,
+                binding: 5,
                 kind: WriteDescriptorSetKind::StorageBuffer {
                     buffer: lights_buffer.inner,
                 },

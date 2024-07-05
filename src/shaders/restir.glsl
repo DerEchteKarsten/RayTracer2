@@ -20,8 +20,6 @@ bool UpdateReservoir(inout RISReservoir reservoir, vec3 X, float w, float c, ino
     return false;
 }
 
-layout(std430, set = 0, binding = 4) readonly buffer uLightBuffer { vec4 lights[]; };
-
 vec3 polar_form(float theta, float thi) {
     return vec3(sin(theta)*cos(thi), sin(theta)*sin(thi), cos(theta));
 }
@@ -31,7 +29,7 @@ bool IsReservoirValid(in RISReservoir reservoir) {
     return true;
 }
 
-const int random_lights = 32;
+const int random_lights = 1;
 
 
 float atan2(in float y, in float x)

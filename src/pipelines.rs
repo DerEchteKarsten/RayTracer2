@@ -140,18 +140,18 @@ pub struct Pipeline {
 pub struct MainPass {
     pub ray_tracing: Pipeline,
     pub post_proccesing: Pipeline,
-    pub temporal_reuse: Pipeline,
+    // pub temporal_reuse: Pipeline,
     pub render_pass: vk::RenderPass,
     pub voxel_index_buffers: Vec<ImageAndView>,
     pub frame_buffers: Vec<vk::Framebuffer>,
-    pub hash_map_buffers: Vec<Buffer>,
+    pub hash_map_buffer: Buffer,
 }
 
 pub fn create_post_proccesing_pipeline(
     ctx: &mut Renderer,
     render_pass: &vk::RenderPass,
     storage_images: &Vec<ImageAndView>,
-    hash_map_buffers: &Vec<Buffer>,
+    hash_map_buffer: &Buffer,
     oct_tree_buffer: &Buffer,
     uniform_buffer: &Buffer,
     sky_box: &ImageAndView,
@@ -173,20 +173,18 @@ pub fn create_post_proccesing_pipeline(
             .descriptor_count(1)
             .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
             .stage_flags(vk::ShaderStageFlags::FRAGMENT),
-    ];
-
-    let descriptor_bindings = [
         vk::DescriptorSetLayoutBinding::default()
-            .binding(0)
-            .descriptor_count(1)
-            .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
-            .stage_flags(vk::ShaderStageFlags::FRAGMENT),
-        vk::DescriptorSetLayoutBinding::default()
-            .binding(1)
+            .binding(3)
             .descriptor_count(1)
             .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
             .stage_flags(vk::ShaderStageFlags::FRAGMENT),
     ];
+
+    let descriptor_bindings = [vk::DescriptorSetLayoutBinding::default()
+        .binding(0)
+        .descriptor_count(1)
+        .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
+        .stage_flags(vk::ShaderStageFlags::FRAGMENT)];
 
     let descriptor_layout = ctx.create_descriptor_set_layout(&descriptor_bindings, &[])?;
     let static_descriptor_layout =
@@ -195,7 +193,11 @@ pub fn create_post_proccesing_pipeline(
     let descriptor_layouts = [static_descriptor_layout, descriptor_layout];
     let layout_info = vk::PipelineLayoutCreateInfo::default()
         .set_layouts(&descriptor_layouts)
-        .push_constant_ranges(&[]);
+        .push_constant_ranges(&[vk::PushConstantRange {
+            offset: 0,
+            size: 4,
+            stage_flags: vk::ShaderStageFlags::FRAGMENT,
+        }]);
     let layout = unsafe { ctx.device.create_pipeline_layout(&layout_info, None) }?;
 
     let color_blend_attachments = [vk::PipelineColorBlendAttachmentState::default()
@@ -304,21 +306,13 @@ pub fn create_post_proccesing_pipeline(
     let static_descriptor =
         allocate_descriptor_set(&ctx.device, &descriptor_pool, &static_descriptor_layout)?;
     for i in 0..ctx.swapchain.images.len() {
-        let writes = [
-            WriteDescriptorSet {
-                binding: 0,
-                kind: WriteDescriptorSetKind::StorageImage {
-                    view: storage_images[i].view,
-                    layout: vk::ImageLayout::GENERAL,
-                },
+        let writes = [WriteDescriptorSet {
+            binding: 0,
+            kind: WriteDescriptorSetKind::StorageImage {
+                view: storage_images[i].view,
+                layout: vk::ImageLayout::GENERAL,
             },
-            WriteDescriptorSet {
-                binding: 1,
-                kind: WriteDescriptorSetKind::StorageBuffer {
-                    buffer: hash_map_buffers[i].inner,
-                },
-            },
-        ];
+        }];
 
         update_descriptor_sets(ctx, &descriptors[i], &writes);
     }
@@ -343,6 +337,12 @@ pub fn create_post_proccesing_pipeline(
                 layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
             },
         },
+        WriteDescriptorSet {
+            binding: 3,
+            kind: WriteDescriptorSetKind::StorageBuffer {
+                buffer: hash_map_buffer.inner,
+            },
+        },
     ];
     update_descriptor_sets(ctx, &static_descriptor, &write);
 
@@ -357,7 +357,7 @@ pub fn create_post_proccesing_pipeline(
 pub fn create_raytracing_pipeline(
     renderer: &mut Renderer,
     render_pass: &vk::RenderPass,
-    hash_map_buffers: &Vec<Buffer>,
+    hash_map_buffers: &Buffer,
     oct_tree_buffer: &Buffer,
     uniform_buffer: &Buffer,
     sky_box: &ImageAndView,
@@ -382,19 +382,18 @@ pub fn create_raytracing_pipeline(
             .descriptor_count(1)
             .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
             .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+        vk::DescriptorSetLayoutBinding::default()
+            .binding(3)
+            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+            .descriptor_count(1)
+            .stage_flags(vk::ShaderStageFlags::FRAGMENT),
     ];
-    let dynamic_bindings = [vk::DescriptorSetLayoutBinding::default()
-        .binding(0)
-        .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-        .descriptor_count(1)
-        .stage_flags(vk::ShaderStageFlags::FRAGMENT)];
 
     descriptor_bindings.extend_from_slice(bindings);
 
     let descriptor_layout = renderer.create_descriptor_set_layout(&descriptor_bindings, &[])?;
-    let dynamic_layout = renderer.create_descriptor_set_layout(&dynamic_bindings, &[])?;
 
-    let set_layouts = [descriptor_layout, dynamic_layout];
+    let set_layouts = [descriptor_layout];
     let layout_info = vk::PipelineLayoutCreateInfo::default()
         .set_layouts(&set_layouts)
         .push_constant_ranges(&[vk::PushConstantRange {
@@ -502,12 +501,6 @@ pub fn create_raytracing_pipeline(
         .create_descriptor_pool(renderer.swapchain.images.len() as u32 + 1, &static_sizes)?;
     let descriptors =
         allocate_descriptor_set(&renderer.device, &descriptor_pool, &descriptor_layout)?;
-    let old_descriptors = allocate_descriptor_sets(
-        &renderer.device,
-        &descriptor_pool,
-        &dynamic_layout,
-        renderer.swapchain.images.len() as u32,
-    )?;
 
     let writes = [
         WriteDescriptorSet {
@@ -530,22 +523,19 @@ pub fn create_raytracing_pipeline(
                 layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
             },
         },
+        WriteDescriptorSet {
+            binding: 3,
+            kind: WriteDescriptorSetKind::StorageBuffer {
+                buffer: hash_map_buffers.inner,
+            },
+        },
     ];
 
     update_descriptor_sets(renderer, &descriptors, &own_writes);
     update_descriptor_sets(renderer, &descriptors, &writes);
-    for i in 0..renderer.swapchain.images.len() {
-        let writes = [WriteDescriptorSet {
-            binding: 0,
-            kind: WriteDescriptorSetKind::StorageBuffer {
-                buffer: hash_map_buffers[i].inner,
-            },
-        }];
-        update_descriptor_sets(renderer, &old_descriptors[i], &writes);
-    }
 
     Ok(Pipeline {
-        descriptors2: old_descriptors,
+        descriptors2: vec![],
         pipeline,
         descriptors: vec![descriptors],
         layout,
@@ -646,21 +636,17 @@ pub fn create_main_render_pass(
 
     let (frame_buffers, voxel_index_buffers) = create_frame_buffers(renderer, &render_pass)?;
 
-    let mut hash_map_buffers = vec![];
-
-    for _ in 0..renderer.swapchain.images.len() {
-        hash_map_buffers.push(renderer.create_buffer(
-            vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
-            MemoryLocation::GpuOnly,
-            100000 * 1000,
-            Some("hashmap_buffer"),
-        )?);
-    }
+    let mut hash_map_buffer = renderer.create_buffer(
+        vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
+        MemoryLocation::GpuOnly,
+        100000 * 1000,
+        Some("hashmap_buffer"),
+    )?;
 
     let ray_tracing_pipeline = create_raytracing_pipeline(
         renderer,
         &render_pass,
-        &hash_map_buffers,
+        &hash_map_buffer,
         oct_tree_buffer,
         unifrom_buffer,
         sky_box,
@@ -673,17 +659,15 @@ pub fn create_main_render_pass(
         renderer,
         &render_pass,
         &voxel_index_buffers,
-        &hash_map_buffers,
+        &hash_map_buffer,
         oct_tree_buffer,
         unifrom_buffer,
         sky_box,
         sky_box_sampler,
     )?;
-    let temporal_reuse_pipeline = create_compute_pipeline(renderer, &hash_map_buffers)?;
     Ok(MainPass {
-        hash_map_buffers,
+        hash_map_buffer,
         ray_tracing: ray_tracing_pipeline,
-        temporal_reuse: temporal_reuse_pipeline,
         post_proccesing: post_proccesing_pipeline,
         render_pass,
         frame_buffers,

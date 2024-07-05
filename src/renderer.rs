@@ -1625,7 +1625,7 @@ fn new_device(
         .features(features)
         .push_next(&mut vulkan_12_features)
         .push_next(&mut vulkan_13_features);
-        // .push_next(&mut atomics);
+    // .push_next(&mut atomics);
 
     let device_extensions_as_ptr = required_extensions
         .into_iter()

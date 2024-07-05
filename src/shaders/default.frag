@@ -31,8 +31,9 @@ layout(binding = 1, set = 0) uniform CameraProperties
 #define khashmapCapacity 100000
 
 layout(binding = 2, set = 0) uniform sampler2D skybox;
-layout(binding = 0, set = 1) buffer uHashMapBuffer { uint[khashmapCapacity] keys; ivec3[khashmapCapacity] values; uint[khashmapCapacity] total_sampels; };
-layout(std430, set = 0, binding = 3) readonly buffer uGizzmoBuffer { Gizzmo GizzmoBuffer[]; };
+layout(binding = 3, set = 0) buffer uHashMapBuffer { uint[khashmapCapacity] keys; ivec3[khashmapCapacity] values; uint[khashmapCapacity] total_sampels; uint64_t[khashmapCapacity] last_seen; };
+layout(std430, set = 0, binding = 4) readonly buffer uGizzmoBuffer { Gizzmo GizzmoBuffer[]; };
+layout(std430, set = 0, binding = 5) readonly buffer uLightBuffer { vec4 lights[]; };
 
 layout( push_constant ) uniform Frame {
 	uint frame;
@@ -61,8 +62,8 @@ float raySphereIntersect(vec3 r0, vec3 rd, vec3 s0, float sr) {
     return (-b - sqrt((b*b) - 4.0*a*c))/(2.0*a);
 }
 
-const int max_rays = 3;
-
+const int max_rays = 32;
+const vec3 light_dir = vec3(0.6123724, 0.6123724, -0.50000006);
 
 void main() {
 
@@ -105,29 +106,38 @@ void main() {
 
 
     if (!hit) {
-        out_voxel_id = SKYBOX;//texture(skybox, vec2(u, v));
+        out_voxel_id = SKYBOX;
     }else {
         vec3 radiance = vec3(0.0);
         vec3 color = hit_info.color;
 
         uint rngState = uint((gl_FragCoord.y * cam.controlls.z) + gl_FragCoord.x) + uint(f.frame) * 23145;
-        radiance += RIS(hit_info.pos, hit_info.normal, color, rngState);
 
-        // vec3 dir = normalize(hit_info.normal + RandomDirection(rngState));
-        // HitInfo hit_info2;
-        // hit = ray_cast(hit_info.pos + hit_info.normal * 0.0001, dir, hit_info2);
+        vec3 dir = normalize(hit_info.normal + RandomDirection(rngState));
+        HitInfo hit_info2;
+        hit = ray_cast(hit_info.pos + hit_info.normal * 0.0001, dir, hit_info2);
 
-        // if (!hit) {
-        //     vec2 uv = get_uv(dir);
-        //     radiance += texture(skybox, uv).rgb;
-        // }else {
-        //     color *= hit_info2.color;
+        if (!hit) {
+            if(dot(dir, light_dir) > 0.9) {
+                radiance += vec3(10.0) * color; 
+            }else {
+                radiance += vec3(0.1) * color; //texture(skybox, uv).rgb * color;
+            }
+        }else {
+            color *= hit_info2.color;
 
-        //     radiance += vec3(0.0);//RIS(hit_info2.pos, hit_info2.normal, color, rngState);
-        // }
+            dir = normalize(hit_info.normal + RandomDirection(rngState));
+            HitInfo hit_info3;
+            hit = ray_cast(hit_info2.pos + hit_info2.normal * 0.0001, dir, hit_info3);
+            if(!hit) {
+                if(dot(dir, light_dir) > 0.9) {
+                    radiance += vec3(10.0) * color; 
+                }else {
+                    radiance += vec3(0.1) * color;
+                }
+            }
+        }
 
-        gpu_hashmap_insert(out_voxel_id, radiance);
+        gpu_hashmap_insert(out_voxel_id, f.frame, radiance);
     }
-
-    // outColor = vec4(, 0.0);
 }

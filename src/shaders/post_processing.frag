@@ -1,5 +1,6 @@
 #extension GL_GOOGLE_include_directive : enable
 #extension GL_EXT_debug_printf : enable
+#extension GL_ARB_gpu_shader_int64 : enable
 
 layout(location = 0) out vec4 outColor;
 
@@ -13,8 +14,13 @@ layout(binding = 1, set = 0) uniform CameraProperties
 #define khashmapCapacity 100000
 
 layout(binding = 2, set = 0) uniform sampler2D skybox;
-layout(binding = 1, set = 1) buffer uHashMapBuffer { uint[khashmapCapacity] keys; ivec3[khashmapCapacity] values; uint[khashmapCapacity] total_sampels; };
+layout(binding = 3, set = 0) buffer uHashMapBuffer { uint[khashmapCapacity] keys; ivec3[khashmapCapacity] values; uint[khashmapCapacity] total_sampels; uint64_t[khashmapCapacity] last_seen; };
 layout (binding = 0, set=1, r32ui) uniform readonly uimage2D inputImage;
+
+layout( push_constant ) uniform Frame {
+	uint frame;
+} f;
+
 
 #include "./common.glsl"
 #include "./restir.glsl"
@@ -121,16 +127,16 @@ void main() {
   }else {
     vec3 radiance;
     uint total_sampel;
-    if(gpu_hashmap_get(index, radiance, total_sampel)) {
+    if(gpu_hashmap_get(index, f.frame, radiance, total_sampel)) {
       col = radiance / float(total_sampel);
     }else {
       col = vec3(0.0, 0.0, 0.0);
     }
   }
  
-  // col = agx(col);
-  // col = agxLook(col);
-  // col = agxEotf(col);
-  vec3 gamma_cor = pow(col, vec3(1.0 / gamma));
+  col = agx(col);
+  col = agxLook(col);
+  col = agxEotf(col);
+  // vec3 gamma_cor = pow(col, vec3(1.0 / gamma));
   outColor = vec4(col, 1.0);
 }
