@@ -6,7 +6,7 @@ use std::{
 };
 
 use ash::{
-    ext::buffer_device_address,
+    ext::{buffer_device_address, shader_atomic_float, shader_atomic_float2},
     khr::{
         get_memory_requirements2, shader_float_controls, shader_non_semantic_info, swapchain,
         workgroup_memory_explicit_layout,
@@ -33,7 +33,7 @@ use crate::{
     WriteDescriptorSet, WriteDescriptorSetKind, WINDOW_SIZE,
 };
 
-pub const DEVICE_EXTENSIONS: [&'static CStr; 8] = [
+pub const DEVICE_EXTENSIONS: [&'static CStr; 10] = [
     swapchain::NAME,
     ash::ext::descriptor_indexing::NAME,
     ash::ext::scalar_block_layout::NAME,
@@ -42,6 +42,8 @@ pub const DEVICE_EXTENSIONS: [&'static CStr; 8] = [
     shader_float_controls::NAME,
     shader_non_semantic_info::NAME,
     workgroup_memory_explicit_layout::NAME,
+    shader_atomic_float::NAME,
+    shader_atomic_float2::NAME,
 ];
 
 pub const FULL_SCREEN_SCISSOR: vk::Rect2D = vk::Rect2D {
@@ -115,13 +117,13 @@ fn render(
                 //     &[],
                 //     &[],
                 // );
-                renderer.device.cmd_fill_buffer(
-                    *cmd,
-                    main_pass.hash_map_buffers[i as usize].inner,
-                    0,
-                    main_pass.hash_map_buffers[i as usize].size,
-                    0,
-                );
+                // renderer.device.cmd_fill_buffer(
+                //     *cmd,
+                //     main_pass.hash_map_buffers[i as usize].inner,
+                //     0,
+                //     main_pass.hash_map_buffers[i as usize].size,
+                //     0,
+                // );
                 renderer.device.cmd_pipeline_barrier(
                     *cmd,
                     vk::PipelineStageFlags::TRANSFER,

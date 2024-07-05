@@ -527,7 +527,7 @@ pub fn create_raytracing_pipeline(
             kind: WriteDescriptorSetKind::CombinedImageSampler {
                 view: sky_box.view,
                 sampler: *sky_box_sampler,
-                layout: vk::ImageLayout::GENERAL,
+                layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
             },
         },
     ];

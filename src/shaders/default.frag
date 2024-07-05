@@ -10,7 +10,6 @@
 // #extension GL_EXT_shader_explicit_arithmetic_types_float32 : enable
 // #extension GL_EXT_shader_explicit_arithmetic_types_float64 : enable
 
-#include "./restir.glsl"
 
 struct Octant {
     uint32_t children[8];
@@ -31,8 +30,8 @@ layout(binding = 1, set = 0) uniform CameraProperties
 } cam;
 #define khashmapCapacity 100000
 
-layout(binding = 0, set = 1) buffer uHashMapBuffer { uint[khashmapCapacity] keys; GIReservoir[khashmapCapacity] values; uint[khashmapCapacity] total_sampels; };
 layout(binding = 2, set = 0) uniform sampler2D skybox;
+layout(binding = 0, set = 1) buffer uHashMapBuffer { uint[khashmapCapacity] keys; ivec3[khashmapCapacity] values; uint[khashmapCapacity] total_sampels; };
 layout(std430, set = 0, binding = 3) readonly buffer uGizzmoBuffer { Gizzmo GizzmoBuffer[]; };
 
 layout( push_constant ) uniform Frame {
@@ -40,32 +39,10 @@ layout( push_constant ) uniform Frame {
 } f;
 
 layout(location = 0) out uint out_voxel_id;
-
+#include "./common.glsl"
+#include "./restir.glsl"
 #include "./hash_map.glsl"
 
-
-float atan2(in float y, in float x)
-{
-	if (x > 0) {
-		return atan(y/x);
-	}
-	if (x < 0 && y >= 0){
-		return atan(y/x) + PI;
-	}
-	if (x < 0 && y < 0) {
-		return atan(y/x) - PI;
-	}
-	if (x == 0 && y > 0) {
-		return PI/2;
-	}
-	if (x == 0 && y < 0) {
-		return -PI/2;
-	}
-	if (x == 0 && y == 0) {
-		return 0;
-	}
-	return 0;
-}
 
 float raySphereIntersect(vec3 r0, vec3 rd, vec3 s0, float sr) {
     // - r0: ray origin
@@ -85,6 +62,7 @@ float raySphereIntersect(vec3 r0, vec3 rd, vec3 s0, float sr) {
 }
 
 const int max_rays = 3;
+
 
 void main() {
 
@@ -123,39 +101,32 @@ void main() {
     if (hit_info.normal.z > 0)
         face_id |= 0x4;
 
-    out_voxel_id = face_id << 28 | hit_info.voxel_id;
+    out_voxel_id = (face_id << 28) | hit_info.voxel_id;
+
 
     if (!hit) {
         out_voxel_id = SKYBOX;//texture(skybox, vec2(u, v));
     }else {
+        vec3 radiance = vec3(0.0);
+        vec3 color = hit_info.color;
+
         uint rngState = uint((gl_FragCoord.y * cam.controlls.z) + gl_FragCoord.x) + uint(f.frame) * 23145;
+        radiance += RIS(hit_info.pos, hit_info.normal, color, rngState);
 
-        Sample s; //= Sample(vec3(0.0), vec3(0.0), vec3(0.0), vec3(0.0), vec3(0.0));
-        s.primary_point = hit_info.pos;
-        s.primary_normal = hit_info.normal;
+        // vec3 dir = normalize(hit_info.normal + RandomDirection(rngState));
+        // HitInfo hit_info2;
+        // hit = ray_cast(hit_info.pos + hit_info.normal * 0.0001, dir, hit_info2);
 
-        vec3 dir = RandomDirection(rngState);
-        bool hit = ray_cast(hit_info.pos, dir, hit_info);
-        if (!hit) {
-            float u = (0.5 + atan2(direction.x, direction.z)/(2*PI));
-            float v = (0.5 - asin(direction.y)/PI);
-            vec3 radiance = texture(skybox, vec2(u, v)).rgb;
+        // if (!hit) {
+        //     vec2 uv = get_uv(dir);
+        //     radiance += texture(skybox, uv).rgb;
+        // }else {
+        //     color *= hit_info2.color;
 
-            s.sampled_point = origin.xyz + dir * 10000.0;
-            s.sampled_normal = -dir;
-            s.radiance_sampled = radiance;
-        }else {
-            s.sampled_point = hit_info.pos;
-            s.sampled_normal = hit_info.normal;
-            s.radiance_sampled = RIS(hit_info.pos, hit_info.normal, hit_info.color, rngState);
-        }
+        //     radiance += vec3(0.0);//RIS(hit_info2.pos, hit_info2.normal, color, rngState);
+        // }
 
-        GIReservoir reservoir = vEmpty;
-        float w = length(s.radiance_sampled) / max(dot(s.primary_normal, dir), 0.0);
-        UpdateReservoir(reservoir, s, w, rngState);
-        reservoir.W += reservoir.w;
-
-        gpu_hashmap_insert(hit_info.voxel_id, reservoir, rngState);
+        gpu_hashmap_insert(out_voxel_id, radiance);
     }
 
     // outColor = vec4(, 0.0);

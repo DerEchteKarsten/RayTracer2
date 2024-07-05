@@ -1085,6 +1085,7 @@ pub struct DeviceFeatures {
     pub buffer_device_address: bool,
     pub dynamic_rendering: bool,
     pub synchronization2: bool,
+    pub attomics: bool,
 }
 
 impl DeviceFeatures {
@@ -1095,6 +1096,7 @@ impl DeviceFeatures {
             && (!requirements.buffer_device_address || self.buffer_device_address)
             && (!requirements.dynamic_rendering || self.dynamic_rendering)
             && (!requirements.synchronization2 || self.synchronization2)
+            && (!requirements.attomics || self.attomics)
     }
 }
 
@@ -1173,6 +1175,13 @@ impl PhysicalDevice {
         let mut ray_tracing_feature = vk::PhysicalDeviceRayTracingPipelineFeaturesKHR::default();
         let mut acceleration_struct_feature =
             vk::PhysicalDeviceAccelerationStructureFeaturesKHR::default();
+        let mut atomics = vk::PhysicalDeviceShaderAtomicFloatFeaturesEXT::default()
+            .shader_buffer_float32_atomics(true)
+            .shader_buffer_float64_atomic_add(true)
+            .shader_buffer_float32_atomic_add(true);
+        let mut atomics2 = vk::PhysicalDeviceShaderAtomicFloatFeaturesEXT::default()
+            .shader_buffer_float32_atomics(true)
+            .shader_buffer_float32_atomic_add(true);
         let features = vk::PhysicalDeviceFeatures::default().shader_int64(true);
         let mut features12 = vk::PhysicalDeviceVulkan12Features::default()
             .runtime_descriptor_array(true)
@@ -1181,10 +1190,12 @@ impl PhysicalDevice {
         let mut features13 = vk::PhysicalDeviceVulkan13Features::default();
         let mut features2 = vk::PhysicalDeviceFeatures2::default()
             .features(features)
+            .push_next(&mut atomics)
             .push_next(&mut features12)
             .push_next(&mut ray_tracing_feature)
             .push_next(&mut acceleration_struct_feature)
-            .push_next(&mut features13);
+            .push_next(&mut features13)
+            .push_next(&mut atomics2);
         unsafe { instance.get_physical_device_features2(physical_device, &mut features2) };
         let supported_device_features = DeviceFeatures {
             ray_tracing_pipeline: ray_tracing_feature.ray_tracing_pipeline == vk::TRUE,
@@ -1193,6 +1204,7 @@ impl PhysicalDevice {
             buffer_device_address: features12.buffer_device_address == vk::TRUE,
             dynamic_rendering: features13.dynamic_rendering == vk::TRUE,
             synchronization2: features13.synchronization2 == vk::TRUE,
+            attomics: atomics.shader_buffer_float32_atomics == vk::TRUE,
         };
         Ok(Self {
             handel: physical_device,
@@ -1595,7 +1607,8 @@ fn new_device(
             })
             .collect::<Vec<_>>()
     };
-
+    // let mut atomics = vk::PhysicalDeviceShaderAtomicFloatFeaturesEXT::default()
+    //     .shader_buffer_float64_atomic_add(true);
     let mut vulkan_12_features = vk::PhysicalDeviceVulkan12Features::default()
         .runtime_descriptor_array(true)
         .buffer_device_address(true)
@@ -1612,6 +1625,7 @@ fn new_device(
         .features(features)
         .push_next(&mut vulkan_12_features)
         .push_next(&mut vulkan_13_features);
+        // .push_next(&mut atomics);
 
     let device_extensions_as_ptr = required_extensions
         .into_iter()

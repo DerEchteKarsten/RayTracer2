@@ -3,7 +3,6 @@
 
 layout(location = 0) out vec4 outColor;
 
-#include "./restir.glsl"
 
 layout(binding = 1, set = 0) uniform CameraProperties 
 {
@@ -14,9 +13,11 @@ layout(binding = 1, set = 0) uniform CameraProperties
 #define khashmapCapacity 100000
 
 layout(binding = 2, set = 0) uniform sampler2D skybox;
-layout(binding = 1, set = 1) buffer uHashMapBuffer { uint[khashmapCapacity] keys; GIReservoir[khashmapCapacity] values; uint[khashmapCapacity] total_sampels; };
+layout(binding = 1, set = 1) buffer uHashMapBuffer { uint[khashmapCapacity] keys; ivec3[khashmapCapacity] values; uint[khashmapCapacity] total_sampels; };
 layout (binding = 0, set=1, r32ui) uniform readonly uimage2D inputImage;
 
+#include "./common.glsl"
+#include "./restir.glsl"
 #include "./hash_map.glsl"
 
 #define AGX_LOOK 0
@@ -104,30 +105,6 @@ vec3 agxLook(vec3 val) {
 const float gamma = 2.2;
 
 
-float atan2(in float y, in float x)
-{
-	if (x > 0) {
-		return atan(y/x);
-	}
-	if (x < 0 && y >= 0){
-		return atan(y/x) + PI;
-	}
-	if (x < 0 && y < 0) {
-		return atan(y/x) - PI;
-	}
-	if (x == 0 && y > 0) {
-		return PI/2;
-	}
-	if (x == 0 && y < 0) {
-		return -PI/2;
-	}
-	if (x == 0 && y == 0) {
-		return 0;
-	}
-	return 0;
-}
-
-
 void main() {
  	const vec2 pixelCenter = vec2(gl_FragCoord.xy) + vec2(0.5);
 	const vec2 inUV = pixelCenter/vec2(cam.controlls.zw);
@@ -137,32 +114,23 @@ void main() {
 	vec4 direction = cam.viewInverse*vec4(normalize(target.xyz), 0) ;
 
   uint index = imageLoad(inputImage, ivec2(gl_FragCoord.xy)).r;
-  uint col_packed = uOctree[index];
+
 	vec3 col;
 	if(index == SKYBOX) {
-		float u = (0.5 + atan2(direction.x, direction.z)/(2*PI));
-    float v = (0.5 - asin(direction.y)/PI);
-		col = texture(skybox, vec2(u, v)).rgb;
-	}else {
-    col = vec3(col_packed & 0xffu, (col_packed >> 8u) & 0xffu, (col_packed >> 16u) & 0xffu) * 0.00392156862745098f; // (...) / 255.0f
-	}
-
-  GIReservoir reservoir;
-  uint total_sampel;
-  // uint rngState = uint((gl_FragCoord.y * cam.controlls.z) + gl_FragCoord.x);
-  if(index != SKYBOX) {
-    index &= 0x07ffffff;
-    if(gpu_hashmap_get(index, reservoir, total_sampel)) {
-      // col = vec3(0.0, 1.0, 0.0);
-      col *= reservoir.z.radiance_sampled;// * (reservoir.W / (length(reservoir.z.radiance_sampled) * total_sampel)); //* dot(reservoir.z.sampled_normal, reservoir.z.primary_point - reservoir.z.sampled_point);
+		col = texture(skybox, get_uv(direction.xyz)).rgb;
+  }else {
+    vec3 radiance;
+    uint total_sampel;
+    if(gpu_hashmap_get(index, radiance, total_sampel)) {
+      col = radiance / float(total_sampel);
     }else {
-      col = vec3(1.0, 0.0, 0.0);
+      col = vec3(0.0, 0.0, 0.0);
     }
   }
-
-  col = agx(col);
-  col = agxLook(col);
-  col = agxEotf(col);
+ 
+  // col = agx(col);
+  // col = agxLook(col);
+  // col = agxEotf(col);
   vec3 gamma_cor = pow(col, vec3(1.0 / gamma));
   outColor = vec4(col, 1.0);
 }

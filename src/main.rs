@@ -88,7 +88,7 @@ fn fps(time: Res<Time>) {
 }
 
 fn main() {
-    let model = oct_tree::Octant::load("./models/VoxelGraveyard_DemoScene.vox").unwrap();
+    let model = oct_tree::Octant::load("./models/light_test_scene.vox").unwrap();
     App::new()
         .insert_resource(AccessibilityRequested::default())
         .insert_resource(DeviceFeatures {
@@ -98,6 +98,7 @@ fn main() {
             buffer_device_address: true,
             dynamic_rendering: true,
             synchronization2: true,
+            attomics: true,
         })
         .init_resource::<Controls>()
         .init_resource::<CameraUniformData>()
