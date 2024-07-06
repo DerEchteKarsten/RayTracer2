@@ -1,6 +1,7 @@
 #define kEmpty 0
-#define MAX_AGE 10000
-#define MAX_ACCUM 100000
+#define MAX_AGE 1000
+#define MAX_ACCUM 2147400000
+// #define MAX_ACCUM 10000000
 
 #extension GL_EXT_shader_atomic_float : require
 
@@ -42,15 +43,14 @@ float evalJacobian(vec3 secondary, vec3 secondary_normal, vec3 primary_one, vec3
     return (cos(theta_one) / denom1) * (pow(length(dir2), 2) / denom2);
 }
 
-void gpu_hashmap_insert(uint key, uint64_t now, vec3 radiance)
-{
+void gpu_hashmap_insert(uint key, uint64_t now, Sample s, vec3 dir, inout uint rngState) {
     uint slot = mod_u32(hash(key), (khashmapCapacity-1));
     while (true)
     {
         bool insert = false;
-        if(now - last_seen[slot] >= MAX_AGE ) {
+        if(now - last_seen[slot] >= MAX_AGE) {
             keys[slot] = key;
-            values[slot] = ivec3(0);
+            values[slot] = GIReservoir(Sample(vec3(0), vec3(0), vec3(0), vec3(0)), 0);
             last_seen[slot] = now;
             total_sampels[slot] = 0;
             insert = true;
@@ -61,11 +61,13 @@ void gpu_hashmap_insert(uint key, uint64_t now, vec3 radiance)
         if (insert) {
             last_seen[slot] = now;
 
-            atomicAdd(values[slot].r, int(radiance.r * 100));
-            atomicAdd(values[slot].g, int(radiance.g * 100));
-            atomicAdd(values[slot].b, int(radiance.b * 100));
-
+            UpdateReservoir(slot, s, p_hat(s) / pdf(s, dir), rngState);
             atomicAdd(total_sampels[slot], 1);
+
+            if(values[slot].w > MAX_ACCUM) {
+                atomicExchange(values[slot].w, int(float(values[slot].w) / 1.4));
+                atomicExchange(total_sampels[slot], int(float(total_sampels[slot]) / 1.4));
+            }
             return;
         }
 
@@ -74,14 +76,14 @@ void gpu_hashmap_insert(uint key, uint64_t now, vec3 radiance)
     // debugPrintfEXT("full");
 }
 
-bool gpu_hashmap_get(uint key, uint64_t now, out vec3 radiance, out uint total_sampel)
+bool gpu_hashmap_get(uint key, uint64_t now, out GIReservoir radiance, out uint M)
 {
     uint slot = mod_u32(hash(key), (khashmapCapacity-1));
     while (true)
     {
         if (keys[slot] == key) {
-            radiance = values[slot] / 100.0;
-            total_sampel = total_sampels[slot];
+            radiance = values[slot];
+            M = total_sampels[slot];
             last_seen[slot] = now;
             return true;
         }else if (keys[slot] == kEmpty) {

@@ -89,21 +89,23 @@ fn render(
                     &data.frame as *const u32 as *const u8,
                     size_of::<u32>(),
                 );
+                
+                // renderer.device.cmd_fill_buffer(*cmd, main_pass.hash_map_buffer.inner, 0, main_pass.hash_map_buffer.size, 0);
 
-                renderer.device.cmd_pipeline_barrier(
-                    *cmd,
-                    vk::PipelineStageFlags::TRANSFER,
-                    vk::PipelineStageFlags::TOP_OF_PIPE,
-                    vk::DependencyFlags::DEVICE_GROUP,
-                    &[],
-                    &[vk::BufferMemoryBarrier::default()
-                        .buffer(main_pass.hash_map_buffer.inner)
-                        .src_access_mask(vk::AccessFlags::MEMORY_WRITE)
-                        .dst_access_mask(vk::AccessFlags::MEMORY_READ)
-                        .offset(0)
-                        .size(main_pass.hash_map_buffer.size)],
-                    &[],
-                );
+                // renderer.device.cmd_pipeline_barrier(
+                //     *cmd,
+                //     vk::PipelineStageFlags::TRANSFER,
+                //     vk::PipelineStageFlags::TOP_OF_PIPE,
+                //     vk::DependencyFlags::DEVICE_GROUP,
+                //     &[],
+                //     &[vk::BufferMemoryBarrier::default()
+                //         .buffer(main_pass.hash_map_buffer.inner)
+                //         .src_access_mask(vk::AccessFlags::MEMORY_WRITE)
+                //         .dst_access_mask(vk::AccessFlags::MEMORY_READ)
+                //         .offset(0)
+                //         .size(main_pass.hash_map_buffer.size)],
+                //     &[],
+                // );
                 let begin_info = vk::RenderPassBeginInfo::default()
                     .clear_values(&[
                         vk::ClearValue {

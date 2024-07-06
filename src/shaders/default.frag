@@ -30,8 +30,17 @@ layout(binding = 1, set = 0) uniform CameraProperties
 } cam;
 #define khashmapCapacity 100000
 
+struct Sample {
+    vec3 radiance, normal, dir, color;
+};
+
+struct GIReservoir {
+    Sample z;
+    int w;
+};
+
 layout(binding = 2, set = 0) uniform sampler2D skybox;
-layout(binding = 3, set = 0) buffer uHashMapBuffer { uint[khashmapCapacity] keys; ivec3[khashmapCapacity] values; uint[khashmapCapacity] total_sampels; uint64_t[khashmapCapacity] last_seen; };
+layout(binding = 3, set = 0) buffer uHashMapBuffer { uint[khashmapCapacity] keys; GIReservoir[khashmapCapacity] values; uint[khashmapCapacity] total_sampels; uint64_t[khashmapCapacity] last_seen;};
 layout(std430, set = 0, binding = 4) readonly buffer uGizzmoBuffer { Gizzmo GizzmoBuffer[]; };
 layout(std430, set = 0, binding = 5) readonly buffer uLightBuffer { vec4 lights[]; };
 
@@ -40,6 +49,7 @@ layout( push_constant ) uniform Frame {
 } f;
 
 layout(location = 0) out uint out_voxel_id;
+
 #include "./common.glsl"
 #include "./restir.glsl"
 #include "./hash_map.glsl"
@@ -104,33 +114,33 @@ void main() {
 
     out_voxel_id = (face_id << 28) | hit_info.voxel_id;
 
-
+    uint rngState = uint((gl_FragCoord.y * cam.controlls.z) + gl_FragCoord.x) + uint(f.frame) * 23145;
+    vec3 dir;
     if (!hit) {
         out_voxel_id = SKYBOX;
     }else {
         vec3 radiance = vec3(0.0);
+        dir = normalize(hit_info.normal + RandomDirection(rngState));
+
         vec3 color = hit_info.color;
-
-        uint rngState = uint((gl_FragCoord.y * cam.controlls.z) + gl_FragCoord.x) + uint(f.frame) * 23145;
-
-        vec3 dir = normalize(hit_info.normal + RandomDirection(rngState));
         HitInfo hit_info2;
         hit = ray_cast(hit_info.pos + hit_info.normal * 0.0001, dir, hit_info2);
 
         if (!hit) {
-            if(dot(dir, light_dir) > 0.9) {
+            if(dot(dir, light_dir) > 0.99) {
                 radiance += vec3(10.0) * color; 
             }else {
                 radiance += vec3(0.1) * color; //texture(skybox, uv).rgb * color;
             }
         }else {
-            color *= hit_info2.color;
+            vec3 dir2 = RandomDirection(rngState);
+            dir2 *= sign(dot(hit_info2.normal, dir2));
 
-            dir = normalize(hit_info.normal + RandomDirection(rngState));
+            color *= hit_info2.color * clamp(dot(hit_info2.normal, dir2), 0.0, 1.0);
             HitInfo hit_info3;
-            hit = ray_cast(hit_info2.pos + hit_info2.normal * 0.0001, dir, hit_info3);
+            hit = ray_cast(hit_info2.pos + hit_info2.normal * 0.0001, dir2, hit_info3);
             if(!hit) {
-                if(dot(dir, light_dir) > 0.9) {
+                if(dot(dir2, light_dir) > 0.99) {
                     radiance += vec3(10.0) * color; 
                 }else {
                     radiance += vec3(0.1) * color;
@@ -138,6 +148,6 @@ void main() {
             }
         }
 
-        gpu_hashmap_insert(out_voxel_id, f.frame, radiance);
+        gpu_hashmap_insert(out_voxel_id, f.frame, Sample(radiance, hit_info.normal, dir, hit_info.color), dir, rngState);
     }
 }

@@ -20,6 +20,28 @@ bool UpdateReservoir(inout RISReservoir reservoir, vec3 X, float w, float c, ino
     return false;
 }
 
+
+void UpdateReservoir(uint slot, Sample s_n, float w_n, inout uint rngState) {
+    uint org = atomicAdd(values[slot].w, int(w_n * 1000)) + int(w_n * 1000);
+    if (RandomValue(rngState) < w_n / (float(org) / 1000.0)) {
+        values[slot].z = s_n;
+    }
+    return;
+}
+
+float pdf(Sample s, vec3 dir) {
+    return clamp(dot(s.normal,dir), 0.0, 1.0)/PI;
+}
+
+float calcLuminance(vec3 color)
+{
+    return dot(color.xyz, vec3(0.299f, 0.587f, 0.114f));
+}
+
+float p_hat(Sample s) {
+    return calcLuminance(s.radiance * dot(s.normal, s.dir) * s.color);
+}
+
 vec3 polar_form(float theta, float thi) {
     return vec3(sin(theta)*cos(thi), sin(theta)*sin(thi), cos(theta));
 }
