@@ -639,7 +639,7 @@ pub fn create_main_render_pass(
     let mut hash_map_buffer = renderer.create_buffer(
         vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
         MemoryLocation::GpuOnly,
-        100000 * 1000,
+        1000000 * 1000,
         Some("hashmap_buffer"),
     )?;
 

@@ -22,10 +22,10 @@ bool UpdateReservoir(inout RISReservoir reservoir, vec3 X, float w, float c, ino
 
 
 void UpdateReservoir(uint slot, Sample s_n, float w_n, inout uint rngState) {
-    uint org = atomicAdd(values[slot].w, int(w_n * 1000)) + int(w_n * 1000);
-    if (RandomValue(rngState) < w_n / (float(org) / 1000.0)) {
-        values[slot].z = s_n;
-    }
+    // uint org = atomicAdd(values[slot].w, int(w_n * 1000)) + int(w_n * 1000);
+    // if (RandomValue(rngState) < w_n / (float(org) / 1000.0)) {
+    //     values[slot].z = s_n;
+    // }
     return;
 }
 

@@ -28,7 +28,7 @@ const APP_NAME: &'static str = "Test";
 const WINDOW_SIZE: (u32, u32) = (1920, 1000);
 
 fn setup(mut commands: Commands) {
-    let position = vec3(1.5, 10.0, 1.5);
+    let position = vec3(1.5, 2.0, 1.5);
 
     commands.spawn((
         Camera::new(
@@ -88,7 +88,7 @@ fn fps(time: Res<Time>) {
 }
 
 fn main() {
-    let model = oct_tree::Octant::load("./models/light_test_scene.vox").unwrap();
+    let model = oct_tree::Octant::load("./models/boxes.vox").unwrap();
     App::new()
         .insert_resource(AccessibilityRequested::default())
         .insert_resource(DeviceFeatures {

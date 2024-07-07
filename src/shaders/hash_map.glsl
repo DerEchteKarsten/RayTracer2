@@ -1,5 +1,5 @@
 #define kEmpty 0
-#define MAX_AGE 1000
+#define MAX_AGE 2
 #define MAX_ACCUM 2147400000
 // #define MAX_ACCUM 10000000
 
@@ -42,16 +42,36 @@ float evalJacobian(vec3 secondary, vec3 secondary_normal, vec3 primary_one, vec3
 
     return (cos(theta_one) / denom1) * (pow(length(dir2), 2) / denom2);
 }
+const vec3 light_dir = vec3(0.6123724, 0.6123724, -0.50000006);
+const float LightCone = 0.3;
 
-void gpu_hashmap_insert(uint key, uint64_t now, Sample s, vec3 dir, inout uint rngState) {
+void gpu_hashmap_insert(uint key, uint64_t now, HitInfo hit_info, inout uint rngState) {
     uint slot = mod_u32(hash(key), (khashmapCapacity-1));
-    while (true)
+    while(true)
     {
         bool insert = false;
         if(now - last_seen[slot] >= MAX_AGE) {
+            // uint slot2 = mod_u32(hash(key), (khashmapCapacity-1));
+            // while(true) {
+            //     if (keys[slot2] == key) {
+            //         values[slot] = values[slot2];
+            //         total_sampels[slot] = total_sampels[slot2];
+
+            //         keys[slot2] = kEmpty;
+            //         values[slot2] = ivec3(0);
+            //         total_sampels[slot2] = 0;
+            //         break;
+            //     }else if (keys[slot2] == kEmpty) {
+            //         values[slot] = ivec3(0);
+            //         total_sampels[slot] = 0;
+            //         break;
+            //     }
+            //     slot2 = mod_u32(slot2 +1, (khashmapCapacity-1));
+            // }
+
             keys[slot] = key;
-            values[slot] = GIReservoir(Sample(vec3(0), vec3(0), vec3(0), vec3(0)), 0);
             last_seen[slot] = now;
+            values[slot] = ivec3(0);
             total_sampels[slot] = 0;
             insert = true;
         }else {
@@ -60,15 +80,56 @@ void gpu_hashmap_insert(uint key, uint64_t now, Sample s, vec3 dir, inout uint r
         
         if (insert) {
             last_seen[slot] = now;
-
-            UpdateReservoir(slot, s, p_hat(s) / pdf(s, dir), rngState);
-            atomicAdd(total_sampels[slot], 1);
-
-            if(values[slot].w > MAX_ACCUM) {
-                atomicExchange(values[slot].w, int(float(values[slot].w) / 1.4));
-                atomicExchange(total_sampels[slot], int(float(total_sampels[slot]) / 1.4));
+            uint prev = atomicAdd(total_sampels[slot], 1);
+            if(prev > 1920 * 1080) {
+                return;
             }
+            bool is_direct_sample = prev < 300; 
+            if (prev > 10 && length(vec3(values[slot])) < 200) {
+                is_direct_sample = false;
+            }
+
+            vec3 radiance = vec3(0.0);
+            vec3 dir;
+            if(is_direct_sample) {
+                dir = getConeSample(rngState, light_dir, LightCone);
+            }else {
+                dir = RandomDirection(rngState);
+                dir *= sign(dot(hit_info.normal, dir));
+            }
+
+            vec3 color = hit_info.color;
+            HitInfo hit_info2;
+            bool hit = ray_cast(hit_info.pos + hit_info.normal * 0.0001, dir, hit_info2);
+            float pdf = is_direct_sample == true ? (5.0/PI) : (1.0/(2.*PI));
+            
+            if (!hit) {
+                if(dot(dir, light_dir) > 0.94 || is_direct_sample) {
+                    radiance += vec3(10.0) * (color / PI) * dot(hit_info.normal, dir) * (1.0 / pdf); 
+                }else {
+                    radiance += vec3(0.5) * (color / PI) * dot(hit_info.normal, dir) * (1.0 / pdf); //texture(skybox, uv).rgb * color;
+                }
+            }else {
+                vec3 dir2 = normalize(hit_info2.normal + RandomDirection(rngState));
+
+                color *= hit_info2.color;
+                HitInfo hit_info3;
+                hit = ray_cast(hit_info2.pos + hit_info2.normal * 0.0001, dir2, hit_info3);
+                if(!hit) {
+                    if(dot(dir2, light_dir) > 0.94) {
+                        radiance += vec3(10.0) * color; 
+                    }else {
+                        radiance += vec3(0.5) * color;
+                    }
+                }
+            }
+
+    
+            atomicAdd(values[slot].r, int(radiance.r * 100.0));
+            atomicAdd(values[slot].g, int(radiance.g * 100.0));
+            atomicAdd(values[slot].b, int(radiance.b * 100.0));
             return;
+
         }
 
         slot = mod_u32(slot +1, (khashmapCapacity-1));
@@ -76,13 +137,13 @@ void gpu_hashmap_insert(uint key, uint64_t now, Sample s, vec3 dir, inout uint r
     // debugPrintfEXT("full");
 }
 
-bool gpu_hashmap_get(uint key, uint64_t now, out GIReservoir radiance, out uint M)
+bool gpu_hashmap_get(uint key, uint64_t now, out vec3 radiance, out uint M)
 {
     uint slot = mod_u32(hash(key), (khashmapCapacity-1));
     while (true)
     {
         if (keys[slot] == key) {
-            radiance = values[slot];
+            radiance = vec3(values[slot]) / 100.0;
             M = total_sampels[slot];
             last_seen[slot] = now;
             return true;

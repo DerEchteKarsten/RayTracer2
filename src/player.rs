@@ -1,7 +1,7 @@
 use std::f32::consts::PI;
 
-use bevy::{app::DynEq, prelude::*};
-use glam::{Vec3Swizzles, Vec4Swizzles, *};
+use bevy::{app::{App, DynEq, Update}, prelude::{Query, Res, ResMut, With}, time::Time};
+use glam::*;
 
 use crate::{
     components::{PhysicsBody, Player, Position},
@@ -9,7 +9,7 @@ use crate::{
     render_system::GizzmoBuffer,
     Camera, CameraUniformData, Controls,
 };
-const MOVE_SPEED: f32 = 10.0 * PLAYER_HEIGHT;
+const MOVE_SPEED: f32 = 0.4; //* PLAYER_HEIGHT;
 const ANGLE_PER_POINT: f32 = 0.0009;
 const UP: glam::Vec3 = vec3(0.0, 1.0, 0.0);
 const AIR_SPEED: f32 = MOVE_SPEED / 2.0;
@@ -213,6 +213,60 @@ pub fn velocity(
     }
 }
 
+
+pub fn god_mode_movement(
+    mut query: Query<&mut Position, With<Player>>,
+    controls: Res<Controls>,
+    time: Res<Time>,
+) {
+    let delta_time = time.delta_seconds();
+    for mut transform in &mut query {
+        let side = transform.rotation.cross(UP);
+
+        // Update direction
+        let new_direction = if controls.look_around {
+            let side_rot = Quat::from_axis_angle(side, -controls.cursor_delta[1] * ANGLE_PER_POINT);
+            let y_rot = Quat::from_rotation_y(-controls.cursor_delta[0] * ANGLE_PER_POINT);
+            let rot = Mat3::from_quat(side_rot * y_rot);
+
+            (rot * transform.rotation).normalize()
+        } else {
+            transform.rotation
+        };
+
+        // Update position
+        let mut direction = Vec3::ZERO;
+
+        if controls.go_forward {
+            direction += new_direction;
+        }
+        if controls.go_backward {
+            direction -= new_direction;
+        }
+        if controls.strafe_right {
+            direction += side;
+        }
+        if controls.strafe_left {
+            direction -= side;
+        }
+        if controls.go_up {
+            direction += UP;
+        }
+        if controls.go_down {
+            direction -= UP;
+        }
+
+        let direction = if direction.length_squared() == 0.0 {
+            direction
+        } else {
+            direction.normalize()
+        };
+
+        transform.position += direction * MOVE_SPEED * delta_time;
+        transform.rotation = new_direction;
+    }
+}
+
 pub fn movement(
     mut query: Query<(&mut Position, &mut PhysicsBody), With<Player>>,
     controls: Res<Controls>,
@@ -284,6 +338,7 @@ pub fn movement(
         position.rotation = new_direction;
     }
 }
+
 pub fn PlayerPlugin(app: &mut App) {
-    app.add_systems(Update, (movement, velocity.after(movement)));
+    app.add_systems(Update, god_mode_movement);//(movement, velocity.after(movement)));
 }
