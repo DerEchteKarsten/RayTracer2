@@ -28,7 +28,7 @@ layout(binding = 1, set = 0) uniform CameraProperties
 	mat4 projInverse;
     vec4 controlls;
 } cam;
-#define khashmapCapacity 1000000
+#define khashmapCapacity 10000000
 
 struct Sample {
     vec3 radiance, normal, dir, color;
@@ -43,6 +43,7 @@ layout(binding = 2, set = 0) uniform sampler2D skybox;
 layout(binding = 3, set = 0) buffer uHashMapBuffer { uint[khashmapCapacity] keys; ivec3[khashmapCapacity] values; uint[khashmapCapacity] total_sampels; uint64_t[khashmapCapacity] last_seen;};
 layout(std430, set = 0, binding = 4) readonly buffer uGizzmoBuffer { Gizzmo GizzmoBuffer[]; };
 layout(std430, set = 0, binding = 5) readonly buffer uLightBuffer { vec4 lights[]; };
+layout(set = 1, binding = 0, r32f) uniform readonly image2D uBeamImage;
 
 layout( push_constant ) uniform Frame {
 	uint frame;
@@ -74,16 +75,16 @@ float raySphereIntersect(vec3 r0, vec3 rd, vec3 s0, float sr) {
 
 const int max_rays = 32;
 
-
 void main() {
 
     const vec2 pixelCenter = vec2(gl_FragCoord.xy) + vec2(0.5);
 	const vec2 inUV = pixelCenter/vec2(cam.controlls.zw);
-	vec2 d = inUV * 2.0 - 1.0;
+	vec2 dir = inUV * 2.0 - 1.0;
 	vec4 origin = cam.viewInverse * vec4(0,0,0,1);
-	vec4 target = cam.projInverse * vec4(d.x, d.y, 1, 1) ;
+	vec4 target = cam.projInverse * vec4(dir.x, dir.y, 1, 1) ;
 	vec4 direction = cam.viewInverse*vec4(normalize(target.xyz), 0) ;
-
+    vec3 o = origin.xyz;
+    vec3 d = direction.xyz;
     // uint index = uint(gl_FragCoord.y) * uint(cam.controlls.z) + uint(gl_FragCoord.x);
     // if (index < khashmapCapacity && hashmap[index].key != kEmpty) {
     //     // debugPrintfEXT("not empty, %i", hashmap[index].key);
@@ -103,7 +104,14 @@ void main() {
     // }
 
     HitInfo hit_info;
-    bool hit = ray_cast(origin.xyz, direction.xyz, hit_info);
+    float beam;
+    ivec2 beam_coord = ivec2(gl_FragCoord.xy / uBeamSize);
+    beam = min(min(imageLoad(uBeamImage, beam_coord).r, imageLoad(uBeamImage, beam_coord + ivec2(1, 0)).r),
+                min(imageLoad(uBeamImage, beam_coord + ivec2(0, 1)).r,
+                    imageLoad(uBeamImage, beam_coord + ivec2(1, 1)).r));
+    o += d * beam;
+
+    bool hit = ray_cast(o, d, hit_info);
     uint face_id = 0;
     if (hit_info.normal.x > 0)
         face_id |= 0x1;

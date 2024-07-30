@@ -80,54 +80,55 @@ void gpu_hashmap_insert(uint key, uint64_t now, HitInfo hit_info, inout uint rng
         
         if (insert) {
             last_seen[slot] = now;
-            uint prev = atomicAdd(total_sampels[slot], 1);
-            if(prev > 1920 * 1080) {
-                return;
-            }
-            bool is_direct_sample = prev < 300; 
-            if (prev > 10 && length(vec3(values[slot])) < 200) {
-                is_direct_sample = false;
-            }
+            // uint prev = atomicAdd(total_sampels[slot], 1);
+            // if(prev > 1920 * 1080) {
+            //     return;
+            // }
+            // bool is_direct_sample = prev < 300; 
+            // if (prev > 10 && length(vec3(values[slot])) < 200) {
+            //     is_direct_sample = false;
+            // }
 
-            vec3 radiance = vec3(0.0);
-            vec3 dir;
-            if(is_direct_sample) {
-                dir = getConeSample(rngState, light_dir, LightCone);
-            }else {
-                dir = RandomDirection(rngState);
-                dir *= sign(dot(hit_info.normal, dir));
-            }
+            // vec3 radiance = vec3(0.0);
+            // vec3 dir;
+            // if(is_direct_sample) {
+            //     dir = getConeSample(rngState, light_dir, LightCone);
+            // }else {
+            //     dir = RandomDirection(rngState);
+            //     dir *= sign(dot(hit_info.normal, dir));
+            // }
 
-            vec3 color = hit_info.color;
-            HitInfo hit_info2;
-            bool hit = ray_cast(hit_info.pos + hit_info.normal * 0.0001, dir, hit_info2);
-            float pdf = is_direct_sample == true ? (5.0/PI) : (1.0/(2.*PI));
+            // vec3 color = hit_info.color;
+            // HitInfo hit_info2;
+            // bool hit = ray_cast(hit_info.pos + hit_info.normal * 0.0001, dir, hit_info2);
+            // float pdf = is_direct_sample == true ? (5.0/PI) : (1.0/(2.*PI));
             
-            if (!hit) {
-                if(dot(dir, light_dir) > 0.94 || is_direct_sample) {
-                    radiance += vec3(10.0) * (color / PI) * dot(hit_info.normal, dir) * (1.0 / pdf); 
-                }else {
-                    radiance += vec3(0.5) * (color / PI) * dot(hit_info.normal, dir) * (1.0 / pdf); //texture(skybox, uv).rgb * color;
-                }
-            }else {
-                vec3 dir2 = normalize(hit_info2.normal + RandomDirection(rngState));
+            // if (!hit) {
+            //     if(dot(dir, light_dir) > 0.94 || is_direct_sample) {
+            //         radiance += vec3(10.0) * (color / PI) * dot(hit_info.normal, dir) * (1.0 / pdf); 
+            //     }else {
+            //         radiance += vec3(0.5) * (color / PI) * dot(hit_info.normal, dir) * (1.0 / pdf); //texture(skybox, uv).rgb * color;
+            //     }
+            // }else {
+            //     vec3 dir2 = normalize(hit_info2.normal + RandomDirection(rngState));
 
-                color *= hit_info2.color;
-                HitInfo hit_info3;
-                hit = ray_cast(hit_info2.pos + hit_info2.normal * 0.0001, dir2, hit_info3);
-                if(!hit) {
-                    if(dot(dir2, light_dir) > 0.94) {
-                        radiance += vec3(10.0) * color; 
-                    }else {
-                        radiance += vec3(0.5) * color;
-                    }
-                }
-            }
+            //     color *= hit_info2.color;
+            //     HitInfo hit_info3;
+            //     hit = ray_cast(hit_info2.pos + hit_info2.normal * 0.0001, dir2, hit_info3);
+            //     if(!hit) {
+            //         if(dot(dir2, light_dir) > 0.94) {
+            //             radiance += vec3(10.0) * color; 
+            //         }else {
+            //             radiance += vec3(0.5) * color;
+            //         }
+            //     }
+            // }
 
     
-            atomicAdd(values[slot].r, int(radiance.r * 100.0));
-            atomicAdd(values[slot].g, int(radiance.g * 100.0));
-            atomicAdd(values[slot].b, int(radiance.b * 100.0));
+            // atomicAdd(values[slot].r, int(radiance.r * 100.0));
+            // atomicAdd(values[slot].g, int(radiance.g * 100.0));
+            // atomicAdd(values[slot].b, int(radiance.b * 100.0));
+            values[slot] = ivec3(hit_info.color * 100.0);
             return;
 
         }

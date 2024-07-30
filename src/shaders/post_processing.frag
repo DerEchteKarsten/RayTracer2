@@ -11,7 +11,7 @@ layout(binding = 1, set = 0) uniform CameraProperties
 	mat4 projInverse;
     vec4 controlls;
 } cam;
-#define khashmapCapacity 1000000
+#define khashmapCapacity 10000000
 
 struct Sample {
     vec3 radiance, normal, dir, color;
@@ -136,7 +136,7 @@ void main() {
     vec3 radiance;
     uint M;
     if(gpu_hashmap_get(index, f.frame, radiance, M)) {
-      col = radiance / float(M);
+      col = radiance; // float(M);
     }else {
       col = vec3(1.0, 0.0, 1.0);
     }

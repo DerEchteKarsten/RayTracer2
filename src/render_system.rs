@@ -118,6 +118,11 @@ fn render(
                                 float32: [0.0, 0.0, 0.0, 1.0],
                             },
                         },
+                        vk::ClearValue {
+                            color: vk::ClearColorValue {
+                                float32: [0.0, 0.0, 0.0, 1.0],
+                            },
+                        },
                     ])
                     .render_pass(main_pass.render_pass)
                     .framebuffer(main_pass.frame_buffers[i as usize])
@@ -131,7 +136,14 @@ fn render(
 
                 renderer
                     .device
-                    .cmd_set_viewport(*cmd, 0, &[FULL_SCREEN_VIEW_PORT]);
+                    .cmd_set_viewport(*cmd, 0, &[vk::Viewport {
+                        width: WINDOW_SIZE.0 as f32 / 8.0,
+                        height: WINDOW_SIZE.1 as f32 / 8.0,
+                        x: 0.0,
+                        y: 0.0,
+                        max_depth: 1.0,
+                        min_depth: 0.0,
+                    }]);
                 renderer
                     .device
                     .cmd_set_scissor(*cmd, 0, &[FULL_SCREEN_SCISSOR]);
@@ -141,7 +153,38 @@ fn render(
                     &begin_info,
                     vk::SubpassContents::INLINE,
                 );
+                renderer.device.cmd_bind_pipeline(
+                    *cmd,
+                    vk::PipelineBindPoint::GRAPHICS,
+                    main_pass.beam_trace.pipeline,
+                );
 
+                renderer.device.cmd_bind_descriptor_sets(
+                    *cmd,
+                    vk::PipelineBindPoint::GRAPHICS,
+                    main_pass.beam_trace.layout,
+                    0,
+                    &[main_pass.beam_trace.descriptors[0]],
+                    &[],
+                );
+
+                renderer.device.cmd_push_constants(
+                    *cmd,
+                    main_pass.beam_trace.layout,
+                    vk::ShaderStageFlags::FRAGMENT,
+                    0,
+                    &(1.0 - data.oct_tree_level as f32).exp2().to_ne_bytes(),
+                );
+
+                renderer.device.cmd_draw(*cmd, 6, 1, 0, 0);
+
+                renderer
+                    .device
+                    .cmd_next_subpass(*cmd, vk::SubpassContents::INLINE);
+
+                renderer
+                    .device
+                    .cmd_set_viewport(*cmd, 0, &[FULL_SCREEN_VIEW_PORT]);
                 renderer.device.cmd_bind_pipeline(
                     *cmd,
                     vk::PipelineBindPoint::GRAPHICS,
@@ -153,7 +196,7 @@ fn render(
                     vk::PipelineBindPoint::GRAPHICS,
                     main_pass.ray_tracing.layout,
                     0,
-                    &[main_pass.ray_tracing.descriptors[0]],
+                    &[main_pass.ray_tracing.descriptors[0], main_pass.ray_tracing.descriptors2[i as usize]],
                     &[],
                 );
 
@@ -206,6 +249,7 @@ fn render(
 
 #[derive(Resource)]
 struct FrameData {
+    pub oct_tree_level: u32,
     pub uniform_buffer: Buffer,
     pub frame: u32,
 }
@@ -330,17 +374,18 @@ fn init(world: &mut World) {
             Some("Uniform Buffer"),
         )
         .unwrap();
+    
+    let oct_tree_buffer = {
+        let oct_tree_data = &game_world.build_tree;
 
-    let oct_tree_data = &game_world.build_tree;
-
-    let oct_tree_buffer = renderer
-        .create_gpu_only_buffer_from_data(
-            vk::BufferUsageFlags::STORAGE_BUFFER,
-            oct_tree_data.as_slice(),
-            Some("OctTreeData"),
-        )
-        .unwrap();
-
+        renderer
+            .create_gpu_only_buffer_from_data(
+                vk::BufferUsageFlags::STORAGE_BUFFER,
+                oct_tree_data.as_slice(),
+                Some("OctTreeData"),
+            )
+            .unwrap()
+    };
     let gizzmo_buffer = {
         let data = [Gizzmo {
             position: glam::Vec3::ZERO,
@@ -450,10 +495,11 @@ fn init(world: &mut World) {
         ],
     )
     .unwrap();
-
+    let oct_tree_level = game_world.tree_level.clone();
     world.insert_resource(gizzmo_buffer);
     world.insert_non_send_resource(renderer);
     world.insert_resource(FrameData {
+        oct_tree_level,
         uniform_buffer,
         frame: 0,
     });

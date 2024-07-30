@@ -997,7 +997,7 @@ impl Image {
                 src_access_mask: vk::AccessFlags2::TRANSFER_WRITE,
                 src_stage_mask: vk::PipelineStageFlags2::TRANSFER_KHR,
                 dst_access_mask: vk::AccessFlags2::SHADER_READ,
-                dst_stage_mask: vk::PipelineStageFlags2::RAY_TRACING_SHADER_KHR,
+                dst_stage_mask: vk::PipelineStageFlags2::FRAGMENT_SHADER,
                 old_layout: vk::ImageLayout::TRANSFER_DST_OPTIMAL,
                 new_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
                 image: &texture_image,
