@@ -7,9 +7,7 @@ use std::default::Default;
 use std::ffi::CString;
 
 use crate::{
-    allocate_descriptor_set, allocate_descriptor_sets, create_descriptor_pool,
-    create_descriptor_set_layout, update_descriptor_sets, Buffer, Image, ImageAndView, Renderer,
-    WriteDescriptorSet, WriteDescriptorSetKind, WINDOW_SIZE,
+    allocate_descriptor_set, allocate_descriptor_sets, create_descriptor_pool, create_descriptor_set_layout, update_descriptor_sets, Buffer, Image, ImageAndView, Renderer, WriteDescriptorSet, WriteDescriptorSetKind, FRAMES_IN_FLIGHT, WINDOW_SIZE
 };
 
 pub fn create_compute_pipeline(
@@ -70,7 +68,7 @@ pub fn create_compute_pipeline(
         let writes = [WriteDescriptorSet {
             binding: 0,
             kind: WriteDescriptorSetKind::StorageBuffer {
-                buffer: hash_map_buffers[i].inner,
+                buffer: hash_map_buffers[i as usize].inner,
             },
         }];
 
@@ -167,6 +165,7 @@ pub struct MainPass {
     pub beam_image: Vec<ImageAndView>,
     pub frame_buffers: Vec<vk::Framebuffer>,
     pub hash_map_buffer: Buffer,
+    pub ui_pipeline: Pipeline,
 }
 
 pub fn create_post_proccesing_pipeline(
@@ -742,6 +741,10 @@ pub fn create_beam_pipeline(
     })
 }
 
+fn create_ui_pipeline(renderer: &mut Renderer, font_texture: &ImageAndView, textures: &Vec<ImageAndView>, texture_fields: ) {
+
+}
+
 pub fn create_main_render_pass(
     renderer: &mut Renderer,
     oct_tree_buffer: &Buffer,
@@ -869,7 +872,7 @@ pub fn create_main_render_pass(
     let mut hash_map_buffer = renderer.create_buffer(
         vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
         MemoryLocation::GpuOnly,
-        10000000 * 1000,
+        2073600 * 22,
         Some("hashmap_buffer"),
     )?;
 

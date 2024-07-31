@@ -83,29 +83,29 @@ fn render(
     renderer
         .render(|renderer, i| {
             let cmd = &renderer.cmd_buffs[i as usize];
-
+            let current_frame = renderer.frame;
             unsafe {
                 let frame_c = std::slice::from_raw_parts(
                     &data.frame as *const u32 as *const u8,
                     size_of::<u32>(),
                 );
                 
-                // renderer.device.cmd_fill_buffer(*cmd, main_pass.hash_map_buffer.inner, 0, main_pass.hash_map_buffer.size, 0);
+                renderer.device.cmd_fill_buffer(*cmd, main_pass.hash_map_buffer.inner, 0, main_pass.hash_map_buffer.size, 0);
 
-                // renderer.device.cmd_pipeline_barrier(
-                //     *cmd,
-                //     vk::PipelineStageFlags::TRANSFER,
-                //     vk::PipelineStageFlags::TOP_OF_PIPE,
-                //     vk::DependencyFlags::DEVICE_GROUP,
-                //     &[],
-                //     &[vk::BufferMemoryBarrier::default()
-                //         .buffer(main_pass.hash_map_buffer.inner)
-                //         .src_access_mask(vk::AccessFlags::MEMORY_WRITE)
-                //         .dst_access_mask(vk::AccessFlags::MEMORY_READ)
-                //         .offset(0)
-                //         .size(main_pass.hash_map_buffer.size)],
-                //     &[],
-                // );
+                renderer.device.cmd_pipeline_barrier(
+                    *cmd,
+                    vk::PipelineStageFlags::TRANSFER,
+                    vk::PipelineStageFlags::TOP_OF_PIPE,
+                    vk::DependencyFlags::DEVICE_GROUP,
+                    &[],
+                    &[vk::BufferMemoryBarrier::default()
+                        .buffer(main_pass.hash_map_buffer.inner)
+                        .src_access_mask(vk::AccessFlags::MEMORY_WRITE)
+                        .dst_access_mask(vk::AccessFlags::MEMORY_READ)
+                        .offset(0)
+                        .size(main_pass.hash_map_buffer.size)],
+                    &[],
+                );
                 let begin_info = vk::RenderPassBeginInfo::default()
                     .clear_values(&[
                         vk::ClearValue {
@@ -146,7 +146,13 @@ fn render(
                     }]);
                 renderer
                     .device
-                    .cmd_set_scissor(*cmd, 0, &[FULL_SCREEN_SCISSOR]);
+                    .cmd_set_scissor(*cmd, 0, &[vk::Rect2D {
+                        extent: vk::Extent2D { width: WINDOW_SIZE.0 /8, height: WINDOW_SIZE.0 /8 },
+                        offset: vk::Offset2D {
+                            x: 0,
+                            y: 0
+                        }
+                    }]);
 
                 renderer.device.cmd_begin_render_pass(
                     *cmd,
@@ -185,6 +191,9 @@ fn render(
                 renderer
                     .device
                     .cmd_set_viewport(*cmd, 0, &[FULL_SCREEN_VIEW_PORT]);
+                renderer
+                    .device
+                    .cmd_set_scissor(*cmd, 0, &[FULL_SCREEN_SCISSOR]);
                 renderer.device.cmd_bind_pipeline(
                     *cmd,
                     vk::PipelineBindPoint::GRAPHICS,
@@ -431,7 +440,6 @@ fn init(world: &mut World) {
     };
 
     let light_dir = polar_form(ligth_rotation, light_hight);
-    info!("{}", light_dir);
     let mut light_data = vec![];
 
     for _ in 0..20 {

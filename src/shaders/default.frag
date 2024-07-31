@@ -28,16 +28,8 @@ layout(binding = 1, set = 0) uniform CameraProperties
 	mat4 projInverse;
     vec4 controlls;
 } cam;
-#define khashmapCapacity 10000000
 
-struct Sample {
-    vec3 radiance, normal, dir, color;
-};
-
-struct GIReservoir {
-    Sample z;
-    int w;
-};
+#include "./common.glsl"
 
 layout(binding = 2, set = 0) uniform sampler2D skybox;
 layout(binding = 3, set = 0) buffer uHashMapBuffer { uint[khashmapCapacity] keys; ivec3[khashmapCapacity] values; uint[khashmapCapacity] total_sampels; uint64_t[khashmapCapacity] last_seen;};
@@ -51,7 +43,6 @@ layout( push_constant ) uniform Frame {
 
 layout(location = 0) out uint out_voxel_id;
 
-#include "./common.glsl"
 #include "./restir.glsl"
 #include "./hash_map.glsl"
 
@@ -106,9 +97,9 @@ void main() {
     HitInfo hit_info;
     float beam;
     ivec2 beam_coord = ivec2(gl_FragCoord.xy / uBeamSize);
-    beam = min(min(imageLoad(uBeamImage, beam_coord).r, imageLoad(uBeamImage, beam_coord + ivec2(1, 0)).r),
+    beam = nonuniformEXT(min(min(imageLoad(uBeamImage, beam_coord).r, imageLoad(uBeamImage, beam_coord + ivec2(1, 0)).r),
                 min(imageLoad(uBeamImage, beam_coord + ivec2(0, 1)).r,
-                    imageLoad(uBeamImage, beam_coord + ivec2(1, 1)).r));
+                    imageLoad(uBeamImage, beam_coord + ivec2(1, 1)).r)));
     o += d * beam;
 
     bool hit = ray_cast(o, d, hit_info);

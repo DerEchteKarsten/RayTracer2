@@ -478,7 +478,7 @@ impl Renderer {
         )
     }
 
-    pub fn render<F>(&mut self, func: F) -> Result<u64>
+    pub fn render<F>(&mut self, func: F) -> Result<()>
     where
         F: FnOnce(&mut Renderer, u32),
     {
@@ -510,7 +510,7 @@ impl Renderer {
             (image_index, frame_index)
         };
         func(self, image_index);
-
+        self.frame = frame_index;
         let frame = &self.frames_in_flight[frame_index as usize];
         let cmd = &self.cmd_buffs[image_index as usize];
         unsafe { self.device.end_command_buffer(*cmd) }.unwrap();
@@ -550,7 +550,7 @@ impl Renderer {
             }
             Ok(_) => {}
         };
-        Ok(frame_index)
+        Ok(())
     }
 
     pub fn pipeline_image_barriers(&self, cmd: &vk::CommandBuffer, barriers: &[ImageBarrier]) {
@@ -1625,7 +1625,7 @@ fn new_device(
         .features(features)
         .push_next(&mut vulkan_12_features)
         .push_next(&mut vulkan_13_features);
-    // .push_next(&mut atomics);
+        // .push_next(&mut atomics);
 
     let device_extensions_as_ptr = required_extensions
         .into_iter()

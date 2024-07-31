@@ -1,7 +1,5 @@
 #define kEmpty 0
-#define MAX_AGE 2
-#define MAX_ACCUM 2147400000
-// #define MAX_ACCUM 10000000
+#define MAX_AGE 100
 
 #extension GL_EXT_shader_atomic_float : require
 
@@ -49,41 +47,9 @@ void gpu_hashmap_insert(uint key, uint64_t now, HitInfo hit_info, inout uint rng
     uint slot = mod_u32(hash(key), (khashmapCapacity-1));
     while(true)
     {
-        bool insert = false;
-        if(now - last_seen[slot] >= MAX_AGE) {
-            // uint slot2 = mod_u32(hash(key), (khashmapCapacity-1));
-            // while(true) {
-            //     if (keys[slot2] == key) {
-            //         values[slot] = values[slot2];
-            //         total_sampels[slot] = total_sampels[slot2];
-
-            //         keys[slot2] = kEmpty;
-            //         values[slot2] = ivec3(0);
-            //         total_sampels[slot2] = 0;
-            //         break;
-            //     }else if (keys[slot2] == kEmpty) {
-            //         values[slot] = ivec3(0);
-            //         total_sampels[slot] = 0;
-            //         break;
-            //     }
-            //     slot2 = mod_u32(slot2 +1, (khashmapCapacity-1));
-            // }
-
-            keys[slot] = key;
-            last_seen[slot] = now;
-            values[slot] = ivec3(0);
-            total_sampels[slot] = 0;
-            insert = true;
-        }else {
-            insert = atomicCompSwap(keys[slot], kEmpty, key) == kEmpty || keys[slot] == key;
-        }
-        
-        if (insert) {
-            last_seen[slot] = now;
+        if (atomicCompSwap(keys[slot], kEmpty, key) == kEmpty || keys[slot] == key) {
+            // last_seen[slot] = now;
             // uint prev = atomicAdd(total_sampels[slot], 1);
-            // if(prev > 1920 * 1080) {
-            //     return;
-            // }
             // bool is_direct_sample = prev < 300; 
             // if (prev > 10 && length(vec3(values[slot])) < 200) {
             //     is_direct_sample = false;
@@ -124,11 +90,10 @@ void gpu_hashmap_insert(uint key, uint64_t now, HitInfo hit_info, inout uint rng
             //     }
             // }
 
-    
+            values[slot] = ivec3(hit_info.color * 100.0);
             // atomicAdd(values[slot].r, int(radiance.r * 100.0));
             // atomicAdd(values[slot].g, int(radiance.g * 100.0));
             // atomicAdd(values[slot].b, int(radiance.b * 100.0));
-            values[slot] = ivec3(hit_info.color * 100.0);
             return;
 
         }

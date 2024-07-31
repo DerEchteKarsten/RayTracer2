@@ -84,7 +84,7 @@ fn render(cam: Res<CameraUniformData>, world: Res<GameWorld>) {
 }
 
 fn fps(time: Res<Time>) {
-    info!("{:?}", time.delta());
+    info!("{:?}", 1.0/time.delta_seconds());
 }
 
 fn main() {

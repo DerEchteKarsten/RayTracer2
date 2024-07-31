@@ -11,16 +11,8 @@ layout(binding = 1, set = 0) uniform CameraProperties
 	mat4 projInverse;
     vec4 controlls;
 } cam;
-#define khashmapCapacity 10000000
 
-struct Sample {
-    vec3 radiance, normal, dir, color;
-};
-
-struct GIReservoir {
-    Sample z;
-    int w;
-};
+#include "./common.glsl"
 
 layout(binding = 2, set = 0) uniform sampler2D skybox;
 layout(binding = 3, set = 0) buffer uHashMapBuffer { uint[khashmapCapacity] keys; ivec3[khashmapCapacity] values; uint[khashmapCapacity] total_sampels; uint64_t[khashmapCapacity] last_seen;};
@@ -30,7 +22,6 @@ layout( push_constant ) uniform Frame {
 	uint frame;
 } f;
 
-#include "./common.glsl"
 #include "./restir.glsl"
 #include "./hash_map.glsl"
 
@@ -133,9 +124,10 @@ void main() {
 	if(index == SKYBOX) {
 		col = texture(skybox, get_uv(direction.xyz)).rgb;
   }else {
+    // col = vec3(index);
     vec3 radiance;
     uint M;
-    if(gpu_hashmap_get(index, f.frame, radiance, M)) {
+    if(gpu_hashmap_get(index, f.frame, radiance, M)) { 
       col = radiance; // float(M);
     }else {
       col = vec3(1.0, 0.0, 1.0);
