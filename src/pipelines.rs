@@ -165,7 +165,7 @@ pub struct MainPass {
     pub beam_image: Vec<ImageAndView>,
     pub frame_buffers: Vec<vk::Framebuffer>,
     pub hash_map_buffer: Buffer,
-    pub ui_pipeline: Pipeline,
+    // pub ui_pipeline: Pipeline,
 }
 
 pub fn create_post_proccesing_pipeline(
@@ -741,9 +741,9 @@ pub fn create_beam_pipeline(
     })
 }
 
-fn create_ui_pipeline(renderer: &mut Renderer, font_texture: &ImageAndView, textures: &Vec<ImageAndView>, texture_fields: ) {
+// fn create_ui_pipeline(renderer: &mut Renderer, font_texture: &ImageAndView, textures: &Vec<ImageAndView>, texture_fields: ) {
 
-}
+// }
 
 pub fn create_main_render_pass(
     renderer: &mut Renderer,

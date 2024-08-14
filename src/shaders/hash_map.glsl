@@ -90,10 +90,10 @@ void gpu_hashmap_insert(uint key, uint64_t now, HitInfo hit_info, inout uint rng
             //     }
             // }
 
-            values[slot] = ivec3(hit_info.color * 100.0);
             // atomicAdd(values[slot].r, int(radiance.r * 100.0));
             // atomicAdd(values[slot].g, int(radiance.g * 100.0));
             // atomicAdd(values[slot].b, int(radiance.b * 100.0));
+            values[slot] = ivec3(hit_info.color * 100.0);
             return;
 
         }
