@@ -44,49 +44,25 @@ layout(location = 0) rayPayloadEXT Payload p;
 
 const int MaxAlphaSurfaces = 1;
 
-void trace(vec3 o, vec3 d, inout vec3 rayColor) {
+vec3 trace(vec3 o, vec3 d) {
+	vec3 rayColor = vec3(1.0);
+
 	for (int t = 0; t<=MaxAlphaSurfaces; t++ ) {
 		traceRayEXT(topLevelAS, gl_RayFlagsOpaqueEXT, 0xff, 0, 0, 0, o, tmin, d, tmax, 0);
+		rayColor *= p.color.rgb;
 		if (p.color.a < 1.0) {
 			o = p.hitPoint;
-			rayColor *= p.color.rgb * p.color.a;
 		}else {
 			break;
 		}
 	}
+	return rayColor;
 }
 
 
-vec3 Trace(in vec3 origin, in vec3 rayColor, inout uint state, in vec3 normal, in vec3 emission) {
-	vec3 totalLight = emission * 12 * rayColor;
-	vec3 direction = normalize(normal + RandomDirection(state));
-	trace(origin, direction, rayColor);
-
-	if (!p.missed) {
-		origin = p.hitPoint;
-		totalLight += p.emission * 12 * rayColor;
-		rayColor *= p.color.rgb;
-
-		direction = normalize(p.hitNormal + RandomDirection(state));
-		trace(p.hitPoint, direction, rayColor);
-
-		if (!p.missed) {
-			totalLight += p.emission * 12 * rayColor;
-			rayColor *= p.color.rgb;
-		}
-	} 
-	
-	const float dotp = dot(direction, normalize(vec3(1.0, 10.0, 1.0)));
-	if (dotp > 0.9) {
-		totalLight += dotp * vec3(0.99215, 0.9843, 0.82745) * 200 * rayColor;
-	}
-	
-	return totalLight;
-}
-
-const int MaxBounces = 2; 
-const int MaxSamples = 4;
-vec3 Trace2(in vec3 direction, in vec3 origin, inout uint state) {
+const int MaxBounces = 1; 
+const int MaxSamples = 1;
+vec3 Trace2(in vec3 origin, in vec3 direction, inout uint state) {
 	vec3 totalLight = vec3(0.0);
 
 	for (int s = 0; s < MaxSamples; s++) {
@@ -95,15 +71,7 @@ vec3 Trace2(in vec3 direction, in vec3 origin, inout uint state) {
 		vec3 incomingLight = vec3(0.0);
 		vec3 rayColor = vec3(1.0);
 		for (int i = 0; i <= MaxBounces; i++) {
-			for (int t = 0; t<=MaxAlphaSurfaces; t++ ) {
-				traceRayEXT(topLevelAS, gl_RayFlagsOpaqueEXT, 0xff, 0, 0, 0, o, tmin, d, tmax, 0);
-				if (p.color.a < 1.0) {
-					o = p.hitPoint;
-					rayColor *= p.color.rgb * p.color.a;
-				}else {
-					break;
-				}
-			}
+			return trace(o, d);
 			if (!p.missed) {
 				o = p.hitPoint;
 				incomingLight += p.emission * 12 * rayColor;
@@ -145,26 +113,30 @@ void main()
 	const vec2 pixelCenter = vec2(pixelCord.xy) + vec2(0.5);
 	const vec2 inUV = pixelCenter/vec2(size);
 	vec2 d = inUV * 2.0 - 1.0;
+	vec2 dir = inUV * 2.0 - 1.0;
+	vec4 origin = cam.viewInverse * vec4(0,0,0,1);
+	vec4 target = cam.projInverse * vec4(dir.x, dir.y, 1, 1) ;
+	vec4 direction = cam.viewInverse*vec4(normalize(target.xyz), 0) ;
 
 	uint rngState = uint((pixelCord.y * size.x) + pixelCord.x) + uint(f.frame) * 23145;
 
-	vec4 g_buffer = imageLoad(colorImage, ivec2(pixelCord.xy));
-	float depth = texture(depth_image, inUV).r;
+	// vec4 g_buffer = imageLoad(colorImage, ivec2(pixelCord.xy));
+	// float depth = texture(depth_image, inUV).r;
 
-	vec4 sPos = vec4(d, depth, 1.0);
-	sPos = cam.viewInverse * cam.projInverse * sPos;
-	vec3 position = (sPos.xyz / sPos.w);
+	// vec4 sPos = vec4(d, depth, 1.0);
+	// sPos = cam.viewInverse * cam.projInverse * sPos;
+	// vec3 position = (sPos.xyz / sPos.w);
 
-	vec4 albedo, emission, normal;
-	float roughness, metalness;
-	unpack(g_buffer, albedo, normal, roughness, metalness, emission);
+	// vec4 albedo, emission, normal;
+	// float roughness, metalness;
+	// unpack(g_buffer, albedo, normal, roughness, metalness, emission);
 
 	vec3 pixelCol;
-	if (depth > 1) {
-		pixelCol = vec3(0.0, 0.0, 0.0);
-	}else {
-		pixelCol = Trace(position, albedo.rgb, rngState, normal.rgb, emission.rgb);
-	}	
+	// if (depth > 1) {
+	// 	pixelCol = vec3(0.0, 0.0, 0.0);
+	// }else {
+		pixelCol = Trace2(origin.xyz, direction.xyz, rngState);
+	// }	
 	
-	imageStore(image, pixelCord, vec4(pixelCol, 1.0));
+	imageStore(image, pixelCord, vec4(pixelCol.rgb, 1.0));
 }

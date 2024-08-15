@@ -1,10 +1,10 @@
 use std::time::Duration;
 
 use glam::{vec3, Mat3, Mat4, Quat, Vec3};
-use winit::event::{DeviceEvent, ElementState, Event, KeyboardInput, MouseButton, WindowEvent};
+use winit::{event::{DeviceEvent, ElementState, Event, MouseButton, WindowEvent}, keyboard::{KeyCode, PhysicalKey}};
 
 const MOVE_SPEED: f32 = 20.0;
-const ANGLE_PER_POINT: f32 = 0.0009;
+const ANGLE_PER_POINT: f32 = 0.005;
 
 const UP: Vec3 = vec3(0.0, 1.0, 0.0);
 
@@ -187,64 +187,57 @@ impl Controls {
 
     pub fn handle_event(self, event: &Event<()>, window: &winit::window::Window) -> Self {
         let mut new_state = self;
-
-        match event {
-            Event::WindowEvent { event, .. } => {
-                match event {
-                    WindowEvent::KeyboardInput {
-                        input:
-                            KeyboardInput {
-                                scancode, state, ..
-                            },
-                        ..
-                    } => {
-                        if *scancode == 17 {
-                            new_state.go_forward = *state == ElementState::Pressed;
+            match event {
+                Event::DeviceEvent { event: DeviceEvent::MouseMotion { delta: (x, y) }, .. } => {
+                    let x = *x as f32;
+                    let y = *y as f32;
+                    new_state.cursor_delta = [x, y];
+                },
+                Event::WindowEvent {event, ..} => {
+                    match event {
+                        WindowEvent::KeyboardInput {
+                            event,
+                            ..
+                        } => {
+                            if event.physical_key == PhysicalKey::Code(KeyCode::KeyW) {
+                                new_state.go_forward = event.state == ElementState::Pressed;
+                            }
+                            if event.physical_key == PhysicalKey::Code(KeyCode::KeyS){
+                                new_state.go_backward = event.state == ElementState::Pressed;
+                            }
+                            if event.physical_key == PhysicalKey::Code(KeyCode::KeyD) {
+                                new_state.strafe_right = event.state == ElementState::Pressed;
+                            }
+                            if event.physical_key == PhysicalKey::Code(KeyCode::KeyA) {
+                                new_state.strafe_left = event.state == ElementState::Pressed;
+                            }
+                            if event.physical_key == PhysicalKey::Code(KeyCode::Space) {
+                                new_state.go_up = event.state == ElementState::Pressed;
+                            }
+                            if event.physical_key == PhysicalKey::Code(KeyCode::ShiftLeft) {
+                                new_state.go_down = event.state == ElementState::Pressed;
+                            }
                         }
-                        if *scancode == 31 {
-                            new_state.go_backward = *state == ElementState::Pressed;
+                        WindowEvent::MouseInput { state, button, .. } => {
+                            if *button == MouseButton::Right && *state == ElementState::Pressed {
+                                new_state.look_around = true;
+                                window
+                                    .set_cursor_grab(winit::window::CursorGrabMode::Locked)
+                                    .unwrap_or(());
+                            } else if *button == MouseButton::Right && *state == ElementState::Released
+                            {
+                                new_state.look_around = false;
+                                window
+                                    .set_cursor_grab(winit::window::CursorGrabMode::None)
+                                    .unwrap_or(());
+                            }
                         }
-                        if *scancode == 32 {
-                            new_state.strafe_right = *state == ElementState::Pressed;
-                        }
-                        if *scancode == 30 {
-                            new_state.strafe_left = *state == ElementState::Pressed;
-                        }
-                        if *scancode == 57 {
-                            new_state.go_up = *state == ElementState::Pressed;
-                        }
-                        if *scancode == 42 {
-                            new_state.go_down = *state == ElementState::Pressed;
-                        }
-                    }
-                    WindowEvent::MouseInput { state, button, .. } => {
-                        if *button == MouseButton::Right && *state == ElementState::Pressed {
-                            new_state.look_around = true;
-                            window
-                                .set_cursor_grab(winit::window::CursorGrabMode::Locked)
-                                .unwrap_or(());
-                        } else if *button == MouseButton::Right && *state == ElementState::Released
-                        {
-                            new_state.look_around = false;
-                            window
-                                .set_cursor_grab(winit::window::CursorGrabMode::None)
-                                .unwrap_or(());
-                        }
-                    }
-                    _ => {}
-                };
+                        _ => {}
+                    };
+                },
+                _ => ()
             }
-            Event::DeviceEvent {
-                event: DeviceEvent::MouseMotion { delta: (x, y) },
-                ..
-            } => {
-                let x = *x as f32;
-                let y = *y as f32;
-                new_state.cursor_delta = [self.cursor_delta[0] + x, self.cursor_delta[1] + y];
-            }
-            _ => (),
-        }
-
+            
         new_state
     }
 }

@@ -106,7 +106,7 @@ impl Model {
     //         from_ref(&vk_transform),
     //     )?;
     //     let blas = {
-    //         let data = vk::AccelerationStructureGeometryTrianglesDataKHR::builder()
+    //         let data = vk::AccelerationStructureGeometryTrianglesDataKHR::default()
     //             .vertex_data(vk::DeviceOrHostAddressConstKHR {
     //                 device_address: vertex_buffer.get_device_address(&ctx.device),
     //             })
@@ -120,21 +120,21 @@ impl Model {
     //             })
     //             .vertex_format(vk::Format::R32G32B32_SFLOAT)
     //             .vertex_stride(size_of::<Vertex>() as _)
-    //             .build();
+    //             ;
 
-    //         let geometry = vk::AccelerationStructureGeometryKHR::builder()
+    //         let geometry = vk::AccelerationStructureGeometryKHR::default()
     //             .geometry(vk::AccelerationStructureGeometryDataKHR { triangles: data })
     //             .geometry_type(vk::GeometryTypeKHR::TRIANGLES)
-    //             .build();
+    //             ;
 
     //         log::debug!("{}, {}", indices.len(), vertices.len());
 
-    //         let range = vk::AccelerationStructureBuildRangeInfoKHR::builder()
+    //         let range = vk::AccelerationStructureBuildRangeInfoKHR::default()
     //             .first_vertex(0)
     //             .primitive_count((vertices.len() as u32) / 3)
     //             .primitive_offset(0)
     //             .transform_offset(0)
-    //             .build();
+    //             ;
     //         create_acceleration_structure(
     //             ctx,
     //             vk::AccelerationStructureTypeKHR::BOTTOM_LEVEL,
@@ -167,7 +167,7 @@ impl Model {
     //     })
     // }
 
-    fn map_gltf_sampler<'a>(sampler: &gltf::Sampler) -> vk::SamplerCreateInfoBuilder<'a> {
+    fn map_gltf_sampler<'a>(sampler: &gltf::Sampler) -> vk::SamplerCreateInfo{
         let mag_filter = match sampler.mag_filter {
             gltf::MagFilter::Linear => vk::Filter::LINEAR,
             gltf::MagFilter::Nearest => vk::Filter::NEAREST,
@@ -182,12 +182,12 @@ impl Model {
             | gltf::MinFilter::NearestMipmapNearest => vk::Filter::NEAREST,
         };
 
-        vk::SamplerCreateInfo::builder()
+        vk::SamplerCreateInfo::default()
             .mag_filter(mag_filter)
             .min_filter(min_filter)
     }
 
-    pub fn from_gltf(ctx: &mut Context, model: gltf::Model) -> Result<Self> {
+    pub fn from_gltf(ctx: &mut Renderer, model: gltf::Model) -> Result<Self> {
         let vertices = model.vertices.as_slice();
         let indices = model.indices.as_slice();
         for v in vertices {
@@ -381,7 +381,7 @@ impl Model {
         let index_buffer_addr = index_buffer.get_device_address(&ctx.device);
         let transform_buffer_addr = transform_buffer.get_device_address(&ctx.device);
 
-        let as_geo_triangles_data = vk::AccelerationStructureGeometryTrianglesDataKHR::builder()
+        let as_geo_triangles_data = vk::AccelerationStructureGeometryTrianglesDataKHR::default()
             .vertex_format(vk::Format::R32G32B32_SFLOAT)
             .vertex_data(vk::DeviceOrHostAddressConstKHR {
                 device_address: vertex_buffer_addr,
@@ -395,7 +395,7 @@ impl Model {
             .transform_data(vk::DeviceOrHostAddressConstKHR {
                 device_address: transform_buffer_addr,
             })
-            .build();
+            ;
 
         let mut geometry_infos = vec![];
         let mut as_geometries = vec![];
@@ -431,22 +431,22 @@ impl Model {
             index_counts.push(mesh.index_count);
 
             as_geometries.push(
-                vk::AccelerationStructureGeometryKHR::builder()
+                vk::AccelerationStructureGeometryKHR::default()
                     .geometry_type(vk::GeometryTypeKHR::TRIANGLES)
                     .flags(vk::GeometryFlagsKHR::OPAQUE)
                     .geometry(vk::AccelerationStructureGeometryDataKHR {
                         triangles: as_geo_triangles_data,
                     })
-                    .build(),
+                    ,
             );
 
             as_ranges.push(
-                vk::AccelerationStructureBuildRangeInfoKHR::builder()
+                vk::AccelerationStructureBuildRangeInfoKHR::default()
                     .first_vertex(mesh.vertex_offset)
                     .primitive_count(primitive_count)
                     .primitive_offset(mesh.index_offset * size_of::<u32>() as u32)
                     .transform_offset((node_index * size_of::<vk::TransformMatrixKHR>()) as u32)
-                    .build(),
+                    ,
             );
 
             max_primitive_counts.push(primitive_count)

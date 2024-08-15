@@ -37,7 +37,7 @@ void main()
 	vec3 d = gl_WorldRayDirectionEXT;
 	float u = (0.5 + atan2(d.z, d.x)/(2*PI));
     float v = (0.5 - asin(d.y)/PI);
-	vec4 tex = texture(skyBox, vec2(u,v));
+	vec4 tex =  texture(skyBox, vec2(u,v));
 	p.color = tex;
     p.missed = true;
 	p.depth = 10000;

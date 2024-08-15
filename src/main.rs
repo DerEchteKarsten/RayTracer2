@@ -1,5 +1,6 @@
 mod context;
-use ash::extensions::ext;
+use ash::ext::buffer_device_address;
+use ash::khr::{acceleration_structure, deferred_host_operations, get_memory_requirements2, ray_tracing_pipeline, shader_float_controls, shader_non_semantic_info, swapchain};
 use context::*;
 mod camera;
 use camera::*;
@@ -14,31 +15,32 @@ use log::debug;
 use model::*;
 
 use anyhow::Result;
-use ash::extensions::khr::{self};
 use ash::vk::{
     self, AabbPositionsKHR, AccelerationStructureTypeKHR, GeometryTypeKHR,
-    KhrShaderNonSemanticInfoFn, Packed24_8, TransformMatrixKHR,
+    Packed24_8, TransformMatrixKHR, KHR_SPIRV_1_4_NAME,
 };
 use gpu_allocator::MemoryLocation;
 
 use ash::Device;
 
 use glam::{vec3, Mat4, Vec3, Vec4};
-use std::default::Default;
+use winit::event::{};
+use winit::keyboard::{KeyCode, PhysicalKey};
+use winit::window::WindowAttributes;
+use std::default::{self, Default};
 use std::ffi::{CStr, CString};
 use std::os::unix::thread;
 use std::slice::from_ref;
 use std::time::{Duration, Instant};
 
-use raw_window_handle::{HasRawDisplayHandle, HasRawWindowHandle};
+use raw_window_handle::{HasRawWindowHandle, RawDisplayHandle, RawWindowHandle};
 
 use std::mem::{size_of, transmute};
 
 use winit::{
     dpi::PhysicalSize,
-    event::{ElementState, Event, KeyboardInput, VirtualKeyCode, WindowEvent},
+    event::{ElementState, Event, WindowEvent},
     event_loop::{ControlFlow, EventLoop},
-    window::WindowBuilder,
 };
 
 struct ComputePipeline {
@@ -54,36 +56,23 @@ struct GBuffer {
     pub depth_buffers: Vec<(vk::ImageView, Image)>,
 }
 
-struct Surfel {
-    pub radius: f32,
-    pub position: Vec3,
-    pub radiance: Vec3,
-}
-
 fn main() {
     let model_thread = std::thread::spawn(|| gltf::load_file("./src/models/sponza_scene.glb").unwrap());
-    let image_thread = std::thread::spawn(|| image::open("./src/models/skybox.png").unwrap());
+    let image_thread = std::thread::spawn(|| image::open("./src/models/skybox.exr").unwrap());
 
-    let device_extensions = [
-        khr::Swapchain::name(),
-        khr::RayTracingPipeline::name(),
-        khr::AccelerationStructure::name(),
-        vk::ExtDescriptorIndexingFn::name(),
-        vk::ExtScalarBlockLayoutFn::name(),
-        vk::KhrGetMemoryRequirements2Fn::name(),
-        khr::BufferDeviceAddress::name(),
-        khr::DeferredHostOperations::name(),
-        vk::KhrSpirv14Fn::name(),
-        vk::KhrShaderFloatControlsFn::name(),
-        vk::KhrBufferDeviceAddressFn::name(),
-        KhrShaderNonSemanticInfoFn::name(),
+    let device_extensions: [&CStr; 11] = [
+        swapchain::NAME,
+        ray_tracing_pipeline::NAME,
+        acceleration_structure::NAME,
+        ash::ext::descriptor_indexing::NAME,
+        ash::ext::scalar_block_layout::NAME,
+        get_memory_requirements2::NAME,
+        buffer_device_address::NAME,
+        deferred_host_operations::NAME,
+        KHR_SPIRV_1_4_NAME,
+        shader_float_controls::NAME,
+        shader_non_semantic_info::NAME,
     ];
-
-    let device_extensions = device_extensions
-        .into_iter()
-        .map(|e| e.to_str().unwrap())
-        .collect::<Vec<_>>();
-    let device_extensions = device_extensions.as_slice();
 
     let device_features = DeviceFeatures {
         ray_tracing_pipeline: true,
@@ -92,24 +81,22 @@ fn main() {
         buffer_device_address: true,
         dynamic_rendering: true,
         synchronization2: true,
+        attomics: true,
     };
-    let event_loop = EventLoop::new();
-    let window = WindowBuilder::new()
-        .with_title("TEst")
-        .with_inner_size(PhysicalSize {
-            width: 1920,
-            height: 1080,
-        })
-        .build(&event_loop)
-        .unwrap();
+    let event_loop = EventLoop::new().unwrap();
+    let window = event_loop.create_window(WindowAttributes::default().with_inner_size(PhysicalSize {
+        width: 1920,
+        height: 1080,
+    })).unwrap();
+
     let window_size = window.inner_size();
-    let mut ctx = Context::new(
-        window.raw_window_handle(),
-        window.raw_display_handle(),
-        "Test",
+    let mut ctx = Renderer::new(
+        &window,
+        &window,
+        &device_features,
         device_extensions,
-        device_features,
-        window_size,
+        window_size.width,
+        window_size.height
     )
     .unwrap();
 
@@ -141,7 +128,7 @@ fn main() {
 
     log::trace!("Starting Image Load");
     let image = image_thread.join().unwrap();
-    let sky_box = Image::new_from_data(&mut ctx, image, vk::Format::R8G8B8A8_SRGB).unwrap();
+    let sky_box = Image::new_from_data(&mut ctx, image, vk::Format::R32G32B32A32_SFLOAT).unwrap();
     let sky_box_sampler = unsafe { ctx.device.create_sampler(&sampler_info, None) }.unwrap();
     log::trace!("Starting Model");
     let model = model_thread.join().unwrap();
@@ -199,7 +186,7 @@ fn main() {
                 )
                 .unwrap();
                 let view = create_image_view(&ctx.device, &image, vk::Format::R32G32B32A32_SFLOAT);
-                Context::transition_image_layout_to_general(
+                Renderer::transition_image_layout_to_general(
                     &ctx.device,
                     &ctx.command_pool,
                     &image,
@@ -218,14 +205,13 @@ fn main() {
             .map(|i| unsafe {
                 ctx.device
                     .create_framebuffer(
-                        &vk::FramebufferCreateInfo::builder()
-                            .attachments(&[ctx.swapchain.images[i].1])
+                        &vk::FramebufferCreateInfo::default()
+                            .attachments(&[ctx.swapchain.images[i].view])
                             .attachment_count(1)
                             .height(window_size.height)
                             .width(window_size.width)
-                            .layers(1)
                             .render_pass(post_proccesing_pipeline.render_pass)
-                            .build(),
+                            ,
                         None,
                     )
                     .unwrap()
@@ -254,25 +240,25 @@ fn main() {
             .unwrap();
         let instance_buffer_addr = instance_buffer.get_device_address(&ctx.device);
 
-        let as_struct_geo = vk::AccelerationStructureGeometryKHR::builder()
+        let as_struct_geo = vk::AccelerationStructureGeometryKHR::default()
             .geometry_type(vk::GeometryTypeKHR::INSTANCES)
             .flags(vk::GeometryFlagsKHR::OPAQUE)
             .geometry(vk::AccelerationStructureGeometryDataKHR {
-                instances: vk::AccelerationStructureGeometryInstancesDataKHR::builder()
+                instances: vk::AccelerationStructureGeometryInstancesDataKHR::default()
                     .array_of_pointers(false)
                     .data(vk::DeviceOrHostAddressConstKHR {
                         device_address: instance_buffer_addr,
                     })
-                    .build(),
+                    ,
             })
-            .build();
+            ;
 
-        let as_ranges = vk::AccelerationStructureBuildRangeInfoKHR::builder()
+        let as_ranges = vk::AccelerationStructureBuildRangeInfoKHR::default()
             .first_vertex(0)
             .primitive_count(instaces.len() as _)
             .primitive_offset(0)
             .transform_offset(0)
-            .build();
+            ;
 
         create_acceleration_structure(
             &mut ctx,
@@ -283,8 +269,6 @@ fn main() {
         )
         .unwrap()
     };
-
-    let probe_cache = ctx.create_buffer(vk::BufferUsageFlags::STORAGE_BUFFER, MemoryLocation::GpuOnly, (size_of::<Surfel>() as u64) * 10000, Some("probe cache")).unwrap();
 
     let shaders_create_info = [
         RayTracingShaderCreateInfo {
@@ -333,17 +317,11 @@ fn main() {
             &mut vec![WriteDescriptorSet {
                 binding: 8,
                 kind: WriteDescriptorSetKind::CombinedImageSampler {
-                    view: sky_box.1,
+                    view: sky_box.view,
                     sampler: sky_box_sampler,
                     layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
                     }
                 },
-                WriteDescriptorSet {
-                    binding: 1,
-                    kind: WriteDescriptorSetKind::StorageBuffer {
-                        buffer: probe_cache.inner
-                    }
-                }
             ],
             &g_buffer,
         )
@@ -355,8 +333,8 @@ fn main() {
     let mut last_time = Instant::now();
     let mut frame_time = Duration::new(0, 0);
     #[allow(clippy::collapsible_match, clippy::single_match)]
-    event_loop.run(move |event, _, control_flow| {
-        *control_flow = ControlFlow::Poll;
+    event_loop.run(move |event, control_flow| {
+        control_flow.set_control_flow(ControlFlow::Poll);
         controles = controles.handle_event(&event, &window);
         match event {
             Event::NewEvents(_) => {
@@ -364,302 +342,299 @@ fn main() {
                 now = Instant::now();
                 frame_time = now - last_time;
                 last_time = now;
+                println!("{:?}", frame_time);
             }
             Event::WindowEvent { event, .. } => match event {
-                WindowEvent::CloseRequested => *control_flow = ControlFlow::Exit,
+                WindowEvent::CloseRequested => control_flow.exit(),
                 WindowEvent::KeyboardInput {
-                    input:
-                        KeyboardInput {
-                            virtual_keycode: Some(keycode),
-                            state,
-                            ..
-                        },
+                    event,
                     ..
-                } => match (keycode, state) {
-                    (VirtualKeyCode::Escape, ElementState::Released) => {
-                        *control_flow = ControlFlow::Exit
+                } => match (event.physical_key, event.state) {
+                    (PhysicalKey::Code(KeyCode::Escape), ElementState::Released) => {
+                        control_flow.exit()
                     }
                     _ => (),
                 },
-                _ => (),
-            },
-            Event::MainEventsCleared => {
-                frame += 1;
-                let new_cam = camera.update(&controles, frame_time);
-                moved = new_cam != camera;
-                if moved {
-                    camera = new_cam;
-                }
-
-                uniform_data.proj_inverse = camera.projection_matrix().inverse();
-                uniform_data.view_inverse = camera.view_matrix().inverse();
-                uniform_buffer
-                    .copy_data_to_buffer(std::slice::from_ref(&uniform_data))
-                    .unwrap();
-
-                g_uniform_data.proj = camera.projection_matrix();
-                g_uniform_data.view = camera.view_matrix();
-                g_uniform_data.model = model_mat;
-
-                g_uniform_buffer
-                    .copy_data_to_buffer(std::slice::from_ref(&g_uniform_data))
-                    .unwrap();
-                camera = new_cam;
-
-                ctx.render(|ctx, i| {
-                    let cmd = &ctx.cmd_buffs[i as usize];
-
-                    unsafe {
-                        let frame_c = std::slice::from_raw_parts(
-                            &frame as *const u32 as *const u8,
-                            size_of::<u32>(),
-                        );
-                        let moved_c = &[if moved == true { 1 as u8 } else { 0 as u8 }, 0, 0, 0];
-
-                        let begin_info = vk::RenderPassBeginInfo::builder()
-                            .clear_values(&[
-                                vk::ClearValue {
-                                    color: vk::ClearColorValue {
-                                        float32: [0.0, 0.0, 0.0, 1.0],
-                                    },
-                                },
-                                vk::ClearValue {
-                                    depth_stencil: vk::ClearDepthStencilValue {
-                                        depth: 1.0,
-                                        stencil: 0,
-                                    },
-                                },
-                            ])
-                            .render_pass(g_buffer_pipeline.render_pass)
-                            .framebuffer(g_buffer.frame_buffers[i as usize])
-                            .render_area(vk::Rect2D {
-                                extent: vk::Extent2D {
-                                    width: window_size.width,
-                                    height: window_size.height,
-                                },
-                                offset: vk::Offset2D { x: 0, y: 0 },
-                            });
-
-                        ctx.device.cmd_begin_render_pass(
-                            *cmd,
-                            &begin_info,
-                            vk::SubpassContents::INLINE,
-                        );
-
-                        ctx.device.cmd_bind_pipeline(
-                            *cmd,
-                            vk::PipelineBindPoint::GRAPHICS,
-                            g_buffer_pipeline.pipeline,
-                        );
-
-                        ctx.device.cmd_bind_descriptor_sets(
-                            *cmd,
-                            vk::PipelineBindPoint::GRAPHICS,
-                            g_buffer_pipeline.layout,
-                            0,
-                            &[g_buffer_pipeline.descriptor],
-                            &[],
-                        );
-
-                        let view_port = vk::Viewport::builder()
-                            .height(window_size.height as f32)
-                            .width(window_size.width as f32)
-                            .max_depth(1.0)
-                            .min_depth(0.0)
-                            .x(0 as f32)
-                            .y(0 as f32)
-                            .build();
-                        ctx.device.cmd_set_viewport(*cmd, 0, &[view_port]);
-
-                        let scissor = vk::Rect2D::builder()
-                            .extent(vk::Extent2D {
-                                height: window_size.height,
-                                width: window_size.width,
-                            })
-                            .offset(vk::Offset2D { x: 0, y: 0 })
-                            .build();
-                        ctx.device.cmd_set_scissor(*cmd, 0, &[scissor]);
-
-                        ctx.device.cmd_bind_index_buffer(
-                            *cmd,
-                            model.index_buffer.inner,
-                            0,
-                            vk::IndexType::UINT32,
-                        );
-                        ctx.device.cmd_bind_vertex_buffers(
-                            *cmd,
-                            0,
-                            &[model.vertex_buffer.inner],
-                            &[0],
-                        );
-
-                        for (j, g) in model.geometry_infos.iter().enumerate() {
-                            // let transform = uniform_data.proj_inverse * uniform_data.view_inverse * g_uniform_data.model.inverse() * g.transform.inverse() * glam::Vec4::ONE;
-                            // if transform.x > 1.0 ||  transform.y > 1.0 || transform.x < -1.0 || transform.y < -1.0{
-                            //     continue;
-                            // }
-                            let c = std::slice::from_raw_parts(
-                                &(j as u32) as *const u32 as *const u8,
+                WindowEvent::RedrawRequested => {
+                    frame += 1;
+                    let new_cam = camera.update(&controles, frame_time);
+                    moved = new_cam != camera;
+                    if moved {
+                        camera = new_cam;
+                    }
+    
+                    uniform_data.proj_inverse = camera.projection_matrix().inverse();
+                    uniform_data.view_inverse = camera.view_matrix().inverse();
+                    uniform_buffer
+                        .copy_data_to_buffer(std::slice::from_ref(&uniform_data))
+                        .unwrap();
+    
+                    g_uniform_data.proj = camera.projection_matrix();
+                    g_uniform_data.view = camera.view_matrix();
+                    g_uniform_data.model = model_mat;
+    
+                    g_uniform_buffer
+                        .copy_data_to_buffer(std::slice::from_ref(&g_uniform_data))
+                        .unwrap();
+                    camera = new_cam;    
+                    
+                    ctx.render(|ctx, i| {
+                        let cmd = &ctx.cmd_buffs[i as usize];
+    
+                        unsafe {
+                            let frame_c = std::slice::from_raw_parts(
+                                &frame as *const u32 as *const u8,
                                 size_of::<u32>(),
+                            );
+                            let moved_c = &[if moved == true { 1 as u8 } else { 0 as u8 }, 0, 0, 0];
+    
+                            // let begin_info = vk::RenderPassBeginInfo::default()
+                            //     .clear_values(&[
+                            //         vk::ClearValue {
+                            //             color: vk::ClearColorValue {
+                            //                 float32: [0.0, 0.0, 0.0, 1.0],
+                            //             },
+                            //         },
+                            //         vk::ClearValue {
+                            //             depth_stencil: vk::ClearDepthStencilValue {
+                            //                 depth: 1.0,
+                            //                 stencil: 0,
+                            //             },
+                            //         },
+                            //     ])
+                            //     .render_pass(g_buffer_pipeline.render_pass)
+                            //     .framebuffer(g_buffer.frame_buffers[i as usize])
+                            //     .render_area(vk::Rect2D {
+                            //         extent: vk::Extent2D {
+                            //             width: window_size.width,
+                            //             height: window_size.height,
+                            //         },
+                            //         offset: vk::Offset2D { x: 0, y: 0 },
+                            //     });
+    
+                            // ctx.device.cmd_begin_render_pass(
+                            //     *cmd,
+                            //     &begin_info,
+                            //     vk::SubpassContents::INLINE,
+                            // );
+    
+                            // ctx.device.cmd_bind_pipeline(
+                            //     *cmd,
+                            //     vk::PipelineBindPoint::GRAPHICS,
+                            //     g_buffer_pipeline.pipeline,
+                            // );
+    
+                            // ctx.device.cmd_bind_descriptor_sets(
+                            //     *cmd,
+                            //     vk::PipelineBindPoint::GRAPHICS,
+                            //     g_buffer_pipeline.layout,
+                            //     0,
+                            //     &[g_buffer_pipeline.descriptor],
+                            //     &[],
+                            // );
+    
+                            // let view_port = vk::Viewport::default()
+                            //     .height(window_size.height as f32)
+                            //     .width(window_size.width as f32)
+                            //     .max_depth(1.0)
+                            //     .min_depth(0.0)
+                            //     .x(0 as f32)
+                            //     .y(0 as f32)
+                            //     ;
+                            // ctx.device.cmd_set_viewport(*cmd, 0, &[view_port]);
+    
+                            // let scissor = vk::Rect2D::default()
+                            //     .extent(vk::Extent2D {
+                            //         height: window_size.height,
+                            //         width: window_size.width,
+                            //     })
+                            //     .offset(vk::Offset2D { x: 0, y: 0 })
+                            //     ;
+                            // ctx.device.cmd_set_scissor(*cmd, 0, &[scissor]);
+    
+                            // ctx.device.cmd_bind_index_buffer(
+                            //     *cmd,
+                            //     model.index_buffer.inner,
+                            //     0,
+                            //     vk::IndexType::UINT32,
+                            // );
+                            // ctx.device.cmd_bind_vertex_buffers(
+                            //     *cmd,
+                            //     0,
+                            //     &[model.vertex_buffer.inner],
+                            //     &[0],
+                            // );
+    
+                            // for (j, g) in model.geometry_infos.iter().enumerate() {
+                            //     // let transform = uniform_data.proj_inverse * uniform_data.view_inverse * g_uniform_data.model.inverse() * g.transform.inverse() * glam::Vec4::ONE;
+                            //     // if transform.x > 1.0 ||  transform.y > 1.0 || transform.x < -1.0 || transform.y < -1.0{
+                            //     //     continue;
+                            //     // }
+                            //     let c = std::slice::from_raw_parts(
+                            //         &(j as u32) as *const u32 as *const u8,
+                            //         size_of::<u32>(),
+                            //     );
+                            //     ctx.device.cmd_push_constants(
+                            //         *cmd,
+                            //         g_buffer_pipeline.layout,
+                            //         vk::ShaderStageFlags::FRAGMENT | vk::ShaderStageFlags::VERTEX,
+                            //         0,
+                            //         &c,
+                            //     );
+                            //     ctx.device.cmd_draw_indexed(
+                            //         *cmd,
+                            //         model.index_counts[j],
+                            //         1,
+                            //         g.index_offset,
+                            //         g.vertex_offset as i32,
+                            //         0,
+                            //     );
+                            // }
+    
+                            // ctx.device.cmd_end_render_pass(*cmd);
+    
+                            // // ctx.device.cmd_pipeline_barrier(
+                            // //     *cmd,
+                            // //     vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+                            // //     vk::PipelineStageFlags::RAY_TRACING_SHADER_KHR,
+                            // //     vk::DependencyFlags::empty(),
+                            // //     &[],
+                            // //     &[],
+                            // //     &[],
+                            // // );
+    
+                            ctx.device.cmd_push_constants(
+                                *cmd,
+                                pipeline.layout,
+                                vk::ShaderStageFlags::RAYGEN_KHR,
+                                0,
+                                &frame_c,
                             );
                             ctx.device.cmd_push_constants(
                                 *cmd,
-                                g_buffer_pipeline.layout,
-                                vk::ShaderStageFlags::FRAGMENT | vk::ShaderStageFlags::VERTEX,
-                                0,
-                                &c,
+                                pipeline.layout,
+                                vk::ShaderStageFlags::RAYGEN_KHR,
+                                size_of::<u32>() as u32,
+                                moved_c,
                             );
-                            ctx.device.cmd_draw_indexed(
+    
+                            ctx.device.cmd_bind_descriptor_sets(
                                 *cmd,
-                                model.index_counts[j],
-                                1,
-                                g.index_offset,
-                                g.vertex_offset as i32,
+                                vk::PipelineBindPoint::RAY_TRACING_KHR,
+                                pipeline.layout,
                                 0,
+                                &[
+                                    static_set,
+                                    dynamic_set[i as usize],
+                                    dynamic_set[ctx.last_swapchain_image_index as usize],
+                                ],
+                                &[],
                             );
-                        }
-
-                        ctx.device.cmd_end_render_pass(*cmd);
-
-                        // ctx.device.cmd_pipeline_barrier(
-                        //     *cmd,
-                        //     vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
-                        //     vk::PipelineStageFlags::RAY_TRACING_SHADER_KHR,
-                        //     vk::DependencyFlags::empty(),
-                        //     &[],
-                        //     &[],
-                        //     &[],
-                        // );
-
-                        ctx.device.cmd_push_constants(
-                            *cmd,
-                            pipeline.layout,
-                            vk::ShaderStageFlags::RAYGEN_KHR,
-                            0,
-                            &frame_c,
-                        );
-                        ctx.device.cmd_push_constants(
-                            *cmd,
-                            pipeline.layout,
-                            vk::ShaderStageFlags::RAYGEN_KHR,
-                            size_of::<u32>() as u32,
-                            moved_c,
-                        );
-
-                        ctx.device.cmd_bind_descriptor_sets(
-                            *cmd,
-                            vk::PipelineBindPoint::RAY_TRACING_KHR,
-                            pipeline.layout,
-                            0,
-                            &[
-                                static_set,
-                                dynamic_set[i as usize],
-                                dynamic_set[ctx.last_swapchain_image_index as usize],
-                            ],
-                            &[],
-                        );
-
-                        ctx.device.cmd_bind_pipeline(
-                            *cmd,
-                            vk::PipelineBindPoint::RAY_TRACING_KHR,
-                            pipeline.handle,
-                        );
-
-                        let call_region = vk::StridedDeviceAddressRegionKHR::default();
-
-                        ctx.ray_tracing.pipeline_fn.cmd_trace_rays(
-                            *cmd,
-                            &shader_binding_table.raygen_region,
-                            &shader_binding_table.miss_region,
-                            &shader_binding_table.hit_region,
-                            &call_region,
-                            window_size.width,
-                            window_size.height,
-                            1,
-                        );
-
-                        // ctx.device.cmd_pipeline_barrier(
-                        //     *cmd,
-                        //     vk::PipelineStageFlags::RAY_TRACING_SHADER_KHR,
-                        //     vk::PipelineStageFlags::FRAGMENT_SHADER,
-                        //     vk::DependencyFlags::empty(),
-                        //     &[],
-                        //     &[],
-                        //     &[],
-                        // );
-
-                        let begin_info = vk::RenderPassBeginInfo::builder()
-                            .render_pass(post_proccesing_pipeline.render_pass)
-                            .framebuffer(present_frame_buffers[i as usize])
-                            .render_area(vk::Rect2D {
-                                extent: vk::Extent2D {
-                                    width: window_size.width,
+    
+                            ctx.device.cmd_bind_pipeline(
+                                *cmd,
+                                vk::PipelineBindPoint::RAY_TRACING_KHR,
+                                pipeline.handle,
+                            );
+    
+                            let call_region = vk::StridedDeviceAddressRegionKHR::default();
+    
+                            ctx.ray_tracing.pipeline_fn.cmd_trace_rays(
+                                *cmd,
+                                &shader_binding_table.raygen_region,
+                                &shader_binding_table.miss_region,
+                                &shader_binding_table.hit_region,
+                                &call_region,
+                                window_size.width,
+                                window_size.height,
+                                1,
+                            );
+    
+                            // ctx.device.cmd_pipeline_barrier(
+                            //     *cmd,
+                            //     vk::PipelineStageFlags::RAY_TRACING_SHADER_KHR,
+                            //     vk::PipelineStageFlags::FRAGMENT_SHADER,
+                            //     vk::DependencyFlags::empty(),
+                            //     &[],
+                            //     &[],
+                            //     &[],
+                            // );
+    
+                            let begin_info = vk::RenderPassBeginInfo::default()
+                                .render_pass(post_proccesing_pipeline.render_pass)
+                                .framebuffer(present_frame_buffers[i as usize])
+                                .render_area(vk::Rect2D {
+                                    extent: vk::Extent2D {
+                                        width: window_size.width,
+                                        height: window_size.height,
+                                    },
+                                    offset: vk::Offset2D { x: 0, y: 0 },
+                                })
+                                .clear_values(&[vk::ClearValue {
+                                    color: vk::ClearColorValue {
+                                        float32: [0.0, 0.0, 0.0, 1.0],
+                                    },
+                                }]);
+    
+                            let view_port = vk::Viewport::default()
+                                .height(window_size.height as f32)
+                                .width(window_size.width as f32)
+                                .max_depth(1.0)
+                                .min_depth(0.0)
+                                .x(0 as f32)
+                                .y(0 as f32)
+                                ;
+                            ctx.device.cmd_set_viewport(*cmd, 0, &[view_port]);
+    
+                            let scissor = vk::Rect2D::default()
+                                .extent(vk::Extent2D {
                                     height: window_size.height,
-                                },
-                                offset: vk::Offset2D { x: 0, y: 0 },
-                            })
-                            .clear_values(&[vk::ClearValue {
-                                color: vk::ClearColorValue {
-                                    float32: [0.0, 0.0, 0.0, 1.0],
-                                },
-                            }]);
-
-                        let view_port = vk::Viewport::builder()
-                            .height(window_size.height as f32)
-                            .width(window_size.width as f32)
-                            .max_depth(1.0)
-                            .min_depth(0.0)
-                            .x(0 as f32)
-                            .y(0 as f32)
-                            .build();
-                        ctx.device.cmd_set_viewport(*cmd, 0, &[view_port]);
-
-                        let scissor = vk::Rect2D::builder()
-                            .extent(vk::Extent2D {
-                                height: window_size.height,
-                                width: window_size.width,
-                            })
-                            .offset(vk::Offset2D { x: 0, y: 0 })
-                            .build();
-                        ctx.device.cmd_set_scissor(*cmd, 0, &[scissor]);
-
-                        ctx.device.cmd_begin_render_pass(
-                            *cmd,
-                            &begin_info,
-                            vk::SubpassContents::INLINE,
-                        );
-
-                        ctx.device.cmd_bind_pipeline(
-                            *cmd,
-                            vk::PipelineBindPoint::GRAPHICS,
-                            post_proccesing_pipeline.pipeline,
-                        );
-
-                        ctx.device.cmd_bind_descriptor_sets(
-                            *cmd,
-                            vk::PipelineBindPoint::GRAPHICS,
-                            post_proccesing_pipeline.layout,
-                            0,
-                            &[post_proccesing_pipeline.descriptors[i as usize]],
-                            &[],
-                        );
-                        ctx.device.cmd_draw(*cmd, 6, 1, 0, 0);
-
-                        ctx.device.cmd_end_render_pass(*cmd);
-                    }
-                })
-                .unwrap();
-            }
-            Event::LoopDestroyed => {
+                                    width: window_size.width,
+                                })
+                                .offset(vk::Offset2D { x: 0, y: 0 })
+                                ;
+                            ctx.device.cmd_set_scissor(*cmd, 0, &[scissor]);
+    
+                            ctx.device.cmd_begin_render_pass(
+                                *cmd,
+                                &begin_info,
+                                vk::SubpassContents::INLINE,
+                            );
+    
+                            ctx.device.cmd_bind_pipeline(
+                                *cmd,
+                                vk::PipelineBindPoint::GRAPHICS,
+                                post_proccesing_pipeline.pipeline,
+                            );
+    
+                            ctx.device.cmd_bind_descriptor_sets(
+                                *cmd,
+                                vk::PipelineBindPoint::GRAPHICS,
+                                post_proccesing_pipeline.layout,
+                                0,
+                                &[post_proccesing_pipeline.descriptors[i as usize]],
+                                &[],
+                            );
+                            ctx.device.cmd_draw(*cmd, 6, 1, 0, 0);
+    
+                            ctx.device.cmd_end_render_pass(*cmd);
+                        }
+                    })
+                    .unwrap();
+                    window.request_redraw();
+                },
+                _ => (),
+            },
+            Event::LoopExiting => {
                 ctx.destroy();
             }
             _ => (),
         }
-    });
+    }).unwrap();
 }
 
 fn create_gbuffer<'a>(
-    ctx: &mut Context,
+    ctx: &mut Renderer,
     g_buffer_pipeline: &RasterPipeline,
     window_size: PhysicalSize<u32>,
 ) -> Result<GBuffer> {
@@ -706,7 +681,7 @@ fn create_gbuffer<'a>(
                 g_buffers[i].0,
                 depth_buffers[i].0,
             ];
-            let create_info = vk::FramebufferCreateInfo::builder()
+            let create_info = vk::FramebufferCreateInfo::default()
                 .attachment_count(2)
                 .attachments(&attachments)
                 .height(window_size.height)
@@ -732,10 +707,10 @@ struct PostProccesingPipeline {
 }
 
 fn create_post_proccesing_pipelien(
-    ctx: &mut Context,
+    ctx: &mut Renderer,
     storage_images: &Vec<(vk::ImageView, Image)>,
 ) -> Result<PostProccesingPipeline> {
-    let attachments = [vk::AttachmentDescription::builder()
+    let attachments = [vk::AttachmentDescription::default()
         .samples(vk::SampleCountFlags::TYPE_1)
         .final_layout(vk::ImageLayout::PRESENT_SRC_KHR)
         .initial_layout(vk::ImageLayout::UNDEFINED)
@@ -744,26 +719,27 @@ fn create_post_proccesing_pipelien(
         .store_op(vk::AttachmentStoreOp::STORE)
         .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
         .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
-        .build()];
+        ];
 
-    let subpasses = [vk::SubpassDescription::builder()
-        .color_attachments(&[vk::AttachmentReference::builder()
+    let binding = [vk::AttachmentReference::default()
             .attachment(0)
             .layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
-            .build()])
+            ];
+    let subpasses = [vk::SubpassDescription::default()
+        .color_attachments(&binding)
         .pipeline_bind_point(vk::PipelineBindPoint::GRAPHICS)
-        .build()];
+        ];
 
-    let dependencys = [vk::SubpassDependency::builder()
+    let dependencys = [vk::SubpassDependency::default()
         .src_subpass(vk::SUBPASS_EXTERNAL)
         .dst_subpass(0)
         .dst_stage_mask(vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT)
         .src_stage_mask(vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT)
         .src_access_mask(vk::AccessFlags::empty())
         .dst_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE)
-        .build()];
+        ];
 
-    let render_pass_create_info = vk::RenderPassCreateInfo::builder()
+    let render_pass_create_info = vk::RenderPassCreateInfo::default()
         .attachments(&attachments)
         .dependencies(&dependencys)
         .subpasses(&subpasses);
@@ -773,22 +749,23 @@ fn create_post_proccesing_pipelien(
             .create_render_pass(&render_pass_create_info, None)?
     };
 
-    let descriptor_bindings = [vk::DescriptorSetLayoutBinding::builder()
+    let descriptor_bindings = [vk::DescriptorSetLayoutBinding::default()
         .binding(0)
         .descriptor_count(1)
         .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
         .stage_flags(vk::ShaderStageFlags::FRAGMENT)
-        .build()];
+        ];
 
     let descriptor_layout = ctx.create_descriptor_set_layout(&descriptor_bindings, &[])?;
 
-    let layout_info = vk::PipelineLayoutCreateInfo::builder()
-        .set_layouts(&[descriptor_layout])
+    let binding = [descriptor_layout];
+    let layout_info = vk::PipelineLayoutCreateInfo::default()
+        .set_layouts(&binding)
         .push_constant_ranges(&[])
-        .build();
+        ;
     let layout = unsafe { ctx.device.create_pipeline_layout(&layout_info, None) }?;
 
-    let color_blend_attachments = [vk::PipelineColorBlendAttachmentState::builder()
+    let color_blend_attachments = [vk::PipelineColorBlendAttachmentState::default()
         .blend_enable(false)
         .color_write_mask(
             vk::ColorComponentFlags::R
@@ -796,26 +773,26 @@ fn create_post_proccesing_pipelien(
                 | vk::ColorComponentFlags::B
                 | vk::ColorComponentFlags::A,
         )
-        .build()];
+        ];
 
-    let color_blend_state = vk::PipelineColorBlendStateCreateInfo::builder()
+    let color_blend_state = vk::PipelineColorBlendStateCreateInfo::default()
         .attachments(&color_blend_attachments)
         .logic_op(vk::LogicOp::COPY)
         .logic_op_enable(false)
         .blend_constants([0.0, 0.0, 0.0, 0.0])
-        .build();
+        ;
 
-    let depth_stencil_state = vk::PipelineDepthStencilStateCreateInfo::builder()
+    let depth_stencil_state = vk::PipelineDepthStencilStateCreateInfo::default()
         .depth_bounds_test_enable(false)
         .stencil_test_enable(false)
         .depth_compare_op(vk::CompareOp::LESS)
         .depth_test_enable(false)
         .depth_write_enable(false);
 
-    let dynamic_state = vk::PipelineDynamicStateCreateInfo::builder()
+    let dynamic_state = vk::PipelineDynamicStateCreateInfo::default()
         .dynamic_states(&[vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR]);
 
-    let rasterization_state = vk::PipelineRasterizationStateCreateInfo::builder()
+    let rasterization_state = vk::PipelineRasterizationStateCreateInfo::default()
         .cull_mode(vk::CullModeFlags::BACK)
         .depth_clamp_enable(false)
         .polygon_mode(vk::PolygonMode::FILL)
@@ -824,37 +801,37 @@ fn create_post_proccesing_pipelien(
         .depth_bias_enable(false)
         .rasterizer_discard_enable(false);
 
-    let multisample_state = vk::PipelineMultisampleStateCreateInfo::builder()
+    let multisample_state = vk::PipelineMultisampleStateCreateInfo::default()
         .sample_shading_enable(false)
         .rasterization_samples(vk::SampleCountFlags::TYPE_1);
 
     let entry_point_name: CString = CString::new("main").unwrap();
     let stages = [
-        vk::PipelineShaderStageCreateInfo::builder()
+        vk::PipelineShaderStageCreateInfo::default()
             .module(ctx.create_shader_module("./src/shaders/post_processing.frag.spv".to_string()))
             .stage(vk::ShaderStageFlags::FRAGMENT)
             .name(&entry_point_name)
-            .build(),
-        vk::PipelineShaderStageCreateInfo::builder()
+            ,
+        vk::PipelineShaderStageCreateInfo::default()
             .module(ctx.create_shader_module("./src/shaders/post_processing.vert.spv".to_string()))
             .stage(vk::ShaderStageFlags::VERTEX)
             .name(&entry_point_name)
-            .build(),
+            ,
     ];
 
-    let viewport_state = vk::PipelineViewportStateCreateInfo::builder()
+    let viewport_state = vk::PipelineViewportStateCreateInfo::default()
         .scissor_count(1)
         .viewport_count(1);
 
-    let input_assembly_state = vk::PipelineInputAssemblyStateCreateInfo::builder()
+    let input_assembly_state = vk::PipelineInputAssemblyStateCreateInfo::default()
         .primitive_restart_enable(false)
         .topology(vk::PrimitiveTopology::TRIANGLE_LIST);
-    let vertex_input_state = vk::PipelineVertexInputStateCreateInfo::builder()
+    let vertex_input_state = vk::PipelineVertexInputStateCreateInfo::default()
         .vertex_attribute_descriptions(&[])
         .vertex_binding_descriptions(&[])
-        .build();
+        ;
 
-    let pipeline_create_info = vk::GraphicsPipelineCreateInfo::builder()
+    let pipeline_create_info = vk::GraphicsPipelineCreateInfo::default()
         .color_blend_state(&color_blend_state)
         .depth_stencil_state(&depth_stencil_state)
         .dynamic_state(&dynamic_state)
@@ -867,17 +844,17 @@ fn create_post_proccesing_pipelien(
         .stages(&stages)
         .viewport_state(&viewport_state)
         .subpass(0)
-        .build();
+        ;
     let pipeline = unsafe {
         ctx.device
             .create_graphics_pipelines(vk::PipelineCache::null(), &[pipeline_create_info], None)
             .unwrap()
     }[0];
 
-    let pool_sizes = [vk::DescriptorPoolSize::builder()
+    let pool_sizes = [vk::DescriptorPoolSize::default()
         .descriptor_count(ctx.swapchain.images.len() as u32)
         .ty(vk::DescriptorType::STORAGE_IMAGE)
-        .build()];
+        ];
 
     let descriptor_pool =
         ctx.create_descriptor_pool((ctx.swapchain.images.len() as u32) * 2, &pool_sizes)?;
@@ -908,7 +885,7 @@ fn create_post_proccesing_pipelien(
 }
 
 fn create_raytracing_descriptor_sets(
-    context: &mut Context,
+    context: &mut Renderer,
     pipeline: &RayTracingPipeline,
     top_as: &AccelerationStructure,
     ubo_buffer: &Buffer,
@@ -924,26 +901,26 @@ fn create_raytracing_descriptor_sets(
     let size = context.swapchain.images.len() as u32;
 
     let mut pool_sizes = vec![
-        vk::DescriptorPoolSize::builder()
+        vk::DescriptorPoolSize::default()
             .ty(vk::DescriptorType::ACCELERATION_STRUCTURE_KHR)
             .descriptor_count(1)
-            .build(),
-        vk::DescriptorPoolSize::builder()
+            ,
+        vk::DescriptorPoolSize::default()
             .ty(vk::DescriptorType::STORAGE_IMAGE)
             .descriptor_count(1 + (size * 2))
-            .build(),
-        vk::DescriptorPoolSize::builder()
+            ,
+        vk::DescriptorPoolSize::default()
             .ty(vk::DescriptorType::UNIFORM_BUFFER)
             .descriptor_count(1)
-            .build(),
-        vk::DescriptorPoolSize::builder()
+            ,
+        vk::DescriptorPoolSize::default()
             .ty(vk::DescriptorType::STORAGE_BUFFER)
             .descriptor_count(4)
-            .build(),
-        vk::DescriptorPoolSize::builder()
+            ,
+        vk::DescriptorPoolSize::default()
             .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
             .descriptor_count((model.images.len() as u32) + size)
-            .build(),
+            ,
     ];
 
     for w in wirtes.iter() {
@@ -952,33 +929,33 @@ fn create_raytracing_descriptor_sets(
                 layout: _,
                 sampler: _,
                 view: _,
-            } => vk::DescriptorPoolSize::builder()
+            } => vk::DescriptorPoolSize::default()
                 .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
                 .descriptor_count(1)
-                .build(),
+                ,
             WriteDescriptorSetKind::StorageBuffer { buffer: _ } => {
-                vk::DescriptorPoolSize::builder()
+                vk::DescriptorPoolSize::default()
                     .ty(vk::DescriptorType::STORAGE_BUFFER)
                     .descriptor_count(1)
-                    .build()
+                    
             }
             WriteDescriptorSetKind::AccelerationStructure {
                 acceleration_structure: _,
-            } => vk::DescriptorPoolSize::builder()
+            } => vk::DescriptorPoolSize::default()
                 .ty(vk::DescriptorType::ACCELERATION_STRUCTURE_KHR)
                 .descriptor_count(1)
-                .build(),
+                ,
             WriteDescriptorSetKind::StorageImage { view: _, layout: _ } => {
-                vk::DescriptorPoolSize::builder()
+                vk::DescriptorPoolSize::default()
                     .ty(vk::DescriptorType::STORAGE_IMAGE)
                     .descriptor_count(1)
-                    .build()
+                    
             }
             WriteDescriptorSetKind::UniformBuffer { buffer: _ } => {
-                vk::DescriptorPoolSize::builder()
+                vk::DescriptorPoolSize::default()
                     .ty(vk::DescriptorType::UNIFORM_BUFFER)
                     .descriptor_count(1)
-                    .build()
+                    
             }
         })
     }
@@ -1080,20 +1057,20 @@ fn create_raytracing_descriptor_sets(
     for (i, (image_index, sampler_index)) in model.textures.iter().enumerate() {
         let view = &model.views[*image_index];
         let sampler = &model.samplers[*sampler_index];
-        let img_info = vk::DescriptorImageInfo::builder()
+        let img_info = vk::DescriptorImageInfo::default()
             .image_view(*view)
             .sampler(*sampler)
             .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
 
         unsafe {
             context.device.update_descriptor_sets(
-                &[vk::WriteDescriptorSet::builder()
+                &[vk::WriteDescriptorSet::default()
                     .dst_array_element(i as u32)
                     .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
                     .dst_binding(7)
                     .dst_set(static_set.clone())
                     .image_info(from_ref(&img_info))
-                    .build()],
+                    ],
                 &[],
             )
         };
@@ -1103,25 +1080,28 @@ fn create_raytracing_descriptor_sets(
 }
 
 fn create_acceleration_structure(
-    ctx: &mut Context,
+    ctx: &mut Renderer,
     level: vk::AccelerationStructureTypeKHR,
     as_geometry: &[vk::AccelerationStructureGeometryKHR],
     as_ranges: &[vk::AccelerationStructureBuildRangeInfoKHR],
     max_primitive_counts: &[u32],
 ) -> Result<AccelerationStructure> {
-    let build_geo_info = vk::AccelerationStructureBuildGeometryInfoKHR::builder()
+    let build_geo_info = vk::AccelerationStructureBuildGeometryInfoKHR::default()
         .ty(level)
         .flags(vk::BuildAccelerationStructureFlagsKHR::PREFER_FAST_TRACE)
         .geometries(as_geometry);
 
     let build_size = unsafe {
+        let mut size_info = vk::AccelerationStructureBuildSizesInfoKHR::default();
         ctx.ray_tracing
             .acceleration_structure_fn
             .get_acceleration_structure_build_sizes(
                 vk::AccelerationStructureBuildTypeKHR::DEVICE,
                 &build_geo_info,
                 max_primitive_counts,
-            )
+                &mut size_info
+            );
+            size_info
     };
 
     let buffer = ctx.create_buffer(
@@ -1132,7 +1112,7 @@ fn create_acceleration_structure(
         Some("Acceleration Structure Buffer"),
     )?;
 
-    let create_info = vk::AccelerationStructureCreateInfoKHR::builder()
+    let create_info = vk::AccelerationStructureCreateInfoKHR::default()
         .buffer(buffer.inner)
         .size(build_size.acceleration_structure_size)
         .ty(level);
@@ -1155,7 +1135,7 @@ fn create_acceleration_structure(
 
     let scratch_buffer_address = scratch_buffer.get_device_address(&ctx.device);
 
-    let build_geo_info = vk::AccelerationStructureBuildGeometryInfoKHR::builder()
+    let build_geo_info = vk::AccelerationStructureBuildGeometryInfoKHR::default()
         .ty(level)
         .mode(vk::BuildAccelerationStructureModeKHR::BUILD)
         .flags(vk::BuildAccelerationStructureFlagsKHR::PREFER_FAST_TRACE)
@@ -1178,7 +1158,7 @@ fn create_acceleration_structure(
     })?;
 
     let address_info =
-        vk::AccelerationStructureDeviceAddressInfoKHR::builder().acceleration_structure(handle);
+        vk::AccelerationStructureDeviceAddressInfoKHR::default().acceleration_structure(handle);
     let address = unsafe {
         ctx.ray_tracing
             .acceleration_structure_fn
@@ -1213,100 +1193,100 @@ pub fn read_shader_from_bytes(bytes: &[u8]) -> Result<Vec<u32>> {
 fn module_from_bytes(device: &Device, source: &[u8]) -> Result<vk::ShaderModule> {
     let source = read_shader_from_bytes(source)?;
 
-    let create_info = vk::ShaderModuleCreateInfo::builder().code(&source);
+    let create_info = vk::ShaderModuleCreateInfo::default().code(&source);
     let res = unsafe { device.create_shader_module(&create_info, None) }?;
     Ok(res)
 }
 
 fn create_ray_tracing_pipeline(
-    ctx: &Context,
+    ctx: &Renderer,
     model: &Model,
     shaders_create_info: &[RayTracingShaderCreateInfo],
 ) -> Result<RayTracingPipeline> {
     let static_layout_bindings = [
-        vk::DescriptorSetLayoutBinding::builder()
+        vk::DescriptorSetLayoutBinding::default()
             .binding(0)
             .descriptor_type(vk::DescriptorType::ACCELERATION_STRUCTURE_KHR)
             .descriptor_count(1)
             .stage_flags(vk::ShaderStageFlags::RAYGEN_KHR | vk::ShaderStageFlags::CLOSEST_HIT_KHR)
-            .build(),
-        vk::DescriptorSetLayoutBinding::builder()
+            ,
+        vk::DescriptorSetLayoutBinding::default()
             .binding(1)
             .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
             .descriptor_count(1)
             .stage_flags(vk::ShaderStageFlags::RAYGEN_KHR | vk::ShaderStageFlags::CLOSEST_HIT_KHR)
-            .build(),
-        vk::DescriptorSetLayoutBinding::builder()
+            ,
+        vk::DescriptorSetLayoutBinding::default()
             .binding(2)
             .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
             .descriptor_count(1)
             .stage_flags(vk::ShaderStageFlags::RAYGEN_KHR | vk::ShaderStageFlags::CLOSEST_HIT_KHR)
-            .build(),
-        vk::DescriptorSetLayoutBinding::builder()
+            ,
+        vk::DescriptorSetLayoutBinding::default()
             .binding(3)
             .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
             .descriptor_count(1)
             .stage_flags(
                 vk::ShaderStageFlags::INTERSECTION_KHR | vk::ShaderStageFlags::CLOSEST_HIT_KHR,
             )
-            .build(),
-        vk::DescriptorSetLayoutBinding::builder()
+            ,
+        vk::DescriptorSetLayoutBinding::default()
             .binding(4)
             .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
             .descriptor_count(1)
             .stage_flags(vk::ShaderStageFlags::CLOSEST_HIT_KHR)
-            .build(),
-        vk::DescriptorSetLayoutBinding::builder()
+            ,
+        vk::DescriptorSetLayoutBinding::default()
             .binding(5)
             .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
             .descriptor_count(1)
             .stage_flags(vk::ShaderStageFlags::CLOSEST_HIT_KHR)
-            .build(),
-        vk::DescriptorSetLayoutBinding::builder()
+            ,
+        vk::DescriptorSetLayoutBinding::default()
             .binding(6)
             .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
             .descriptor_count(1)
             .stage_flags(vk::ShaderStageFlags::CLOSEST_HIT_KHR)
-            .build(),
-        vk::DescriptorSetLayoutBinding::builder()
+            ,
+        vk::DescriptorSetLayoutBinding::default()
             .binding(7)
             .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
             .descriptor_count(model.images.len() as _)
             .stage_flags(vk::ShaderStageFlags::CLOSEST_HIT_KHR)
-            .build(),
-        vk::DescriptorSetLayoutBinding::builder()
+            ,
+        vk::DescriptorSetLayoutBinding::default()
             .binding(8)
             .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
             .descriptor_count(1)
             .stage_flags(vk::ShaderStageFlags::MISS_KHR)
-            .build(),
-        vk::DescriptorSetLayoutBinding::builder()
+            ,
+        vk::DescriptorSetLayoutBinding::default()
             .binding(9)
             .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
             .descriptor_count(1)
             .stage_flags(vk::ShaderStageFlags::RAYGEN_KHR)
-            .build(),
+            ,
     ];
 
     let dynamic_layout_bindings = [
-        vk::DescriptorSetLayoutBinding::builder()
+        vk::DescriptorSetLayoutBinding::default()
             .binding(1)
             .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
             .descriptor_count(1)
             .stage_flags(vk::ShaderStageFlags::RAYGEN_KHR)
-            .build(),
-        vk::DescriptorSetLayoutBinding::builder()
+            ,
+        vk::DescriptorSetLayoutBinding::default()
             .binding(2)
             .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
             .descriptor_count(1)
             .stage_flags(vk::ShaderStageFlags::RAYGEN_KHR)
-            .build(),
-        vk::DescriptorSetLayoutBinding::builder()
+            ,
+        vk::DescriptorSetLayoutBinding::default()
             .binding(3)
             .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
             .descriptor_count(1)
             .stage_flags(vk::ShaderStageFlags::RAYGEN_KHR)
-            .build(),
+            ,
     ];
 
     let static_dsl = ctx.create_descriptor_set_layout(&static_layout_bindings, &[])?;
@@ -1315,13 +1295,13 @@ fn create_ray_tracing_pipeline(
 
     let dsls = [static_dsl, dynamic_dsl, old_image_dsl];
 
-    let push_constants = &[vk::PushConstantRange::builder()
+    let push_constants = &[vk::PushConstantRange::default()
         .offset(0)
         .size((size_of::<u32>() * 2) as u32)
         .stage_flags(vk::ShaderStageFlags::RAYGEN_KHR)
-        .build()];
+        ];
 
-    let pipe_layout_info = vk::PipelineLayoutCreateInfo::builder()
+    let pipe_layout_info = vk::PipelineLayoutCreateInfo::default()
         .set_layouts(&dsls)
         .push_constant_ranges(push_constants);
     let pipeline_layout = unsafe { ctx.device.create_pipeline_layout(&pipe_layout_info, None)? };
@@ -1343,11 +1323,11 @@ fn create_ray_tracing_pipeline(
 
         shader.source.into_iter().for_each(|s| {
             let module = module_from_bytes(&ctx.device, s.0).unwrap();
-            let stage = vk::PipelineShaderStageCreateInfo::builder()
+            let stage = vk::PipelineShaderStageCreateInfo::default()
                 .stage(s.1)
                 .module(module)
                 .name(&entry_point_name)
-                .build();
+                ;
             this_modules.push(module);
             this_stages.push(stage);
         });
@@ -1360,7 +1340,7 @@ fn create_ray_tracing_pipeline(
 
         let shader_index = stages.len();
 
-        let mut group = vk::RayTracingShaderGroupCreateInfoKHR::builder()
+        let mut group = vk::RayTracingShaderGroupCreateInfoKHR::default()
             .ty(vk::RayTracingShaderGroupTypeKHR::GENERAL)
             .general_shader(vk::SHADER_UNUSED_KHR)
             .closest_hit_shader(vk::SHADER_UNUSED_KHR)
@@ -1392,10 +1372,10 @@ fn create_ray_tracing_pipeline(
 
         modules.append(&mut this_modules);
         stages.append(&mut this_stages);
-        groups.push(group.build());
+        groups.push(group);
     }
 
-    let pipe_info = vk::RayTracingPipelineCreateInfoKHR::builder()
+    let pipe_info = vk::RayTracingPipelineCreateInfoKHR::default()
         .layout(pipeline_layout)
         .stages(&stages)
         .groups(&groups)
@@ -1407,7 +1387,7 @@ fn create_ray_tracing_pipeline(
             vk::PipelineCache::null(),
             std::slice::from_ref(&pipe_info),
             None,
-        )?[0]
+        ).unwrap()[0]
     };
 
     Ok(RayTracingPipeline {
@@ -1425,7 +1405,7 @@ struct ComputeBinding {
 }
 
 fn create_compute_pipeline(
-    ctx: &mut Context,
+    ctx: &mut Renderer,
     writes: Box<[Box<[Box<[WriteDescriptorSet]>]>]>,
     layout: Box<[Box<[ComputeBinding]>]>,
 
@@ -1437,12 +1417,12 @@ fn create_compute_pipeline(
         let mut bindings = Vec::with_capacity(writes.len());
         for (i, b) in set.iter().enumerate() {
             bindings.push(
-                vk::DescriptorSetLayoutBinding::builder()
+                vk::DescriptorSetLayoutBinding::default()
                     .descriptor_count(b.count)
                     .descriptor_type(b.ty)
                     .binding(i as u32)
                     .stage_flags(vk::ShaderStageFlags::COMPUTE)
-                    .build(),
+                    ,
             );
         }
         layouts.push(create_descriptor_set_layout(&ctx.device, bindings.as_slice(), &[]).unwrap());
@@ -1451,25 +1431,25 @@ fn create_compute_pipeline(
     let layout = unsafe {
         ctx.device
             .create_pipeline_layout(
-                &vk::PipelineLayoutCreateInfo::builder()
+                &vk::PipelineLayoutCreateInfo::default()
                     .set_layouts(layouts.as_slice())
                     .push_constant_ranges(push_constant_ranges)
-                    .build(),
+                    ,
                 None,
             )
             .unwrap()
     };
     let entry_point_name = CString::new("main").unwrap();
     let compute_module = module_from_bytes(&ctx.device, shader).unwrap();
-    let compute_stage = vk::PipelineShaderStageCreateInfo::builder()
+    let compute_stage = vk::PipelineShaderStageCreateInfo::default()
         .module(compute_module)
         .name(&entry_point_name)
         .stage(vk::ShaderStageFlags::COMPUTE)
-        .build();
-    let create_info = vk::ComputePipelineCreateInfo::builder()
+        ;
+    let create_info = vk::ComputePipelineCreateInfo::default()
         .stage(compute_stage)
         .layout(layout)
-        .build();
+        ;
     let handel = unsafe {
         ctx.device
             .create_compute_pipelines(vk::PipelineCache::null(), &[create_info], None)
@@ -1487,33 +1467,33 @@ fn create_compute_pipeline(
                         layout: _,
                         sampler: _,
                         view: _,
-                    } => vk::DescriptorPoolSize::builder()
+                    } => vk::DescriptorPoolSize::default()
                         .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
                         .descriptor_count(1)
-                        .build(),
+                        ,
                     WriteDescriptorSetKind::StorageBuffer { buffer: _ } => {
-                        vk::DescriptorPoolSize::builder()
+                        vk::DescriptorPoolSize::default()
                             .ty(vk::DescriptorType::STORAGE_BUFFER)
                             .descriptor_count(1)
-                            .build()
+                            
                     }
                     WriteDescriptorSetKind::AccelerationStructure {
                         acceleration_structure: _,
-                    } => vk::DescriptorPoolSize::builder()
+                    } => vk::DescriptorPoolSize::default()
                         .ty(vk::DescriptorType::ACCELERATION_STRUCTURE_KHR)
                         .descriptor_count(1)
-                        .build(),
+                        ,
                     WriteDescriptorSetKind::StorageImage { view: _, layout: _ } => {
-                        vk::DescriptorPoolSize::builder()
+                        vk::DescriptorPoolSize::default()
                             .ty(vk::DescriptorType::STORAGE_IMAGE)
                             .descriptor_count(1)
-                            .build()
+                            
                     }
                     WriteDescriptorSetKind::UniformBuffer { buffer: _ } => {
-                        vk::DescriptorPoolSize::builder()
+                        vk::DescriptorPoolSize::default()
                             .ty(vk::DescriptorType::UNIFORM_BUFFER)
                             .descriptor_count(1)
-                            .build()
+                            
                     }
                 })
             }
@@ -1545,12 +1525,12 @@ struct RasterPipeline {
 }
 
 fn create_raster_pipeline(
-    ctx: &mut Context,
+    ctx: &mut Renderer,
     model: &Model,
     uniform_buffer: &Buffer,
 ) -> Result<RasterPipeline> {
     let attachments = [
-        vk::AttachmentDescription::builder()
+        vk::AttachmentDescription::default()
             .samples(vk::SampleCountFlags::TYPE_1)
             .final_layout(vk::ImageLayout::GENERAL)
             .initial_layout(vk::ImageLayout::UNDEFINED)
@@ -1559,8 +1539,8 @@ fn create_raster_pipeline(
             .store_op(vk::AttachmentStoreOp::STORE)
             .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
             .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
-            .build(),
-        vk::AttachmentDescription::builder()
+            ,
+        vk::AttachmentDescription::default()
             .samples(vk::SampleCountFlags::TYPE_1)
             .final_layout(vk::ImageLayout::DEPTH_ATTACHMENT_STENCIL_READ_ONLY_OPTIMAL)
             .initial_layout(vk::ImageLayout::UNDEFINED)
@@ -1569,26 +1549,27 @@ fn create_raster_pipeline(
             .store_op(vk::AttachmentStoreOp::STORE)
             .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
             .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
-            .build(),
+            ,
     ];
+    let ca = [
+        vk::AttachmentReference::default()
+            .attachment(0)
+            .layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+            ,
+    ];
+    let ar = vk::AttachmentReference::default()
+    .attachment(1)
+    .layout(vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
 
-    let subpasses = [vk::SubpassDescription::builder()
-        .color_attachments(&[
-            vk::AttachmentReference::builder()
-                .attachment(0)
-                .layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
-                .build(),
-        ])
+    let subpasses = [vk::SubpassDescription::default()
+        .color_attachments(&ca)
         .depth_stencil_attachment(
-            &vk::AttachmentReference::builder()
-                .attachment(1)
-                .layout(vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL)
-                .build(),
+            &ar
         )
         .pipeline_bind_point(vk::PipelineBindPoint::GRAPHICS)
-        .build()];
+        ];
 
-    let dependencys = [vk::SubpassDependency::builder()
+    let dependencys = [vk::SubpassDependency::default()
         .src_subpass(vk::SUBPASS_EXTERNAL)
         .dst_subpass(0)
         .dst_stage_mask(
@@ -1604,9 +1585,9 @@ fn create_raster_pipeline(
             vk::AccessFlags::COLOR_ATTACHMENT_WRITE
                 | vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE,
         )
-        .build()];
+        ];
 
-    let render_pass_create_info = vk::RenderPassCreateInfo::builder()
+    let render_pass_create_info = vk::RenderPassCreateInfo::default()
         .attachments(&attachments)
         .dependencies(&dependencys)
         .subpasses(&subpasses);
@@ -1617,40 +1598,41 @@ fn create_raster_pipeline(
     };
 
     let descriptor_bindings = [
-        vk::DescriptorSetLayoutBinding::builder()
+        vk::DescriptorSetLayoutBinding::default()
             .binding(0)
             .descriptor_count(1)
             .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
             .stage_flags(vk::ShaderStageFlags::VERTEX)
-            .build(),
-        vk::DescriptorSetLayoutBinding::builder()
+            ,
+        vk::DescriptorSetLayoutBinding::default()
             .binding(1)
             .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
             .descriptor_count(model.textures.len() as u32)
             .stage_flags(vk::ShaderStageFlags::FRAGMENT)
-            .build(),
-        vk::DescriptorSetLayoutBinding::builder()
+            ,
+        vk::DescriptorSetLayoutBinding::default()
             .binding(2)
             .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
             .descriptor_count(1)
             .stage_flags(vk::ShaderStageFlags::FRAGMENT | vk::ShaderStageFlags::VERTEX)
-            .build(),
+            ,
     ];
 
     let descriptor_layout = ctx.create_descriptor_set_layout(&descriptor_bindings, &[])?;
-
-    let layout_info = vk::PipelineLayoutCreateInfo::builder()
-        .set_layouts(&[descriptor_layout])
-        .push_constant_ranges(&[vk::PushConstantRange::builder()
+    let descriptor_layouts = [descriptor_layout];
+    let binding = [vk::PushConstantRange::default()
             .offset(0)
             .size(size_of::<u32>() as u32)
             .stage_flags(vk::ShaderStageFlags::FRAGMENT | vk::ShaderStageFlags::VERTEX)
-            .build()])
-        .build();
+            ];
+    let layout_info = vk::PipelineLayoutCreateInfo::default()
+        .set_layouts(&descriptor_layouts)
+        .push_constant_ranges(&binding)
+        ;
     let layout = unsafe { ctx.device.create_pipeline_layout(&layout_info, None) }?;
 
     let color_blend_attachments = [
-        vk::PipelineColorBlendAttachmentState::builder()
+        vk::PipelineColorBlendAttachmentState::default()
             .blend_enable(false)
             .color_write_mask(
                 vk::ColorComponentFlags::R
@@ -1658,69 +1640,69 @@ fn create_raster_pipeline(
                     | vk::ColorComponentFlags::B
                     | vk::ColorComponentFlags::A,
             )
-            .build(),
+            ,
     ];
 
-    let color_blend_state = vk::PipelineColorBlendStateCreateInfo::builder()
+    let color_blend_state = vk::PipelineColorBlendStateCreateInfo::default()
         .attachments(&color_blend_attachments)
         .logic_op(vk::LogicOp::COPY)
         .logic_op_enable(false)
         .blend_constants([0.0, 0.0, 0.0, 0.0])
-        .build();
+        ;
 
-    let depth_stencil_state = vk::PipelineDepthStencilStateCreateInfo::builder()
+    let depth_stencil_state = vk::PipelineDepthStencilStateCreateInfo::default()
         .depth_bounds_test_enable(false)
         .stencil_test_enable(false)
         .depth_compare_op(vk::CompareOp::LESS)
         .depth_test_enable(true)
         .depth_write_enable(true);
 
-    let dynamic_state = vk::PipelineDynamicStateCreateInfo::builder()
+    let dynamic_state = vk::PipelineDynamicStateCreateInfo::default()
         .dynamic_states(&[vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR]);
 
-    let input_assembly_state: vk::PipelineInputAssemblyStateCreateInfoBuilder<'_> =
-        vk::PipelineInputAssemblyStateCreateInfo::builder()
+    let input_assembly_state =
+        vk::PipelineInputAssemblyStateCreateInfo::default()
             .primitive_restart_enable(false)
             .topology(vk::PrimitiveTopology::TRIANGLE_LIST);
 
     let vertex_attribute_descriptions = [
-        vk::VertexInputAttributeDescription::builder()
+        vk::VertexInputAttributeDescription::default()
             .binding(0)
             .format(vk::Format::R32G32B32A32_SFLOAT)
             .location(0)
             .offset(offset_of!(Vertex, position) as u32)
-            .build(),
-        vk::VertexInputAttributeDescription::builder()
+            ,
+        vk::VertexInputAttributeDescription::default()
             .binding(0)
             .format(vk::Format::R32G32B32A32_SFLOAT)
             .location(1)
             .offset(offset_of!(Vertex, normal) as u32)
-            .build(),
-        vk::VertexInputAttributeDescription::builder()
+            ,
+        vk::VertexInputAttributeDescription::default()
             .binding(0)
             .format(vk::Format::R32G32B32A32_SFLOAT)
             .location(2)
             .offset(offset_of!(Vertex, color) as u32)
-            .build(),
-        vk::VertexInputAttributeDescription::builder()
+            ,
+        vk::VertexInputAttributeDescription::default()
             .binding(0)
             .format(vk::Format::R32G32_SFLOAT)
             .location(3)
             .offset(offset_of!(Vertex, uvs) as u32)
-            .build(),
+            ,
     ];
 
-    let vertex_binding_descriptions = [vk::VertexInputBindingDescription::builder()
+    let vertex_binding_descriptions = [vk::VertexInputBindingDescription::default()
         .binding(0)
         .input_rate(vk::VertexInputRate::VERTEX)
         .stride(size_of::<Vertex>() as u32)
-        .build()];
+        ];
 
-    let vertex_input_state = vk::PipelineVertexInputStateCreateInfo::builder()
+    let vertex_input_state = vk::PipelineVertexInputStateCreateInfo::default()
         .vertex_attribute_descriptions(&vertex_attribute_descriptions)
         .vertex_binding_descriptions(&vertex_binding_descriptions);
 
-    let rasterization_state = vk::PipelineRasterizationStateCreateInfo::builder()
+    let rasterization_state = vk::PipelineRasterizationStateCreateInfo::default()
         .cull_mode(vk::CullModeFlags::BACK)
         .depth_clamp_enable(false)
         .polygon_mode(vk::PolygonMode::FILL)
@@ -1729,29 +1711,29 @@ fn create_raster_pipeline(
         .depth_bias_enable(false)
         .rasterizer_discard_enable(false);
 
-    let multisample_state = vk::PipelineMultisampleStateCreateInfo::builder()
+    let multisample_state = vk::PipelineMultisampleStateCreateInfo::default()
         .sample_shading_enable(false)
         .rasterization_samples(vk::SampleCountFlags::TYPE_1);
 
     let entry_point_name: CString = CString::new("main").unwrap();
     let stages = [
-        vk::PipelineShaderStageCreateInfo::builder()
+        vk::PipelineShaderStageCreateInfo::default()
             .module(ctx.create_shader_module("./src/shaders/default.frag.spv".to_string()))
             .stage(vk::ShaderStageFlags::FRAGMENT)
             .name(&entry_point_name)
-            .build(),
-        vk::PipelineShaderStageCreateInfo::builder()
+            ,
+        vk::PipelineShaderStageCreateInfo::default()
             .module(ctx.create_shader_module("./src/shaders/default.vert.spv".to_string()))
             .stage(vk::ShaderStageFlags::VERTEX)
             .name(&entry_point_name)
-            .build(),
+            ,
     ];
 
-    let viewport_state = vk::PipelineViewportStateCreateInfo::builder()
+    let viewport_state = vk::PipelineViewportStateCreateInfo::default()
         .scissor_count(1)
         .viewport_count(1);
 
-    let pipeline_create_info = vk::GraphicsPipelineCreateInfo::builder()
+    let pipeline_create_info = vk::GraphicsPipelineCreateInfo::default()
         .color_blend_state(&color_blend_state)
         .depth_stencil_state(&depth_stencil_state)
         .dynamic_state(&dynamic_state)
@@ -1764,7 +1746,7 @@ fn create_raster_pipeline(
         .stages(&stages)
         .viewport_state(&viewport_state)
         .subpass(0)
-        .build();
+        ;
     let pipeline = unsafe {
         ctx.device
             .create_graphics_pipelines(vk::PipelineCache::null(), &[pipeline_create_info], None)
@@ -1772,18 +1754,18 @@ fn create_raster_pipeline(
     }[0];
 
     let pool_sizes = [
-        vk::DescriptorPoolSize::builder()
+        vk::DescriptorPoolSize::default()
             .descriptor_count(1)
             .ty(vk::DescriptorType::UNIFORM_BUFFER)
-            .build(),
-        vk::DescriptorPoolSize::builder()
+            ,
+        vk::DescriptorPoolSize::default()
             .descriptor_count(model.textures.len() as u32)
             .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-            .build(),
-        vk::DescriptorPoolSize::builder()
+            ,
+        vk::DescriptorPoolSize::default()
             .descriptor_count(1)
             .ty(vk::DescriptorType::STORAGE_BUFFER)
-            .build(),
+            ,
     ];
 
     let descriptor_pool = ctx.create_descriptor_pool(1, &pool_sizes)?;
@@ -1808,17 +1790,17 @@ fn create_raster_pipeline(
     for (i, (image_index, sampler_index)) in model.textures.iter().enumerate() {
         let view = &model.views[*image_index];
         let sampler = &model.samplers[*sampler_index];
-        let img_info = vk::DescriptorImageInfo::builder()
+        let img_info = vk::DescriptorImageInfo::default()
             .image_view(*view)
             .sampler(*sampler)
             .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
-        let write = vk::WriteDescriptorSet::builder()
+        let write = vk::WriteDescriptorSet::default()
             .dst_array_element(i as u32)
             .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
             .dst_binding(1)
             .dst_set(descriptor.clone())
             .image_info(from_ref(&img_info))
-            .build();
+            ;
 
         unsafe { ctx.device.update_descriptor_sets(&[write], &[]) };
     }
