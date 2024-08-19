@@ -21,12 +21,11 @@ struct GeometryInfo {
 struct Payload {
 	bool missed;
 	float metallicFactor;
-  float roughness;
+  	float roughness;
 	vec4 color;
-  vec3 emission;
+  	vec3 emission;
 	vec3 hitPoint;
 	vec3 hitNormal;
-	float depth;
 };
 
 const float tmin = 0.1;

@@ -167,7 +167,7 @@ impl Model {
     //     })
     // }
 
-    fn map_gltf_sampler<'a>(sampler: &gltf::Sampler) -> vk::SamplerCreateInfo{
+    fn map_gltf_sampler<'a>(sampler: &gltf::Sampler) -> vk::SamplerCreateInfo {
         let mag_filter = match sampler.mag_filter {
             gltf::MagFilter::Linear => vk::Filter::LINEAR,
             gltf::MagFilter::Nearest => vk::Filter::NEAREST,
@@ -394,8 +394,7 @@ impl Model {
             })
             .transform_data(vk::DeviceOrHostAddressConstKHR {
                 device_address: transform_buffer_addr,
-            })
-            ;
+            });
 
         let mut geometry_infos = vec![];
         let mut as_geometries = vec![];
@@ -436,8 +435,7 @@ impl Model {
                     .flags(vk::GeometryFlagsKHR::OPAQUE)
                     .geometry(vk::AccelerationStructureGeometryDataKHR {
                         triangles: as_geo_triangles_data,
-                    })
-                    ,
+                    }),
             );
 
             as_ranges.push(
@@ -445,8 +443,7 @@ impl Model {
                     .first_vertex(mesh.vertex_offset)
                     .primitive_count(primitive_count)
                     .primitive_offset(mesh.index_offset * size_of::<u32>() as u32)
-                    .transform_offset((node_index * size_of::<vk::TransformMatrixKHR>()) as u32)
-                    ,
+                    .transform_offset((node_index * size_of::<vk::TransformMatrixKHR>()) as u32),
             );
 
             max_primitive_counts.push(primitive_count)

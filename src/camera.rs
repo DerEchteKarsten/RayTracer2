@@ -1,10 +1,13 @@
 use std::time::Duration;
 
 use glam::{vec3, Mat3, Mat4, Quat, Vec3};
-use winit::{event::{DeviceEvent, ElementState, Event, MouseButton, WindowEvent}, keyboard::{KeyCode, PhysicalKey}};
+use winit::{
+    event::{DeviceEvent, ElementState, Event, MouseButton, WindowEvent},
+    keyboard::{KeyCode, PhysicalKey},
+};
 
 const MOVE_SPEED: f32 = 20.0;
-const ANGLE_PER_POINT: f32 = 0.005;
+const ANGLE_PER_POINT: f32 = 2.0;
 
 const UP: Vec3 = vec3(0.0, 1.0, 0.0);
 
@@ -55,8 +58,12 @@ impl Camera {
 
         // Update direction
         let new_direction = if controls.look_around {
-            let side_rot = Quat::from_axis_angle(side, -controls.cursor_delta[1] * ANGLE_PER_POINT);
-            let y_rot = Quat::from_rotation_y(-controls.cursor_delta[0] * ANGLE_PER_POINT);
+            let side_rot = Quat::from_axis_angle(
+                side,
+                -controls.cursor_delta[1] * ANGLE_PER_POINT * delta_time,
+            );
+            let y_rot =
+                Quat::from_rotation_y(-controls.cursor_delta[0] * ANGLE_PER_POINT * delta_time);
             let rot = Mat3::from_quat(side_rot * y_rot);
 
             (rot * self.direction).normalize()
@@ -187,57 +194,57 @@ impl Controls {
 
     pub fn handle_event(self, event: &Event<()>, window: &winit::window::Window) -> Self {
         let mut new_state = self;
-            match event {
-                Event::DeviceEvent { event: DeviceEvent::MouseMotion { delta: (x, y) }, .. } => {
-                    let x = *x as f32;
-                    let y = *y as f32;
-                    new_state.cursor_delta = [x, y];
-                },
-                Event::WindowEvent {event, ..} => {
-                    match event {
-                        WindowEvent::KeyboardInput {
-                            event,
-                            ..
-                        } => {
-                            if event.physical_key == PhysicalKey::Code(KeyCode::KeyW) {
-                                new_state.go_forward = event.state == ElementState::Pressed;
-                            }
-                            if event.physical_key == PhysicalKey::Code(KeyCode::KeyS){
-                                new_state.go_backward = event.state == ElementState::Pressed;
-                            }
-                            if event.physical_key == PhysicalKey::Code(KeyCode::KeyD) {
-                                new_state.strafe_right = event.state == ElementState::Pressed;
-                            }
-                            if event.physical_key == PhysicalKey::Code(KeyCode::KeyA) {
-                                new_state.strafe_left = event.state == ElementState::Pressed;
-                            }
-                            if event.physical_key == PhysicalKey::Code(KeyCode::Space) {
-                                new_state.go_up = event.state == ElementState::Pressed;
-                            }
-                            if event.physical_key == PhysicalKey::Code(KeyCode::ShiftLeft) {
-                                new_state.go_down = event.state == ElementState::Pressed;
-                            }
-                        }
-                        WindowEvent::MouseInput { state, button, .. } => {
-                            if *button == MouseButton::Right && *state == ElementState::Pressed {
-                                new_state.look_around = true;
-                                window
-                                    .set_cursor_grab(winit::window::CursorGrabMode::Locked)
-                                    .unwrap_or(());
-                            } else if *button == MouseButton::Right && *state == ElementState::Released
-                            {
-                                new_state.look_around = false;
-                                window
-                                    .set_cursor_grab(winit::window::CursorGrabMode::None)
-                                    .unwrap_or(());
-                            }
-                        }
-                        _ => {}
-                    };
-                },
-                _ => ()
+        match event {
+            Event::DeviceEvent {
+                event: DeviceEvent::MouseMotion { delta: (x, y) },
+                ..
+            } => {
+                let x = *x as f32;
+                let y = *y as f32;
+                new_state.cursor_delta = [x, y];
             }
-            
+            Event::WindowEvent { event, .. } => {
+                match event {
+                    WindowEvent::KeyboardInput { event, .. } => {
+                        if event.physical_key == PhysicalKey::Code(KeyCode::KeyW) {
+                            new_state.go_forward = event.state == ElementState::Pressed;
+                        }
+                        if event.physical_key == PhysicalKey::Code(KeyCode::KeyS) {
+                            new_state.go_backward = event.state == ElementState::Pressed;
+                        }
+                        if event.physical_key == PhysicalKey::Code(KeyCode::KeyD) {
+                            new_state.strafe_right = event.state == ElementState::Pressed;
+                        }
+                        if event.physical_key == PhysicalKey::Code(KeyCode::KeyA) {
+                            new_state.strafe_left = event.state == ElementState::Pressed;
+                        }
+                        if event.physical_key == PhysicalKey::Code(KeyCode::Space) {
+                            new_state.go_up = event.state == ElementState::Pressed;
+                        }
+                        if event.physical_key == PhysicalKey::Code(KeyCode::ShiftLeft) {
+                            new_state.go_down = event.state == ElementState::Pressed;
+                        }
+                    }
+                    WindowEvent::MouseInput { state, button, .. } => {
+                        if *button == MouseButton::Right && *state == ElementState::Pressed {
+                            new_state.look_around = true;
+                            window
+                                .set_cursor_grab(winit::window::CursorGrabMode::Locked)
+                                .unwrap_or(());
+                        } else if *button == MouseButton::Right && *state == ElementState::Released
+                        {
+                            new_state.look_around = false;
+                            window
+                                .set_cursor_grab(winit::window::CursorGrabMode::None)
+                                .unwrap_or(());
+                        }
+                    }
+                    _ => {}
+                };
+            }
+            _ => (),
+        }
+
         new_state
     }
 }

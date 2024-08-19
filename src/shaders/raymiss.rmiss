@@ -40,5 +40,4 @@ void main()
 	vec4 tex =  texture(skyBox, vec2(u,v));
 	p.color = tex;
     p.missed = true;
-	p.depth = 10000;
 }

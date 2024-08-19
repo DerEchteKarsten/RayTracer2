@@ -60,5 +60,4 @@ void main()
   p.hitNormal = normal;
   p.emission = geometryInfo.emission.xyz;
   p.color = color;
-  p.depth = gl_HitTEXT;
 }

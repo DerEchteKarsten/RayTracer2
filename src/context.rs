@@ -12,21 +12,23 @@ use gpu_allocator::{
 };
 use image::{DynamicImage, GenericImageView};
 use log::debug;
-use raw_window_handle::{HasRawDisplayHandle, HasRawWindowHandle, RawDisplayHandle, RawWindowHandle};
+use raw_window_handle::{
+    HasRawDisplayHandle, HasRawWindowHandle, RawDisplayHandle, RawWindowHandle,
+};
 use std::{
     borrow::BorrowMut,
     ffi::{c_char, CStr, CString},
     mem::{align_of, size_of, size_of_val},
-    os::raw::c_void, time::Instant,
+    os::raw::c_void,
+    time::Instant,
 };
 // use raw_window_handle::{RawDisplayHandle, RawWindowHandle};
 use simple_logger::SimpleLogger;
 use std::slice::from_ref;
 
-pub const FRAMES_IN_FLIGHT: u32 = 3;
+pub const FRAMES_IN_FLIGHT: u32 = 1;
 
-
-pub struct RayTracingContext<'a>{
+pub struct RayTracingContext<'a> {
     pub pipeline_properties: vk::PhysicalDeviceRayTracingPipelinePropertiesKHR<'a>,
     pub pipeline_fn: ray_tracing_pipeline::Device,
     pub acceleration_structure_properties: vk::PhysicalDeviceAccelerationStructurePropertiesKHR<'a>,
@@ -35,19 +37,21 @@ pub struct RayTracingContext<'a>{
 
 impl<'a> RayTracingContext<'a> {
     pub(crate) fn new(instance: &Instance, pdevice: &vk::PhysicalDevice, device: &Device) -> Self {
-        let (pipeline_properties, acceleration_structure_properties) =
-            unsafe {   
-                    let mut rt_pipeline_properties = vk::PhysicalDeviceRayTracingPipelinePropertiesKHR::default();
-                    let mut acc_properties = vk::PhysicalDeviceAccelerationStructurePropertiesKHR::default();
-                    let mut physical_device_properties2 = vk::PhysicalDeviceProperties2::default()
-                        .push_next(&mut rt_pipeline_properties)
-                        .push_next(&mut acc_properties);
-                    instance.get_physical_device_properties2(*pdevice, &mut physical_device_properties2);
-                    (rt_pipeline_properties, acc_properties)
-            };
+        let (pipeline_properties, acceleration_structure_properties) = unsafe {
+            let mut rt_pipeline_properties =
+                vk::PhysicalDeviceRayTracingPipelinePropertiesKHR::default();
+            let mut acc_properties =
+                vk::PhysicalDeviceAccelerationStructurePropertiesKHR::default();
+            let mut physical_device_properties2 = vk::PhysicalDeviceProperties2::default()
+                .push_next(&mut rt_pipeline_properties)
+                .push_next(&mut acc_properties);
+            instance.get_physical_device_properties2(*pdevice, &mut physical_device_properties2);
+            (rt_pipeline_properties, acc_properties)
+        };
         let pipeline_fn = khr::ray_tracing_pipeline::Device::new(&instance, &device);
 
-        let acceleration_structure_fn = khr::acceleration_structure::Device::new(&instance, &device);
+        let acceleration_structure_fn =
+            khr::acceleration_structure::Device::new(&instance, &device);
 
         Self {
             pipeline_properties,
@@ -57,7 +61,6 @@ impl<'a> RayTracingContext<'a> {
         }
     }
 }
-
 
 #[derive()]
 pub struct Renderer<'a> {
@@ -118,9 +121,10 @@ impl<'a> Renderer<'a> {
             .map(|raw_name| raw_name.as_ptr())
             .collect();
 
-        let mut instance_extensions = ash_window::enumerate_required_extensions(display_handle.raw_display_handle().unwrap())
-            .unwrap()
-            .to_vec();
+        let mut instance_extensions =
+            ash_window::enumerate_required_extensions(display_handle.raw_display_handle().unwrap())
+                .unwrap()
+                .to_vec();
 
         //#[cfg(debug_assertions)]
         instance_extensions.push(debug_utils::NAME.as_ptr());
@@ -165,7 +169,13 @@ impl<'a> Renderer<'a> {
             };
         }
         let vk_surface = unsafe {
-            ash_window::create_surface(&entry, &instance, display_handle.raw_display_handle().unwrap(), window_handle.raw_window_handle().unwrap(), None)
+            ash_window::create_surface(
+                &entry,
+                &instance,
+                display_handle.raw_display_handle().unwrap(),
+                window_handle.raw_window_handle().unwrap(),
+                None,
+            )
         }
         .unwrap();
         let ash_surface = khr::surface::Instance::new(&entry, &instance);
@@ -712,7 +722,6 @@ impl<'a> Renderer<'a> {
         buffer.get_device_address(&self.device)
     }
 
-
     pub fn create_shader_binding_table(
         &mut self,
         pipeline: &RayTracingPipeline,
@@ -732,6 +741,7 @@ pub struct RayTracingShaderGroupInfo {
 pub struct RayTracingPipeline {
     pub descriptor_set_layout: vk::DescriptorSetLayout,
     pub dynamic_layout: vk::DescriptorSetLayout,
+    pub dynamic_layout2: vk::DescriptorSetLayout,
     pub layout: vk::PipelineLayout,
     pub handle: vk::Pipeline,
     pub shader_group_info: RayTracingShaderGroupInfo,
@@ -837,20 +847,17 @@ impl ShaderBindingTable {
         let raygen_region = vk::StridedDeviceAddressRegionKHR::default()
             .device_address(address)
             .size(raygen_region_size as _)
-            .stride(raygen_region_size as _)
-            ;
+            .stride(raygen_region_size as _);
 
         let miss_region = vk::StridedDeviceAddressRegionKHR::default()
             .device_address(address + raygen_region.size)
             .size(miss_region_size as _)
-            .stride(aligned_handle_size as _)
-            ;
+            .stride(aligned_handle_size as _);
 
         let hit_region = vk::StridedDeviceAddressRegionKHR::default()
             .device_address(address + raygen_region.size + miss_region.size)
             .size(hit_region_size as _)
-            .stride(aligned_handle_size as _)
-            ;
+            .stride(aligned_handle_size as _);
 
         Ok(Self {
             _buffer: buffer,
@@ -1370,12 +1377,12 @@ impl PhysicalDevice {
         let mut acceleration_struct_feature =
             vk::PhysicalDeviceAccelerationStructureFeaturesKHR::default();
         let mut atomics = vk::PhysicalDeviceShaderAtomicFloatFeaturesEXT::default()
-            .shader_buffer_float32_atomics(true)
+            .shader_buffer_vec32_atomics(true)
             .shader_buffer_float64_atomic_add(true)
-            .shader_buffer_float32_atomic_add(true);
+            .shader_buffer_vec32_atomic_add(true);
         let mut atomics2 = vk::PhysicalDeviceShaderAtomicFloatFeaturesEXT::default()
-            .shader_buffer_float32_atomics(true)
-            .shader_buffer_float32_atomic_add(true);
+            .shader_buffer_vec32_atomics(true)
+            .shader_buffer_vec32_atomic_add(true);
         let features = vk::PhysicalDeviceFeatures::default().shader_int64(true);
         let mut features12 = vk::PhysicalDeviceVulkan12Features::default()
             .runtime_descriptor_array(true)
@@ -1398,7 +1405,7 @@ impl PhysicalDevice {
             buffer_device_address: features12.buffer_device_address == vk::TRUE,
             dynamic_rendering: features13.dynamic_rendering == vk::TRUE,
             synchronization2: features13.synchronization2 == vk::TRUE,
-            attomics: atomics.shader_buffer_float32_atomics == vk::TRUE,
+            attomics: atomics.shader_buffer_vec32_atomics == vk::TRUE,
         };
         Ok(Self {
             handel: physical_device,
@@ -1819,7 +1826,7 @@ fn new_device(
         .features(features)
         .push_next(&mut vulkan_12_features)
         .push_next(&mut vulkan_13_features);
-        // .push_next(&mut atomics);
+    // .push_next(&mut atomics);
 
     let device_extensions_as_ptr = required_extensions
         .into_iter()

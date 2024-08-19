@@ -1,37 +1,26 @@
-#extension GL_GOOGLE_include_directive : enable
-
-#include "./common.glsl"
-
 struct Sample {
-    vec3 origin;
-    vec3 originNormal;
-    vec3 samplePoint;
-    vec3 samplePointNormal;
+    vec3 p_pos, p_normal;
+    vec3 s_pos, s_normal;
     vec3 radiance;
-    vec3 albedo;
-    vec3 randomDirection;
-    float depth;
-    bool missed;    
 };
 
 struct Reservoir {
-    Sample s;
-    float weightOfReservoir;
-    uint numCandidateSamples;
-    float weightOfSample;
+    Sample z;
+    float weight_sum;
+    int num_sampels;
+    float weight;
 };
 
-void update_reservoir(inout Reservoir self, Sample new_sample, float new_weight, inout uint state) {
-    self.weightOfReservoir += new_weight;
-    self.numCandidateSamples += 1;
-
-    if (RandomValue(state) < (new_weight / self.weightOfReservoir)) {
-        self.s = new_sample;
-    } 
+void update(inout Reservoir res, Sample s_new, float weight, inout uint rngState) {
+    res.weight_sum += weight;
+    res.num_sampels += 1;
+    if(RandomValue(rngState) < weight / res.weight_sum) {
+        res.z = s_new;
+    }
 }
 
-void merge_reservoir(inout Reservoir self, Reservoir other, float target_pdf, inout uint state) {
-    uint s = self.numCandidateSamples;
-    update_reservoir(self, other.s, target_pdf * other.weightOfSample * other.numCandidateSamples, state);
-    self.numCandidateSamples = s + other.numCandidateSamples;
+void merge(inout Reservoir self, Reservoir other, float p_hat, inout uint rngState) {
+    int M0 = self.num_sampels;
+    update(self, other.z, p_hat * other.weight * other.num_sampels, rngState);
+    self.num_sampels = M0 + other.num_sampels;
 }
