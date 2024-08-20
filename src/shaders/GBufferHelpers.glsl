@@ -64,3 +64,16 @@ vec3 viewDepthToWorldPos(
     viewPos.xyz *= viewDepth;
     return (viewPos * view.matViewToWorld).xyz;
 }
+
+vec3 convertMotionVectorToPixelSpace(
+    PlanarViewConstants view,
+    PlanarViewConstants viewPrev,
+    ivec2 pixelPosition,
+    vec3 motionVector)
+{
+    vec2 curerntPixelCenter = vec2(pixelPosition.xy) + 0.5;
+    vec2 previousPosition = curerntPixelCenter + motionVector.xy;
+    previousPosition *= viewPrev.viewportSize * view.viewportSizeInv;
+    motionVector.xy = previousPosition - curerntPixelCenter;
+    return motionVector;
+}

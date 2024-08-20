@@ -12,7 +12,6 @@ layout(location = 0) rayPayloadInEXT Payload p;
 
 hitAttributeEXT vec2 attribs;
 
-layout(binding = 0, set = 0) uniform accelerationStructureEXT topLevelAS;
 layout(binding = 4, set = 0) readonly buffer Vertices { Vertex v[]; } vertices;
 layout(binding = 5, set = 0) readonly buffer Indices { uint i[]; } indices;
 layout(binding = 6, set = 0) readonly buffer GeometryInfos { GeometryInfo g[]; } geometryInfos;

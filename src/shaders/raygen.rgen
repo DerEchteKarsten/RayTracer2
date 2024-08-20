@@ -23,13 +23,12 @@ layout( push_constant ) uniform Frame {
 	uint moved;
 } f;
 
-layout(binding = 2, set = 1, rgba32f) uniform writeonly image2D image;
-layout(binding = 2, set = 1, r32f) uniform writeonly image2D u_GBufferDepth;
-layout(binding = 3, set = 1, r32ui) uniform writeonly uimage2D u_GBufferNormals;
-layout(binding = 4, set = 1, r32ui) uniform writeonly uimage2D u_GBufferGeoNormals;
-layout(binding = 5, set = 1, r32ui) uniform writeonly uimage2D u_GBufferDiffuseAlbedo;
-layout(binding = 6, set = 1, r32ui) uniform writeonly uimage2D u_GBufferSpecularRough;
-layout(binding = 7, set = 1, rgba32f) uniform writeonly image2D u_MotionVectors;
+layout(binding = 0, set = 1, r32f) uniform writeonly image2D u_GBufferDepth;
+layout(binding = 1, set = 1, r32ui) uniform writeonly uimage2D u_GBufferNormals;
+layout(binding = 2, set = 1, r32ui) uniform writeonly uimage2D u_GBufferGeoNormals;
+layout(binding = 3, set = 1, r32ui) uniform writeonly uimage2D u_GBufferDiffuseAlbedo;
+layout(binding = 4, set = 1, r32ui) uniform writeonly uimage2D u_GBufferSpecularRough;
+layout(binding = 5, set = 1, rgba32f) uniform writeonly image2D u_MotionVectors;
 
 vec2 octWrap(vec2 v)
 {
@@ -117,5 +116,5 @@ void main()
         reservoir = RTXDI_EmptyGIReservoir();
     }
 
-    RTXDI_StoreGIReservoir(reservoir, g_Const.restirGIReservoirBufferParams, pixelCord, 0);
+    RTXDI_StoreGIReservoir(reservoir, g_Const.restirGI.reservoirBufferParams, pixelCord, 0);
 }

@@ -6,32 +6,30 @@
 #include "GBufferHelpers.glsl"
 #include "Helpers.glsl"
 #include "packing.glsl"
-
-layout(binding = 0, set = 0) uniform accelerationStructureEXT SceneBVH;
-layout(binding = 6, set = 0) readonly buffer GeometryInfos { GeometryInfo g[]; } geometryInfos;
-layout(binding = 2, set = 2, rgba32f) uniform readonly image2D last_image;
-layout(binding = 2, set = 2, r32f) uniform readonly image2D t_PrevGBufferDepth;
-layout(binding = 3, set = 2, r32ui) uniform readonly uimage2D t_PrevGBufferNormals;
-layout(binding = 4, set = 2, r32ui) uniform readonly uimage2D t_PrevGBufferGeoNormals;
-layout(binding = 5, set = 2, r32ui) uniform readonly uimage2D t_PrevGBufferDiffuseAlbedo;
-layout(binding = 6, set = 2, r32ui) uniform readonly uimage2D t_PrevGBufferSpecularRough;
-
 #include "rtxdi/ReSTIRGIParameters.h"
 
-layout(binding = 0, set = 3) buffer TemporalReservoirBuffer {RTXDI_PackedGIReservoir reservoirs[];};
-layout(binding = 0, set = 4) buffer NewTemporalReservoirBuffer {RTXDI_PackedGIReservoir new_reservoirs[];};
+
+layout(binding = 0, set = 0) uniform accelerationStructureEXT SceneBVH;
+layout(binding = 1, set = 0) uniform Uniform {ResamplingConstants g_Const;};
+layout(binding = 2, set = 0) buffer NeighborsBuffer {vec2 neighbors[];};
+layout(binding = 3, set = 0) buffer TemporalReservoirBuffer {RTXDI_PackedGIReservoir reservoirs[];};
+
+layout(binding = 1, set = 2, r32f) uniform readonly image2D t_PrevGBufferDepth;
+layout(binding = 2, set = 2, r32ui) uniform readonly uimage2D t_PrevGBufferNormals;
+layout(binding = 3, set = 2, r32ui) uniform readonly uimage2D t_PrevGBufferGeoNormals;
+layout(binding = 4, set = 2, r32ui) uniform readonly uimage2D t_PrevGBufferDiffuseAlbedo;
+layout(binding = 5, set = 2, r32ui) uniform readonly uimage2D t_PrevGBufferSpecularRough;
+
 
 #define RTXDI_GI_RESERVOIR_BUFFER reservoirs
 #include "rtxdi/GIReservoir.hlsli"
 
-layout(binding = 9, set = 0) buffer LightReservoirs {RTXDI_PackedDIReservoir light_reservoirs[];};
-layout(binding = 10, set = 0) buffer LightBuffer {RAB_LightInfo t_LightDataBuffer[];};
-layout(binding = 11, set = 0) buffer NeighborsBuffer {vec2 neighbors[];};
+RTXDI_PackedDIReservoir light_reservoirs[1];
+RAB_LightInfo t_LightDataBuffer[1];
 
 #define RTXDI_NEIGHBOR_OFFSETS_BUFFER neighbors
 #define RTXDI_LIGHT_RESERVOIR_BUFFER light_reservoirs
 
-layout(binding = 2, set = 0) uniform Uniform {ResamplingConstants g_Const;};
 
 const float kMinRoughness = 0.05f;
 

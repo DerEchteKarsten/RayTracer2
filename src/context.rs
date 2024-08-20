@@ -1377,12 +1377,12 @@ impl PhysicalDevice {
         let mut acceleration_struct_feature =
             vk::PhysicalDeviceAccelerationStructureFeaturesKHR::default();
         let mut atomics = vk::PhysicalDeviceShaderAtomicFloatFeaturesEXT::default()
-            .shader_buffer_vec32_atomics(true)
+            .shader_buffer_float32_atomics(true)
             .shader_buffer_float64_atomic_add(true)
-            .shader_buffer_vec32_atomic_add(true);
+            .shader_buffer_float32_atomic_add(true);
         let mut atomics2 = vk::PhysicalDeviceShaderAtomicFloatFeaturesEXT::default()
-            .shader_buffer_vec32_atomics(true)
-            .shader_buffer_vec32_atomic_add(true);
+            .shader_buffer_float32_atomics(true)
+            .shader_buffer_float32_atomic_add(true);
         let features = vk::PhysicalDeviceFeatures::default().shader_int64(true);
         let mut features12 = vk::PhysicalDeviceVulkan12Features::default()
             .runtime_descriptor_array(true)
@@ -1405,7 +1405,7 @@ impl PhysicalDevice {
             buffer_device_address: features12.buffer_device_address == vk::TRUE,
             dynamic_rendering: features13.dynamic_rendering == vk::TRUE,
             synchronization2: features13.synchronization2 == vk::TRUE,
-            attomics: atomics.shader_buffer_vec32_atomics == vk::TRUE,
+            attomics: atomics.shader_buffer_float32_atomics == vk::TRUE,
         };
         Ok(Self {
             handel: physical_device,

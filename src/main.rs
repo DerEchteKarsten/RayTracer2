@@ -266,14 +266,6 @@ fn main() {
                     &include_bytes!("./shaders/rayhit.rchit.spv")[..],
                     vk::ShaderStageFlags::CLOSEST_HIT_KHR,
                 ),
-                // (
-                //     &include_bytes!("./shaders/anyhit.rahit.spv")[..],
-                //     vk::ShaderStageFlags::ANY_HIT_KHR,
-                // ),
-                // (
-                //     &include_bytes!("./shaders/rayint.rint.spv")[..],
-                //     vk::ShaderStageFlags::INTERSECTION_KHR,
-                // ),
             ],
             group: RayTracingShaderGroup::Hit,
         },
@@ -435,7 +427,7 @@ fn main() {
                                     })
                                     .clear_values(&[vk::ClearValue {
                                         color: vk::ClearColorValue {
-                                            vec32: [0.0, 0.0, 0.0, 1.0],
+                                            float32: [0.0, 0.0, 0.0, 1.0],
                                         },
                                     }]);
 
