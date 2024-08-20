@@ -10,64 +10,49 @@ PrimarySurfaceOutput TracePrimaryRay(int2 pixelPosition)
 {
     RayDesc ray = setupPrimaryRay(pixelPosition, g_Const.view);
     
-    uint instanceMask = INSTANCE_MASK_OPAQUE;
-    uint rayFlags = RAY_FLAG_CULL_NON_OPAQUE;
-    
-    RayQuery<RAY_FLAG_CULL_NON_OPAQUE | RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES> rayQuery;
-
-    rayQuery.TraceRayInline(SceneBVH, rayFlags, instanceMask, ray);
-
-    rayQuery.Proceed();
-
+    trace(ray);
 
     PrimarySurfaceOutput result;
     result.surface = RAB_EmptySurface();
-    result.motionVector = 0;
-    result.emissiveColor = 0;
+    result.motionVector = vec3(0);
+    result.emissiveColor = vec3(0);
 
-    if (rayQuery.CommittedStatus() == COMMITTED_TRIANGLE_HIT)
-    {
-        GeometrySample gs = getGeometryFromHit(
-            rayQuery.CommittedInstanceID(),
-            rayQuery.CommittedGeometryIndex(),
-            rayQuery.CommittedPrimitiveIndex(),
-            rayQuery.CommittedTriangleBarycentrics(), 
-            GeomAttr_All, t_InstanceData, t_GeometryData, t_MaterialConstants);
-        
-        RayDesc ray_0 = setupPrimaryRay(pixelPosition, g_Const.view);
-        RayDesc ray_x = setupPrimaryRay(pixelPosition + uvec2(1, 0), g_Const.view);
-        RayDesc ray_y = setupPrimaryRay(pixelPosition + uvec2(0, 1), g_Const.view);
-        vec3 worldSpacePositions[3];
-        worldSpacePositions[0] = mul(gs.instance.transform, vec4(gs.vertexPositions[0], 1.0)).xyz;
-        worldSpacePositions[1] = mul(gs.instance.transform, vec4(gs.vertexPositions[1], 1.0)).xyz;
-        worldSpacePositions[2] = mul(gs.instance.transform, vec4(gs.vertexPositions[2], 1.0)).xyz;
-        vec3 bary_0 = computeRayIntersectionBarycentrics(worldSpacePositions, ray_0.Origin, ray_0.Direction);
-        vec3 bary_x = computeRayIntersectionBarycentrics(worldSpacePositions, ray_x.Origin, ray_x.Direction);
-        vec3 bary_y = computeRayIntersectionBarycentrics(worldSpacePositions, ray_y.Origin, ray_y.Direction);
-        vec2 texcoord_0 = interpolate(gs.vertexTexcoords, bary_0);
-        vec2 texcoord_x = interpolate(gs.vertexTexcoords, bary_x);
-        vec2 texcoord_y = interpolate(gs.vertexTexcoords, bary_y);
-        vec2 texGrad_x = texcoord_x - texcoord_0;
-        vec2 texGrad_y = texcoord_y - texcoord_0;
-
-        MaterialSample ms = sampleGeometryMaterial(gs, texGrad_x, texGrad_y, -1, MatAttr_All, 
-            s_MaterialSampler, 1.0);
-
-        ms.shadingNormal = getBentNormal(gs.flatNormal, ms.shadingNormal, ray.Direction);
-
+    if (!p.missed)
+    { 
         result.motionVector = getMotionVector(g_Const.view, g_Const.prevView, 
-            gs.instance, gs.objectSpacePosition, gs.prevObjectSpacePosition, result.surface.viewDepth);
+            p.hitPoint, p.hitPoint, result.surface.viewDepth);
         
-        result.surface.worldPos = mul(gs.instance.transform, vec4(gs.objectSpacePosition, 1.0)).xyz;
-        result.surface.normal = ms.shadingNormal;
-        result.surface.geoNormal = gs.flatNormal;
-        result.surface.diffuseAlbedo = ms.diffuseAlbedo;
-        result.surface.specularF0 = ms.specularF0;
-        result.surface.roughness = ms.roughness;
+        result.surface.worldPos = p.hitPoint;
+        result.surface.normal = p.hitNormal;
+        result.surface.geoNormal = p.hitNormal;
+        result.surface.diffuseAlbedo = p.color.rgb;
+        result.surface.specularF0 = vec3(p.metallicFactor);
+        result.surface.roughness = p.roughness;
         result.surface.viewDir = -ray.Direction;
         result.surface.diffuseProbability = getSurfaceDiffuseProbability(result.surface);
-        result.emissiveColor = ms.emissiveColor;
+        result.emissiveColor = p.emission;
     }
 
     return result;
+}
+
+RAB_Surface TraceRayToSurface(RayDesc ray)
+{    
+    trace(ray);
+
+    RAB_Surface surface;
+
+    if (!p.missed)
+    {  
+        surface.worldPos = p.hitPoint;
+        surface.normal = p.hitNormal;
+        surface.geoNormal = p.hitNormal;
+        surface.diffuseAlbedo = p.color.rgb;
+        surface.specularF0 = vec3(p.metallicFactor);
+        surface.roughness = p.roughness;
+        surface.viewDir = -ray.Direction;
+        surface.diffuseProbability = getSurfaceDiffuseProbability(surface);
+    }
+
+    return surface;
 }

@@ -14,7 +14,7 @@ layout(location = 0) rayPayloadEXT Payload p;
 #define RTXDI_ENABLE_PRESAMPLING 0
 #define RTXDI_GLSL
 #include "RtxdiApplicationBridge.glsl"
-
+#include "PrimaryRays.glsl"
 #include "rtxdi/InitialSamplingFunctions.hlsli"
 #include "rtxdi/GIResamplingFunctions.hlsli"
 
@@ -24,185 +24,98 @@ layout( push_constant ) uniform Frame {
 } f;
 
 layout(binding = 2, set = 1, rgba32f) uniform writeonly image2D image;
+layout(binding = 2, set = 1, r32f) uniform writeonly image2D u_GBufferDepth;
+layout(binding = 3, set = 1, r32ui) uniform writeonly uimage2D u_GBufferNormals;
+layout(binding = 4, set = 1, r32ui) uniform writeonly uimage2D u_GBufferGeoNormals;
+layout(binding = 5, set = 1, r32ui) uniform writeonly uimage2D u_GBufferDiffuseAlbedo;
+layout(binding = 6, set = 1, r32ui) uniform writeonly uimage2D u_GBufferSpecularRough;
+layout(binding = 7, set = 1, rgba32f) uniform writeonly image2D u_MotionVectors;
 
-const int MaxAlphaSurfaces = 1;
-
-vec3 trace(vec3 o, vec3 d) {
-	vec3 rayColor = vec3(1.0);
-
-	for (int t = 0; t<=MaxAlphaSurfaces; t++ ) {
-		traceRayEXT(SceneBVH, gl_RayFlagsOpaqueEXT, 0xff, 0, 0, 0, o, tmin, d, tmax, 0);
-		rayColor *= p.color.rgb;
-		if (p.color.a < 1.0) {
-			o = p.hitPoint;
-		}else {
-			break;
-		}
-	}
-	return rayColor;
-}
-
-
-const int MaxBounces = 2; 
-const int MaxSamples = 1;
-Sample Trace2(in vec3 origin, in vec3 direction, inout uint state) {
-	vec3 incomingLight = vec3(0.0);
-	vec3 rayColor = vec3(1.0);
-	Sample s = Sample(vec3(0.0), vec3(0.0), vec3(0.0), vec3(0.0), vec3(0.0));
-
-	rayColor *= trace(origin, direction);
-	if (!p.missed) {
-		s.p_pos = p.hitPoint;
-		s.p_normal = p.hitNormal;
-
-		incomingLight = p.emission * 12 * rayColor;
-
-		origin = p.hitPoint;
-		direction = normalize(p.hitNormal + RandomDirection(state));
-
-		rayColor *= trace(origin, direction);
-		if (!p.missed) {
-			s.s_pos = p.hitPoint;
-			s.s_normal = p.hitNormal;
-
-			incomingLight += p.emission * 12 * rayColor;
-
-			origin = p.hitPoint;
-			direction = normalize(p.hitNormal + RandomDirection(state));
-
-			rayColor *= trace(origin, direction);
-			if(!p.missed) {
-				incomingLight += p.emission * 12 * rayColor;
-			}else {
-				incomingLight += p.color.rgb * rayColor;
-			}
-		} else {
-			s.s_pos = origin + direction * tmax;
-			s.s_normal = -direction;
-
-			incomingLight += p.color.rgb * rayColor;
-		}
-	}else {
-		s.p_pos = origin + direction * tmax;
-		s.p_normal = -direction;
-
-		s.s_pos = origin + direction * tmax;
-		s.s_normal = -direction;
-
-		incomingLight = p.color.rgb; //skybox
-	}
-	
-	s.radiance = incomingLight;
-	return s;
-}
-
-const int SPACIAL_SAMPELS = 8;
-
-void CalculatePartialJacobian(const vec3 recieverPos, const vec3 samplePos, const vec3 sampleNormal,
-    out float distanceToSurface, out float cosineEmissionAngle)
+vec2 octWrap(vec2 v)
 {
-    vec3 vec = recieverPos - samplePos;
-
-    distanceToSurface = length(vec);
-    cosineEmissionAngle = clamp(dot(sampleNormal, vec / distanceToSurface), 0, 1);
+    return (1.f - abs(v.yx)) * ((v.x >= 0.f || v.y >= 0.f) ? 1.f : -1.f);
 }
 
-float CalculateJacobian(vec3 recieverPos, vec3 neighborReceiverPos, const Reservoir neighborReservoir)
+vec2 ndirToOctSigned(vec3 n)
 {
-    // Calculate Jacobian determinant to adjust weight.
-    // See Equation (11) in the ReSTIR GI paper.
-    float originalDistance, originalCosine;
-    float newDistance, newCosine;
-    CalculatePartialJacobian(recieverPos, neighborReservoir.z.s_pos, neighborReservoir.z.s_normal, newDistance, newCosine);
-    CalculatePartialJacobian(neighborReceiverPos, neighborReservoir.z.s_pos, neighborReservoir.z.s_normal, originalDistance, originalCosine);
-
-    float jacobian = (newCosine * originalDistance * originalDistance)
-        / (originalCosine * newDistance * newDistance);
-
-    if (isinf(jacobian) || isnan(jacobian))
-        jacobian = 0;
-
-    return jacobian;
+    // Project the sphere onto the octahedron (|x|+|y|+|z| = 1) and then onto the xy-plane
+    vec2 p = n.xy * (1.f / (abs(n.x) + abs(n.y) + abs(n.z)));
+    return (n.z < 0.f) ? octWrap(p) : p;
 }
 
-ivec2 CalculateTemporalResamplingOffset(int sampleIdx, int radius)
+uint ndirToOctUnorm32(vec3 n)
 {
-    sampleIdx &= 7;
-
-    int mask2 = sampleIdx >> 1 & 0x01;       // 0, 0, 1, 1, 0, 0, 1, 1
-    int mask4 = 1 - (sampleIdx >> 2 & 0x01); // 1, 1, 1, 1, 0, 0, 0, 0
-    int tmp0 = -1 + 2 * (sampleIdx & 0x01);  // -1, 1,....
-    int tmp1 = 1 - 2 * mask2;                // 1, 1,-1,-1, 1, 1,-1,-1
-    int tmp2 = mask4 | mask2;                // 1, 1, 1, 1, 0, 0, 1, 1
-    int tmp3 = mask4 | (1 - mask2);          // 1, 1, 1, 1, 1, 1, 0, 0
-
-    return ivec2(tmp0, tmp0 * tmp1) * ivec2(tmp2, tmp3) * radius;
+    vec2 p = ndirToOctSigned(n);
+    p = saturate(p.xy * 0.5 + 0.5);
+    return uint(p.x * 0xfffe) | (uint(p.y * 0xfffe) << 16);
 }
-
-uint to_index(ivec2 val) {
-	return val.y * ivec2(gl_LaunchSizeEXT.xy).x + val.x;
-}
-
 
 void main() 
 {	
 	ivec2 size = ivec2(gl_LaunchSizeEXT.xy);
 	ivec2 pixelCord = ivec2(gl_LaunchIDEXT.xy);
 
-	const vec2 pixelCenter = vec2(pixelCord.xy) + vec2(0.5);
-	const vec2 inUV = pixelCenter/vec2(size);
-	vec2 d = inUV * 2.0 - 1.0;
-	vec2 dir = inUV * 2.0 - 1.0;
-	vec4 origin = cam.viewInverse * vec4(0,0,0,1);
-	vec4 target = cam.projInverse * vec4(dir.x, dir.y, 1, 1) ;
-	vec4 direction = cam.viewInverse*vec4(normalize(target.xyz), 0) ;
+    const RTXDI_LightBufferParameters lightBufferParams = g_Const.lightBufferParams;
 
-	uint rngState = uint((pixelCord.y * size.x) + pixelCord.x) + uint(f.frame) * 23145;
-	uint q = to_index(pixelCord);
+    PrimarySurfaceOutput primary = TracePrimaryRay(pixelCord);
 
-	Sample s = Trace2(origin.xyz, direction.xyz, rngState);
-	Reservoir r;
-	if(f.frame == 0) {
-		r = Reservoir(s, 0.0, 1, 0.0);
-		reservoirs[q] = r;
-		old_reservoirs[q] = r;
-	}else {
-		r = old_reservoirs[q];
-		if(r.z.p_pos != s.p_pos) { // todo reprojection
-			r = Reservoir(s, 0.0, 1, 0.0);
-		}else {
-			float weight = length(s.radiance)/(1/(2*PI));
-			update(r, s, weight, rngState);
-			r.weight = r.weight_sum / (r.num_sampels * length(s.radiance));
-		}
-		uint SampleNumAccum = 0;
-		for(int i = 0; i < SPACIAL_SAMPELS; ++i) {
-			uint neigbur_pixel = to_index(pixelCord + CalculateTemporalResamplingOffset(i, 3));
-			//todo gbuffer
-			Reservoir neighbur_reservoir = old_reservoirs[neigbur_pixel];
-			if(s.p_normal != neighbur_reservoir.z.p_normal) {
-				continue;
-			}
+    imageStore(u_GBufferDepth, pixelCord, vec4(primary.surface.viewDepth)); 
+    imageStore(u_GBufferNormals, pixelCord, uvec4(ndirToOctUnorm32(primary.surface.normal))); 
+    imageStore(u_GBufferGeoNormals, pixelCord, uvec4(ndirToOctUnorm32(primary.surface.geoNormal))); 
+    imageStore(u_GBufferDiffuseAlbedo, pixelCord, uvec4(Pack_R11G11B10_UFLOAT(primary.surface.diffuseAlbedo))); 
+    imageStore(u_GBufferSpecularRough, pixelCord, uvec4(Pack_R8G8B8A8_Gamma_UFLOAT(vec4(primary.surface.specularF0, primary.surface.roughness)))); 
+    imageStore(u_MotionVectors, pixelCord, vec4(primary.motionVector, 0.0));
 
-			float target_pdf = length(neighbur_reservoir.z.radiance);
-			float jacobian = CalculateJacobian(s.s_pos, neighbur_reservoir.z.s_pos, r);
+    RTXDI_GIReservoir reservoir;
 
-			if (jacobian > 10.0 || jacobian < 1 / 10.0) {
-				continue;
-			}
+    if (RAB_IsSurfaceValid(primary.surface))
+    {
+        RAB_RandomSamplerState rng = RAB_InitRandomSampler(pixelCord, 1);
+        
+        RayDesc ray;
+        ray.TMin = tmin;
+        ray.TMax = tmax;
+        ray.Origin = primary.surface.worldPos;
+        vec3 dir; 
+        RAB_GetSurfaceBrdfSample(primary.surface, rng, dir);
+        ray.Direction = dir;
 
-			jacobian = clamp(jacobian, 1 / 3.0, 3.0);
+        RAB_Surface secondarySurface = TraceRayToSurface(ray);
 
-			merge(r, neighbur_reservoir, target_pdf / jacobian, rngState);
-				
-			SampleNumAccum += r.num_sampels;
-			//todo bias correction
-		}
-		if(SampleNumAccum != 0) {
-			r.weight = r.weight_sum/(SampleNumAccum*length(r.z.radiance));
-		}
-		reservoirs[q] = r;
-	}
+        float overall_PDF = RAB_GetSurfaceBrdfPdf(primary.surface, dir);
 
-	imageStore(image, pixelCord, vec4(r.z.radiance, 1.0));
+        if(RAB_IsSurfaceValid(secondarySurface)) {
+            reservoir = RTXDI_MakeGIReservoir(secondarySurface.worldPos,
+                    secondarySurface.geoNormal, vec3(0.0), overall_PDF);
+            
+            RayDesc ray;
+            ray.TMin = tmin;
+            ray.TMax = tmax;
+            ray.Origin = secondarySurface.worldPos;
+            vec3 dir; 
+            RAB_GetSurfaceBrdfSample(secondarySurface, rng, dir);
+            ray.Direction = dir;
+            trace(ray);
+            
+            if(!p.missed) {
+                reservoir.radiance = vec3(0.0);
+            }else {
+                SplitBrdf brdf = EvaluateBrdf(secondarySurface, ray.Origin + ray.Direction * BACKGROUND_DEPTH);
+
+                vec3 diffuse = brdf.demodulatedDiffuse * p.color.rgb; // used for skybox radiance
+                vec3 specular = brdf.specular * p.color.rgb; // used for skybox radiance
+
+                reservoir.radiance = diffuse + specular;
+            }
+        }else {
+            reservoir = RTXDI_MakeGIReservoir(ray.Origin + ray.Direction * BACKGROUND_DEPTH,
+                -ray.Direction, p.color.rgb, overall_PDF);
+        }
+    }
+    else
+    {
+        reservoir = RTXDI_EmptyGIReservoir();
+    }
+
+    RTXDI_StoreGIReservoir(reservoir, g_Const.restirGIReservoirBufferParams, pixelCord, 0);
 }

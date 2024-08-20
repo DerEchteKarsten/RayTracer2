@@ -42,6 +42,15 @@ vec3 Unpack_R11G11B10_UFLOAT(uint rgb)
     return vec3(r, g, b);
 }
 
+uint Pack_R11G11B10_UFLOAT(vec3 rgb)
+{
+    vec3 d = vec3(0.5f, 0.5f, 0.5f);
+    uint r = Pack_R11_UFLOAT(rgb.r, d.r);
+    uint g = Pack_R11_UFLOAT(rgb.g, d.g) << 11;
+    uint b = Pack_R10_UFLOAT(rgb.b, d.b) << 22;
+    return r | g | b;
+}
+
 
 uint Pack_R8G8B8A8_Gamma_UFLOAT(vec4 rgba)
 {
@@ -66,4 +75,14 @@ vec4 Unpack_R8G8B8A8_Gamma_UFLOAT(uint rgba)
     vec4 v = vec4(r, g, b, a);
     v = pow(saturate(v), vec4(gamma));
     return v;
+}
+
+uint Pack_R8G8B8A8_Gamma_UFLOAT(vec4 rgba, float gamma, vec4 d)
+{
+    rgba = pow(saturate(rgba), vec4(1.0 / gamma));
+    uint r = Pack_R8_UFLOAT(rgba.r, d.r);
+    uint g = Pack_R8_UFLOAT(rgba.g, d.g) << 8;
+    uint b = Pack_R8_UFLOAT(rgba.b, d.b) << 16;
+    uint a = Pack_R8_UFLOAT(rgba.a, d.a) << 24;
+    return r | g | b | a;
 }

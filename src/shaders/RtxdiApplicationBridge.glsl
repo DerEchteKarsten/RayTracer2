@@ -10,7 +10,7 @@
 layout(binding = 0, set = 0) uniform accelerationStructureEXT SceneBVH;
 layout(binding = 6, set = 0) readonly buffer GeometryInfos { GeometryInfo g[]; } geometryInfos;
 layout(binding = 2, set = 2, rgba32f) uniform readonly image2D last_image;
-layout(binding = 2, set = 2, r32f) uniform readonly image2D last_depth;
+layout(binding = 2, set = 2, r32f) uniform readonly image2D t_PrevGBufferDepth;
 layout(binding = 3, set = 2, r32ui) uniform readonly uimage2D t_PrevGBufferNormals;
 layout(binding = 4, set = 2, r32ui) uniform readonly uimage2D t_PrevGBufferGeoNormals;
 layout(binding = 5, set = 2, r32ui) uniform readonly uimage2D t_PrevGBufferDiffuseAlbedo;
@@ -19,7 +19,7 @@ layout(binding = 6, set = 2, r32ui) uniform readonly uimage2D t_PrevGBufferSpecu
 #include "rtxdi/ReSTIRGIParameters.h"
 
 layout(binding = 0, set = 3) buffer TemporalReservoirBuffer {RTXDI_PackedGIReservoir reservoirs[];};
-layout(binding = 0, set = 4) buffer OldTemporalReservoirBuffer {RTXDI_PackedGIReservoir old_reservoirs[];};
+layout(binding = 0, set = 4) buffer NewTemporalReservoirBuffer {RTXDI_PackedGIReservoir new_reservoirs[];};
 
 #define RTXDI_GI_RESERVOIR_BUFFER reservoirs
 #include "rtxdi/GIReservoir.hlsli"
@@ -228,7 +228,7 @@ RAB_Surface RAB_GetGBufferSurface(ivec2 pixelPosition, bool previousFrame)
     if (pixelPosition.x >= view.viewportSize.x || pixelPosition.y >= view.viewportSize.y)
         return surface;
 
-    surface.viewDepth = imageLoad(last_depth, pixelPosition).r;
+    surface.viewDepth = imageLoad(t_PrevGBufferDepth, pixelPosition).r;
 
     if(surface.viewDepth == BACKGROUND_DEPTH)
         return surface;
