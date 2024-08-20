@@ -6,7 +6,6 @@ use std::{
 
 use crate::{
     context::*,
-    create_acceleration_structure,
     gltf::{self, Vertex},
 };
 use anyhow::Result;
@@ -453,8 +452,7 @@ impl Model {
             geometry_infos.as_slice(),
             Some("Geometry Buffer"),
         )?;
-        let blas = create_acceleration_structure(
-            ctx,
+        let blas = ctx.create_acceleration_structure(
             vk::AccelerationStructureTypeKHR::BOTTOM_LEVEL,
             &as_geometries,
             &as_ranges,

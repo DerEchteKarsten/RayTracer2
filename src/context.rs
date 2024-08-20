@@ -274,6 +274,21 @@ impl<'a> Renderer<'a> {
         })
     }
 
+
+    pub fn read_shader_from_bytes(bytes: &[u8]) -> Result<Vec<u32>> {
+        let mut cursor = std::io::Cursor::new(bytes);
+        Ok(ash::util::read_spv(&mut cursor)?)
+    }
+
+    pub fn module_from_bytes(&self, source: &[u8]) -> Result<vk::ShaderModule> {
+        let source = read_shader_from_bytes(source)?;
+
+        let create_info = vk::ShaderModuleCreateInfo::default().code(&source);
+        let res = unsafe { self.device.create_shader_module(&create_info, None) }?;
+        Ok(res)
+    }
+
+
     pub fn transition_image_layout_to_general(
         device: &Device,
         command_pool: &vk::CommandPool,
@@ -724,11 +739,106 @@ impl<'a> Renderer<'a> {
 
     pub fn create_shader_binding_table(
         &mut self,
-        pipeline: &RayTracingPipeline,
+        pipeline: &vk::Pipeline,
+        shader_group_infos: &RayTracingShaderGroupInfo,
     ) -> Result<ShaderBindingTable> {
-        ShaderBindingTable::new(self, pipeline)
+        ShaderBindingTable::new(self, pipeline, shader_group_infos)
+    }
+    
+    pub fn create_acceleration_structure(
+        &mut self,
+        level: vk::AccelerationStructureTypeKHR,
+        as_geometry: &[vk::AccelerationStructureGeometryKHR],
+        as_ranges: &[vk::AccelerationStructureBuildRangeInfoKHR],
+        max_primitive_counts: &[u32],
+    ) -> Result<AccelerationStructure> {
+        let build_geo_info = vk::AccelerationStructureBuildGeometryInfoKHR::default()
+            .ty(level)
+            .flags(vk::BuildAccelerationStructureFlagsKHR::PREFER_FAST_TRACE)
+            .geometries(as_geometry);
+    
+        let build_size = unsafe {
+            let mut size_info = vk::AccelerationStructureBuildSizesInfoKHR::default();
+            self.ray_tracing
+                .acceleration_structure_fn
+                .get_acceleration_structure_build_sizes(
+                    vk::AccelerationStructureBuildTypeKHR::DEVICE,
+                    &build_geo_info,
+                    max_primitive_counts,
+                    &mut size_info,
+                );
+            size_info
+        };
+    
+        let buffer = self.create_buffer(
+            vk::BufferUsageFlags::ACCELERATION_STRUCTURE_STORAGE_KHR
+                | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
+            MemoryLocation::GpuOnly,
+            build_size.acceleration_structure_size,
+            Some("Acceleration Structure Buffer"),
+        )?;
+    
+        let create_info = vk::AccelerationStructureCreateInfoKHR::default()
+            .buffer(buffer.inner)
+            .size(build_size.acceleration_structure_size)
+            .ty(level);
+        let handle = unsafe {
+            self.ray_tracing
+                .acceleration_structure_fn
+                .create_acceleration_structure(&create_info, None)?
+        };
+    
+        let scratch_buffer = self.create_aligned_buffer(
+            vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
+            MemoryLocation::GpuOnly,
+            build_size.build_scratch_size,
+            Some("Acceleration Structure Scratch Buffer"),
+            self.ray_tracing
+                .acceleration_structure_properties
+                .min_acceleration_structure_scratch_offset_alignment
+                .into(),
+        )?;
+    
+        let scratch_buffer_address = scratch_buffer.get_device_address(&self.device);
+    
+        let build_geo_info = vk::AccelerationStructureBuildGeometryInfoKHR::default()
+            .ty(level)
+            .mode(vk::BuildAccelerationStructureModeKHR::BUILD)
+            .flags(vk::BuildAccelerationStructureFlagsKHR::PREFER_FAST_TRACE)
+            .geometries(as_geometry)
+            .dst_acceleration_structure(handle)
+            .scratch_data(vk::DeviceOrHostAddressKHR {
+                device_address: scratch_buffer_address,
+            });
+    
+            self.execute_one_time_commands(|cmd_buffer| {
+            unsafe {
+                self.ray_tracing
+                    .acceleration_structure_fn
+                    .cmd_build_acceleration_structures(
+                        *cmd_buffer,
+                        from_ref(&build_geo_info),
+                        from_ref(&as_ranges),
+                    )
+            };
+        })?;
+    
+        let address_info =
+            vk::AccelerationStructureDeviceAddressInfoKHR::default().acceleration_structure(handle);
+        let address = unsafe {
+            self.ray_tracing
+                .acceleration_structure_fn
+                .get_acceleration_structure_device_address(&address_info)
+        };
+    
+        Ok(AccelerationStructure {
+            buffer,
+            handle,
+            device_address: address,
+        })
     }
 }
+
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct RayTracingShaderGroupInfo {
@@ -736,15 +846,6 @@ pub struct RayTracingShaderGroupInfo {
     pub raygen_shader_count: u32,
     pub miss_shader_count: u32,
     pub hit_shader_count: u32,
-}
-
-pub struct RayTracingPipeline {
-    pub descriptor_set_layout: vk::DescriptorSetLayout,
-    pub dynamic_layout: vk::DescriptorSetLayout,
-    pub dynamic_layout2: vk::DescriptorSetLayout,
-    pub layout: vk::PipelineLayout,
-    pub handle: vk::Pipeline,
-    pub shader_group_info: RayTracingShaderGroupInfo,
 }
 
 pub struct ShaderBindingTable {
@@ -755,8 +856,8 @@ pub struct ShaderBindingTable {
 }
 
 impl ShaderBindingTable {
-    pub fn new(ctx: &mut Renderer, pipeline: &RayTracingPipeline) -> Result<Self> {
-        let desc = pipeline.shader_group_info;
+    pub fn new(ctx: &mut Renderer, pipeline: &vk::Pipeline, shaders: &RayTracingShaderGroupInfo) -> Result<Self> {
+        let desc = shaders;
 
         let handle_size = ctx.ray_tracing.pipeline_properties.shader_group_handle_size;
         let handle_alignment = ctx
@@ -776,7 +877,7 @@ impl ShaderBindingTable {
             ctx.ray_tracing
                 .pipeline_fn
                 .get_ray_tracing_shader_group_handles(
-                    pipeline.handle,
+                    *pipeline,
                     0,
                     desc.group_count,
                     data_size as _,
