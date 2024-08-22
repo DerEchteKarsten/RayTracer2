@@ -14,11 +14,11 @@ layout(binding = 1, set = 0) uniform Uniform {ResamplingConstants g_Const;};
 layout(binding = 2, set = 0) buffer NeighborsBuffer {vec2 neighbors[];};
 layout(binding = 3, set = 0) buffer TemporalReservoirBuffer {RTXDI_PackedGIReservoir reservoirs[];};
 
-layout(binding = 1, set = 2, r32f) uniform readonly image2D t_PrevGBufferDepth;
-layout(binding = 2, set = 2, r32ui) uniform readonly uimage2D t_PrevGBufferNormals;
-layout(binding = 3, set = 2, r32ui) uniform readonly uimage2D t_PrevGBufferGeoNormals;
-layout(binding = 4, set = 2, r32ui) uniform readonly uimage2D t_PrevGBufferDiffuseAlbedo;
-layout(binding = 5, set = 2, r32ui) uniform readonly uimage2D t_PrevGBufferSpecularRough;
+layout(binding = 0, set = 2, r32f) uniform readonly image2D t_PrevGBufferDepth;
+layout(binding = 1, set = 2, r32ui) uniform readonly uimage2D t_PrevGBufferNormals;
+layout(binding = 2, set = 2, r32ui) uniform readonly uimage2D t_PrevGBufferGeoNormals;
+layout(binding = 3, set = 2, r32ui) uniform readonly uimage2D t_PrevGBufferDiffuseAlbedo;
+layout(binding = 4, set = 2, r32ui) uniform readonly uimage2D t_PrevGBufferSpecularRough;
 
 
 #define RTXDI_GI_RESERVOIR_BUFFER reservoirs

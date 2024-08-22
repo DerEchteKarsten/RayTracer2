@@ -45,7 +45,6 @@ use winit::{
     event_loop::{ControlFlow, EventLoop},
 };
 
-
 fn main() {
     let model_thread =
         std::thread::spawn(|| gltf::load_file("./src/models/sponza_scene.glb").unwrap());
@@ -255,12 +254,10 @@ fn main() {
             group: RayTracingShaderGroup::Miss,
         },
         RayTracingShaderCreateInfo {
-            source: &[
-                (
-                    &include_bytes!("./shaders/rayhit.rchit.spv")[..],
-                    vk::ShaderStageFlags::CLOSEST_HIT_KHR,
-                ),
-            ],
+            source: &[(
+                &include_bytes!("./shaders/rayhit.rchit.spv")[..],
+                vk::ShaderStageFlags::CLOSEST_HIT_KHR,
+            )],
             group: RayTracingShaderGroup::Hit,
         },
     ];

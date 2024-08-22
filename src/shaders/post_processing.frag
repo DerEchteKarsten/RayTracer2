@@ -7,12 +7,12 @@ layout(location = 0) out vec4 outColor;
 #include "./ShaderParameters.glsl"
 #include "packing.glsl"
 #define square(x) x*x
-layout (binding = 0, set = 0) buffer TemporalReservoirBuffer {RTXDI_PackedGIReservoir reservoirs[];};
+layout(binding = 0, set = 0) buffer TemporalReservoirBuffer {RTXDI_PackedGIReservoir reservoirs[];};
 #define RTXDI_GI_RESERVOIR_BUFFER reservoirs
 #include "rtxdi/GIReservoir.hlsli"
 
-layout (binding = 1, set = 0) uniform Uniform {ResamplingConstants g_Const;};
-layout (binding = 2, set = 0) uniform sampler2D skyBox;
+layout(binding = 1, set = 0) uniform Uniform {ResamplingConstants g_Const;};
+layout(binding = 2, set = 0) uniform sampler2D skyBox;
 
 layout(binding = 0, set = 1, r32f) uniform readonly image2D u_GBufferDepth;
 layout(binding = 1, set = 1, r32ui) uniform readonly uimage2D u_GBufferNormals;

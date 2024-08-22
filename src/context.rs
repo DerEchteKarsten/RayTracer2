@@ -274,7 +274,6 @@ impl<'a> Renderer<'a> {
         })
     }
 
-
     pub fn read_shader_from_bytes(bytes: &[u8]) -> Result<Vec<u32>> {
         let mut cursor = std::io::Cursor::new(bytes);
         Ok(ash::util::read_spv(&mut cursor)?)
@@ -287,7 +286,6 @@ impl<'a> Renderer<'a> {
         let res = unsafe { self.device.create_shader_module(&create_info, None) }?;
         Ok(res)
     }
-
 
     pub fn transition_image_layout_to_general(
         device: &Device,
@@ -744,7 +742,7 @@ impl<'a> Renderer<'a> {
     ) -> Result<ShaderBindingTable> {
         ShaderBindingTable::new(self, pipeline, shader_group_infos)
     }
-    
+
     pub fn create_acceleration_structure(
         &mut self,
         level: vk::AccelerationStructureTypeKHR,
@@ -756,7 +754,7 @@ impl<'a> Renderer<'a> {
             .ty(level)
             .flags(vk::BuildAccelerationStructureFlagsKHR::PREFER_FAST_TRACE)
             .geometries(as_geometry);
-    
+
         let build_size = unsafe {
             let mut size_info = vk::AccelerationStructureBuildSizesInfoKHR::default();
             self.ray_tracing
@@ -769,7 +767,7 @@ impl<'a> Renderer<'a> {
                 );
             size_info
         };
-    
+
         let buffer = self.create_buffer(
             vk::BufferUsageFlags::ACCELERATION_STRUCTURE_STORAGE_KHR
                 | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
@@ -777,7 +775,7 @@ impl<'a> Renderer<'a> {
             build_size.acceleration_structure_size,
             Some("Acceleration Structure Buffer"),
         )?;
-    
+
         let create_info = vk::AccelerationStructureCreateInfoKHR::default()
             .buffer(buffer.inner)
             .size(build_size.acceleration_structure_size)
@@ -787,7 +785,7 @@ impl<'a> Renderer<'a> {
                 .acceleration_structure_fn
                 .create_acceleration_structure(&create_info, None)?
         };
-    
+
         let scratch_buffer = self.create_aligned_buffer(
             vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
             MemoryLocation::GpuOnly,
@@ -798,9 +796,9 @@ impl<'a> Renderer<'a> {
                 .min_acceleration_structure_scratch_offset_alignment
                 .into(),
         )?;
-    
+
         let scratch_buffer_address = scratch_buffer.get_device_address(&self.device);
-    
+
         let build_geo_info = vk::AccelerationStructureBuildGeometryInfoKHR::default()
             .ty(level)
             .mode(vk::BuildAccelerationStructureModeKHR::BUILD)
@@ -810,8 +808,8 @@ impl<'a> Renderer<'a> {
             .scratch_data(vk::DeviceOrHostAddressKHR {
                 device_address: scratch_buffer_address,
             });
-    
-            self.execute_one_time_commands(|cmd_buffer| {
+
+        self.execute_one_time_commands(|cmd_buffer| {
             unsafe {
                 self.ray_tracing
                     .acceleration_structure_fn
@@ -822,7 +820,7 @@ impl<'a> Renderer<'a> {
                     )
             };
         })?;
-    
+
         let address_info =
             vk::AccelerationStructureDeviceAddressInfoKHR::default().acceleration_structure(handle);
         let address = unsafe {
@@ -830,7 +828,7 @@ impl<'a> Renderer<'a> {
                 .acceleration_structure_fn
                 .get_acceleration_structure_device_address(&address_info)
         };
-    
+
         Ok(AccelerationStructure {
             buffer,
             handle,
@@ -838,7 +836,6 @@ impl<'a> Renderer<'a> {
         })
     }
 }
-
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct RayTracingShaderGroupInfo {
@@ -856,7 +853,11 @@ pub struct ShaderBindingTable {
 }
 
 impl ShaderBindingTable {
-    pub fn new(ctx: &mut Renderer, pipeline: &vk::Pipeline, shaders: &RayTracingShaderGroupInfo) -> Result<Self> {
+    pub fn new(
+        ctx: &mut Renderer,
+        pipeline: &vk::Pipeline,
+        shaders: &RayTracingShaderGroupInfo,
+    ) -> Result<Self> {
         let desc = shaders;
 
         let handle_size = ctx.ray_tracing.pipeline_properties.shader_group_handle_size;
