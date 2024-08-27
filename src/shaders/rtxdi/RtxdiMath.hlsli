@@ -11,7 +11,7 @@
 #ifndef RTXDI_MATH_HLSLI
 #define RTXDI_MATH_HLSLI
 
-const float RTXDI_PI = 3.1415926535;
+static const float RTXDI_PI = 3.1415926535;
 
 // Compares two values and returns true if their relative difference is lower than the threshold.
 // Zero or negative threshold makes test always succeed, not fail.
@@ -22,7 +22,7 @@ bool RTXDI_CompareRelativeDifference(float reference, float candidate, float thr
 
 // See if we will reuse this neighbor or history sample using
 //    edge-stopping functions (e.g., per a bilateral filter).
-bool RTXDI_IsValidNeighbor(vec3 ourNorm, vec3 theirNorm, float ourDepth, float theirDepth, float normalThreshold, float depthThreshold)
+bool RTXDI_IsValidNeighbor(float3 ourNorm, float3 theirNorm, float ourDepth, float theirDepth, float normalThreshold, float depthThreshold)
 {
     return (dot(theirNorm.xyz, ourNorm.xyz) >= normalThreshold)
         && RTXDI_CompareRelativeDifference(ourDepth, theirDepth, depthThreshold);
@@ -52,15 +52,15 @@ uint RTXDI_IntegerCompact(uint x)
 }
 
 // Converts a 2D position to a linear index following a Z-curve pattern.
-uint RTXDI_ZCurveToLinearIndex(uvec2 xy)
+uint RTXDI_ZCurveToLinearIndex(uint2 xy)
 {
     return RTXDI_IntegerExplode(xy[0]) | (RTXDI_IntegerExplode(xy[1]) << 1);
 }
 
 // Converts a linear to a 2D position following a Z-curve pattern.
-uvec2 RTXDI_LinearIndexToZCurve(uint index)
+uint2 RTXDI_LinearIndexToZCurve(uint index)
 {
-    return uvec2(
+    return uint2(
         RTXDI_IntegerCompact(index),
         RTXDI_IntegerCompact(index >> 1));
 }
@@ -78,7 +78,7 @@ uint RTXDI_JenkinsHash(uint a)
     return a;
 }
 
-void RTXDI_CartesianToSpherical(vec3 cartesian, out float r, out float azimuth, out float elevation)
+void RTXDI_CartesianToSpherical(float3 cartesian, out float r, out float azimuth, out float elevation)
 {
     r = length(cartesian);
     cartesian /= r;
@@ -87,17 +87,17 @@ void RTXDI_CartesianToSpherical(vec3 cartesian, out float r, out float azimuth, 
     elevation = asin(cartesian.y);
 }
 
-vec3 RTXDI_SphericalToCartesian(float r, float azimuth, float elevation)
+float3 RTXDI_SphericalToCartesian(float r, float azimuth, float elevation)
 {
     float sinAz, cosAz, sinEl, cosEl;
-    sinAz = sin(azimuth); cosAz = cos(azimuth);
-    sinEl = sin(elevation); cosEl = cos(elevation);
+    sincos(azimuth, sinAz, cosAz);
+    sincos(elevation, sinEl, cosEl);
 
     float x = r * cosAz * cosEl;
     float y = r * sinEl;
     float z = r * sinAz * cosEl;
 
-    return vec3(x, y, z);
+    return float3(x, y, z);
 }
 
 // Computes a multiplier to the effective sample count (M) for pairwise MIS
@@ -117,27 +117,27 @@ float RTXDI_PairwiseMisWeight(float w0, float w1, float M0, float M1)
 }
 
 // return the luminance of the given RGB color
-float RTXDI_Luminance(vec3 rgb)
+float RTXDI_Luminance(float3 rgb)
 {
-    return dot(rgb, vec3(0.2126f, 0.7152f, 0.0722f));
+    return dot(rgb, float3(0.2126f, 0.7152f, 0.0722f));
 }
 
 // Unpack two 16-bit snorm values from the lo/hi bits of a dword.
 //  - packed: Two 16-bit snorm in low/high bits.
 //  - returns: Two float values in [-1,1].
-vec2 RTXDI_UnpackSnorm2x16(uint packed)
+float2 RTXDI_UnpackSnorm2x16(uint packed)
 {
-    ivec2 bits = ivec2(packed << 16, packed) >> 16;
-    vec2 unpacked = max(vec2(bits) / 32767.0, -1.0);
+    int2 bits = int2(packed << 16, packed) >> 16;
+    float2 unpacked = max(float2(bits) / 32767.0, -1.0);
     return unpacked;
 }
 
 // Pack two floats into 16-bit snorm values in the lo/hi bits of a dword.
 //  - returns: Two 16-bit snorm in low/high bits.
-uint RTXDI_PackSnorm2x16(vec2 v)
+uint RTXDI_PackSnorm2x16(float2 v)
 {
-    v = any(isnan(v)) ? vec2(0, 0) : clamp(v, -1.0, 1.0);
-    ivec2 iv = ivec2(round(v * 32767.0));
+    v = any(isnan(v)) ? float2(0, 0) : clamp(v, -1.0, 1.0);
+    int2 iv = int2(round(v * 32767.0));
     uint packed = (iv.x & 0x0000ffff) | (iv.y << 16);
 
     return packed;
@@ -146,14 +146,14 @@ uint RTXDI_PackSnorm2x16(vec2 v)
 // Converts normalized direction to the octahedral map (non-equal area, signed normalized).
 //  - n: Normalized direction.
 //  - returns: Position in octahedral map in [-1,1] for each component.
-vec2 RTXDI_NormalizedVectorToOctahedralMapping(vec3 n)
+float2 RTXDI_NormalizedVectorToOctahedralMapping(float3 n)
 {
     // Project the sphere onto the octahedron (|x|+|y|+|z| = 1) and then onto the xy-plane.
-    vec2 p = vec2(n.x, n.y) * (1.0 / (abs(n.x) + abs(n.y) + abs(n.z)));
+    float2 p = float2(n.x, n.y) * (1.0 / (abs(n.x) + abs(n.y) + abs(n.z)));
 
     // Reflect the folds of the lower hemisphere over the diagonals.
     if (n.z < 0.0) {
-        p = vec2(
+        p = float2(
             (1.0 - abs(p.y)) * (p.x >= 0.0 ? 1.0 : -1.0),
             (1.0 - abs(p.x)) * (p.y >= 0.0 ? 1.0 : -1.0)
             );
@@ -165,13 +165,13 @@ vec2 RTXDI_NormalizedVectorToOctahedralMapping(vec3 n)
 // Converts point in the octahedral map to normalized direction (non-equal area, signed normalized).
 //  - p: Position in octahedral map in [-1,1] for each component.
 //  - returns: Normalized direction.
-vec3 RTXDI_OctahedralMappingToNormalizedVector(vec2 p)
+float3 RTXDI_OctahedralMappingToNormalizedVector(float2 p)
 {
-    vec3 n = vec3(p.x, p.y, 1.0 - abs(p.x) - abs(p.y));
+    float3 n = float3(p.x, p.y, 1.0 - abs(p.x) - abs(p.y));
 
     // Reflect the folds of the lower hemisphere over the diagonals.
     if (n.z < 0.0) {
-        n.xy = vec2(
+        n.xy = float2(
             (1.0 - abs(n.y)) * (n.x >= 0.0 ? 1.0 : -1.0),
             (1.0 - abs(n.x)) * (n.y >= 0.0 ? 1.0 : -1.0)
             );
@@ -181,23 +181,23 @@ vec3 RTXDI_OctahedralMappingToNormalizedVector(vec2 p)
 }
 
 // Encode a normal packed as 2x 16-bit snorms in the octahedral mapping.
-uint RTXDI_EncodeNormalizedVectorToSnorm2x16(vec3 normal)
+uint RTXDI_EncodeNormalizedVectorToSnorm2x16(float3 normal)
 {
-    vec2 octNormal = RTXDI_NormalizedVectorToOctahedralMapping(normal);
+    float2 octNormal = RTXDI_NormalizedVectorToOctahedralMapping(normal);
     return RTXDI_PackSnorm2x16(octNormal);
 }
 
 // Decode a normal packed as 2x 16-bit snorms in the octahedral mapping.
-vec3 RTXDI_DecodeNormalizedVectorFromSnorm2x16(uint packedNormal)
+float3 RTXDI_DecodeNormalizedVectorFromSnorm2x16(uint packedNormal)
 {
-    vec2 octNormal = RTXDI_UnpackSnorm2x16(packedNormal);
+    float2 octNormal = RTXDI_UnpackSnorm2x16(packedNormal);
     return RTXDI_OctahedralMappingToNormalizedVector(octNormal);
 }
 
 // Transforms an RGB color in Rec.709 to CIE XYZ.
-vec3 RTXDI_RGBToXYZInRec709(vec3 c)
+float3 RTXDI_RGBToXYZInRec709(float3 c)
 {
-    const mat3 M = mat3(
+    static const float3x3 M = float3x3(
         0.4123907992659595, 0.3575843393838780, 0.1804807884018343,
         0.2126390058715104, 0.7151686787677559, 0.0721923153607337,
         0.0193308187155918, 0.1191947797946259, 0.9505321522496608
@@ -205,14 +205,14 @@ vec3 RTXDI_RGBToXYZInRec709(vec3 c)
 #ifdef RTXDI_GLSL
     return c * M; // GLSL initializes matrices in a column-major order, HLSL in row-major
 #else
-    return (M * c);
+    return mul(M, c);
 #endif
 }
 
 // Transforms an XYZ color to RGB in Rec.709.
-vec3 RTXDI_XYZToRGBInRec709(vec3 c)
+float3 RTXDI_XYZToRGBInRec709(float3 c)
 {
-    const mat3 M = mat3(
+    static const float3x3 M = float3x3(
         3.240969941904522, -1.537383177570094, -0.4986107602930032,
         -0.9692436362808803, 1.875967501507721, 0.04155505740717569,
         0.05563007969699373, -0.2039769588889765, 1.056971514242878
@@ -220,7 +220,7 @@ vec3 RTXDI_XYZToRGBInRec709(vec3 c)
 #ifdef RTXDI_GLSL
     return c * M; // GLSL initializes matrices in a column-major order, HLSL in row-major
 #else
-    return (M * c);
+    return mul(M, c);
 #endif
 }
 
@@ -230,10 +230,10 @@ vec3 RTXDI_XYZToRGBInRec709(vec3 c)
 // The log-luminance is encoded with 14 bits and chroma with 9 bits each.
 // This was empirically more accurate than using 8 bit chroma.
 // Black (all zeros) is handled exactly.
-uint RTXDI_EncodeRGBToLogLuv(vec3 color)
+uint RTXDI_EncodeRGBToLogLuv(float3 color)
 {
     // Convert RGB to XYZ.
-    vec3 XYZ = RTXDI_RGBToXYZInRec709(color);
+    float3 XYZ = RTXDI_RGBToXYZInRec709(color);
 
     // Encode log2(Y) over the range [-20,20) in 14 bits (no sign bit).
     // TODO: Fast path that uses the bits from the fp32 representation directly.
@@ -255,22 +255,22 @@ uint RTXDI_EncodeRGBToLogLuv(vec3 color)
     //  v = 9Y / (-2X + 12Y + 3(X + Y + Z))
     //
     float invDenom = 1.0 / (-2.0 * XYZ.x + 12.0 * XYZ.y + 3.0 * (XYZ.x + XYZ.y + XYZ.z));
-    vec2 uv = vec2(4.0, 9.0) * XYZ.xy * invDenom;
+    float2 uv = float2(4.0, 9.0) * XYZ.xy * invDenom;
 
     // Encode chroma (u,v) in 9 bits each.
     // The gamut of perceivable uv values is roughly [0,0.62], so scale by 820 to get 9-bit values.
-    uvec2 uve = uvec2(clamp(820.0 * uv, 0.0, 511.0));
+    uint2 uve = uint2(clamp(820.0 * uv, 0.0, 511.0));
 
     return (Le << 18) | (uve.x << 9) | uve.y;
 }
 
 // Decode an RGB color stored in a 32-bit LogLuv HDR format.
 //    See RTXDI_EncodeRGBToLogLuv() for details.
-vec3 RTXDI_DecodeLogLuvToRGB(uint packedColor)
+float3 RTXDI_DecodeLogLuvToRGB(uint packedColor)
 {
     // Decode luminance Y from encoded log-luminance.
     uint Le = packedColor >> 18;
-    if (Le == 0) return vec3(0, 0, 0);
+    if (Le == 0) return float3(0, 0, 0);
 
     float logY = (float(Le) + 0.5) / 409.6 - 20.0;
     float Y = pow(2.0, logY);
@@ -280,18 +280,18 @@ vec3 RTXDI_DecodeLogLuvToRGB(uint packedColor)
     //  x = 9u / (6u - 16v + 12)
     //  y = 4v / (6u - 16v + 12)
     //
-    uvec2 uve = uvec2(packedColor >> 9, packedColor) & 0x1ff;
-    vec2 uv = (vec2(uve)+0.5) / 820.0;
+    uint2 uve = uint2(packedColor >> 9, packedColor) & 0x1ff;
+    float2 uv = (float2(uve)+0.5) / 820.0;
 
     float invDenom = 1.0 / (6.0 * uv.x - 16.0 * uv.y + 12.0);
-    vec2 xy = vec2(9.0, 4.0) * uv * invDenom;
+    float2 xy = float2(9.0, 4.0) * uv * invDenom;
 
     // Convert chromaticity to XYZ and back to RGB.
     //  X = Y / y * x
     //  Z = Y / y * (1 - x - y)
     //
     float s = Y / xy.y;
-    vec3 XYZ = vec3(s * xy.x, Y, s * (1.f - xy.x - xy.y));
+    float3 XYZ = float3(s * xy.x, Y, s * (1.f - xy.x - xy.y));
 
     // Convert back to RGB and clamp to avoid out-of-gamut colors.
     return max(RTXDI_XYZToRGBInRec709(XYZ), 0.0);

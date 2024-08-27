@@ -29,13 +29,13 @@
 struct RTXDI_GIReservoir
 {
     // postion of the 2nd bounce surface.
-    vec3 position;
+    float3 position;
 
     // normal vector of the 2nd bounce surface.
-    vec3 normal;
+    float3 normal;
 
     // incoming radiance from the 2nd bounce surface.
-    vec3 radiance;
+    float3 radiance;
 
     // Overloaded: represents RIS weight sum during streaming,
     // then reservoir weight (inverse PDF) after FinalizeResampling
@@ -113,7 +113,7 @@ RTXDI_GIReservoir RTXDI_UnpackGIReservoir(RTXDI_PackedGIReservoir data)
 
 RTXDI_GIReservoir RTXDI_LoadGIReservoir(
     RTXDI_ReservoirBufferParameters reservoirParams,
-    uvec2 reservoirPosition,
+    uint2 reservoirPosition,
     uint reservoirArrayIndex)
 {
     uint pointer = RTXDI_ReservoirPositionToPointer(reservoirParams, reservoirPosition, reservoirArrayIndex);
@@ -122,7 +122,7 @@ RTXDI_GIReservoir RTXDI_LoadGIReservoir(
 
 RTXDI_GIReservoir RTXDI_LoadGIReservoir(
     RTXDI_ReservoirBufferParameters reservoirParams,
-    uvec2 reservoirPosition,
+    uint2 reservoirPosition,
     uint reservoirArrayIndex,
     out uint miscFlags)
 {
@@ -135,7 +135,7 @@ RTXDI_GIReservoir RTXDI_LoadGIReservoir(
 void RTXDI_StorePackedGIReservoir(
     const RTXDI_PackedGIReservoir packedGIReservoir,
     RTXDI_ReservoirBufferParameters reservoirParams,
-    uvec2 reservoirPosition,
+    uint2 reservoirPosition,
     uint reservoirArrayIndex)
 {
     uint pointer = RTXDI_ReservoirPositionToPointer(reservoirParams, reservoirPosition, reservoirArrayIndex);
@@ -145,7 +145,7 @@ void RTXDI_StorePackedGIReservoir(
 void RTXDI_StoreGIReservoir(
     const RTXDI_GIReservoir reservoir,
     RTXDI_ReservoirBufferParameters reservoirParams,
-    uvec2 reservoirPosition,
+    uint2 reservoirPosition,
     uint reservoirArrayIndex)
 {
     RTXDI_StorePackedGIReservoir(
@@ -156,7 +156,7 @@ void RTXDI_StoreGIReservoir(
     const RTXDI_GIReservoir reservoir,
     const uint miscFlags,
     RTXDI_ReservoirBufferParameters reservoirParams,
-    uvec2 reservoirPosition,
+    uint2 reservoirPosition,
     uint reservoirArrayIndex)
 {
     RTXDI_StorePackedGIReservoir(
@@ -169,9 +169,9 @@ RTXDI_GIReservoir RTXDI_EmptyGIReservoir()
 {
     RTXDI_GIReservoir s;
 
-    s.position = vec3(0.0, 0.0, 0.0);
-    s.normal = vec3(0.0, 0.0, 0.0);
-    s.radiance = vec3(0.0, 0.0, 0.0);
+    s.position = float3(0.0, 0.0, 0.0);
+    s.normal = float3(0.0, 0.0, 0.0);
+    s.radiance = float3(0.0, 0.0, 0.0);
     s.weightSum = 0.0;
     s.M = 0;
     s.age = 0;

@@ -1,3 +1,5 @@
+#ifndef GBufferHelpers
+#define GBufferHelpers
 
 struct RayDesc {
     vec3 Origin;
@@ -8,16 +10,18 @@ struct RayDesc {
 
 RayDesc setupPrimaryRay(uvec2 pixelPosition, PlanarViewConstants view)
 {
-    vec2 uv = (vec2(pixelPosition) + 0.5) * view.viewportSizeInv;
-    vec4 clipPos = vec4(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, (1.0 / 256.0), 1);
-    vec4 worldPos = clipPos * view.matClipToWorld;
-    worldPos.xyz /= worldPos.w;
+    const vec2 pixelCenter = vec2(pixelPosition.xy) + vec2(0.5);
+	const vec2 inUV = pixelCenter/vec2(view.viewportSize);
+	vec2 d = inUV * 2.0 - 1.0;
+	vec2 dir = inUV * 2.0 - 1.0;
+	vec4 target = view.matClipToView * vec4(dir.x, dir.y, 1, 1) ;
+	vec4 direction = view.matViewToWorld*vec4(normalize(target.xyz), 0) ;
 
     RayDesc ray;
     ray.Origin = view.cameraDirectionOrPosition.xyz;
-    ray.Direction = normalize(worldPos.xyz - ray.Origin);
+    ray.Direction = direction.xyz;
     ray.TMin = 0;
-    ray.TMax = 1000;
+    ray.TMax = BACKGROUND_DEPTH;
     return ray;
 }
 
@@ -31,9 +35,9 @@ vec3 getMotionVector(
     vec3 worldSpacePosition = vec4(objectSpacePosition, 1.0).xyz;
     vec3 prevWorldSpacePosition = vec4(prevObjectSpacePosition, 1.0).xyz;
 
-    vec4 clipPos = vec4(worldSpacePosition, 1.0) * view.matWorldToClip;
+    vec4 clipPos = view.matWorldToClip * vec4(worldSpacePosition, 1.0);
     clipPos.xyz /= clipPos.w;
-    vec4 prevClipPos = vec4(prevWorldSpacePosition, 1.0) * viewPrev.matWorldToClip;
+    vec4 prevClipPos = viewPrev.matWorldToClip * vec4(prevWorldSpacePosition, 1.0);
     prevClipPos.xyz /= prevClipPos.w;
 
     o_viewDepth = clipPos.w;
@@ -56,13 +60,14 @@ vec3 viewDepthToWorldPos(
     ivec2 pixelPosition,
     float viewDepth)
 {
-    vec2 uv = (vec2(pixelPosition) + 0.5) * view.viewportSizeInv;
-    vec4 clipPos = vec4(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, 0.5, 1);
-    vec4 viewPos = clipPos * view.matClipToView;
-    viewPos.xy /= viewPos.z;
-    viewPos.zw = vec2(1.0);
-    viewPos.xyz *= viewDepth;
-    return (viewPos * view.matViewToWorld).xyz;
+    const vec2 pixelCenter = vec2(pixelPosition.xy) + vec2(0.5);
+	const vec2 inUV = pixelCenter/vec2(view.viewportSize);
+	vec2 d = inUV * 2.0 - 1.0;
+	vec2 dir = inUV * 2.0 - 1.0;
+	vec4 target = view.matClipToView * vec4(dir.x, dir.y, 1, 1) ;
+	vec4 direction = view.matViewToWorld*vec4(normalize(target.xyz), 0) ;
+
+    return view.cameraDirectionOrPosition.xyz + direction.xyz * viewDepth;
 }
 
 vec3 convertMotionVectorToPixelSpace(
@@ -77,3 +82,4 @@ vec3 convertMotionVectorToPixelSpace(
     motionVector.xy = previousPosition - curerntPixelCenter;
     return motionVector;
 }
+#endif

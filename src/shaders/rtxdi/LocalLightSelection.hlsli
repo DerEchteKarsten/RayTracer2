@@ -60,7 +60,7 @@ RTXDI_LocalLightSelectionContext RTXDI_InitializeLocalLightSelectionContextRIS(
 }
 
 void RTXDI_UnpackLocalLightFromRISLightData(
-    uvec2 tileData,
+    uint2 tileData,
     uint risBufferPtr,
     out RAB_LightInfo lightInfo,
     out uint lightIndex,
@@ -86,7 +86,7 @@ void RTXDI_RandomlySelectLocalLightFromRISTile(
     out uint lightIndex,
     out float invSourcePdf)
 {
-    uvec2 risTileData;
+    uint2 risTileData;
     uint risBufferPtr;
     RTXDI_RandomlySelectLightDataFromRISTile(rng, risTileInfo, risTileData, risBufferPtr);
     RTXDI_UnpackLocalLightFromRISLightData(risTileData, risBufferPtr, lightInfo, lightIndex, invSourcePdf);

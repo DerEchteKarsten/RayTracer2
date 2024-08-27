@@ -29,7 +29,7 @@ namespace rtxdi
         uint32_t z;
     };
 
-    struct vec3
+    struct float3
     {
         float x;
         float y;
@@ -120,7 +120,7 @@ namespace rtxdi
         float regirCellSize = 1.0f;
 
         // Center of the ReGIR structure in world space
-        vec3 center = { 0.0f, 0.0f, 0.0f };
+        float3 center = { 0.0f, 0.0f, 0.0f };
 
         // Light sampling mode to use for local light sampling when the surface falls outside the ReGIR grid
         LocalLightReGIRFallbackSamplingMode fallbackSamplingMode = LocalLightReGIRFallbackSamplingMode::Power_RIS;

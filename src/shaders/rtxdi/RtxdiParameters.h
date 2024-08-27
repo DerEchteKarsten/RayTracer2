@@ -49,7 +49,7 @@
 #define RTXDI_INVALID_LIGHT_INDEX (0xffffffffu)
 
 #ifndef __cplusplus
-const uint RTXDI_InvalidLightIndex = RTXDI_INVALID_LIGHT_INDEX;
+static const uint RTXDI_InvalidLightIndex = RTXDI_INVALID_LIGHT_INDEX;
 #endif
 
 #include "ReGIRParameters.h"

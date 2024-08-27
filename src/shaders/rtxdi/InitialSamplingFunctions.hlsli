@@ -94,7 +94,7 @@ float RTXDI_LightBrdfMisWeight(RAB_Surface surface, RAB_LightSample lightSample,
         return lightMisWeight * lightSelectionPdf;
     }
 
-    vec3 lightDir;
+    float3 lightDir;
     float lightDistance;
     RAB_GetLightDirDistance(surface, lightSample, lightDir, lightDistance);
 
@@ -118,9 +118,9 @@ float RTXDI_LightBrdfMisWeight(RAB_Surface surface, RAB_LightSample lightSample,
 // Local light UV selection and reservoir streaming
 //
 
-vec2 RTXDI_RandomlySelectLocalLightUV(inout RAB_RandomSamplerState rng)
+float2 RTXDI_RandomlySelectLocalLightUV(inout RAB_RandomSamplerState rng)
 {
-    vec2 uv;
+    float2 uv;
     uv.x = RAB_GetNextRandom(rng);
     uv.y = RAB_GetNextRandom(rng);
     return uv;
@@ -131,7 +131,7 @@ bool RTXDI_StreamLocalLightAtUVIntoReservoir(
     RTXDI_SampleParameters sampleParams,
     RAB_Surface surface,
     uint lightIndex,
-    vec2 uv,
+    float2 uv,
     float invSourcePdf,
     RAB_LightInfo lightInfo,
     inout RTXDI_DIReservoir state,
@@ -168,13 +168,13 @@ int RTXDI_CalculateReGIRCellIndex(
     RAB_Surface surface)
 {
     int cellIndex = -1;
-    vec3 cellJitter = vec3(
+    float3 cellJitter = float3(
         RAB_GetNextRandom(coherentRng),
         RAB_GetNextRandom(coherentRng),
         RAB_GetNextRandom(coherentRng));
     cellJitter -= 0.5;
 
-    vec3 samplingPos = RAB_GetSurfaceWorldPos(surface);
+    float3 samplingPos = RAB_GetSurfaceWorldPos(surface);
     float jitterScale = RTXDI_ReGIR_GetJitterScale(regirParams, samplingPos);
     samplingPos += cellJitter * jitterScale;
 
@@ -292,7 +292,7 @@ RTXDI_DIReservoir RTXDI_SampleLocalLightsInternal(
         float invSourcePdf;
 
         RTXDI_SelectNextLocalLight(lightSelectionContext, rng, lightInfo, lightIndex, invSourcePdf);
-        vec2 uv = RTXDI_RandomlySelectLocalLightUV(rng);
+        float2 uv = RTXDI_RandomlySelectLocalLightUV(rng);
         bool zeroPdf = RTXDI_StreamLocalLightAtUVIntoReservoir(rng, sampleParams, surface, lightIndex, uv, invSourcePdf, lightInfo, state, o_selectedSample);
 
         if (zeroPdf)
@@ -346,9 +346,9 @@ RTXDI_DIReservoir RTXDI_SampleLocalLights(
 // Uniform sampling for infinite lights
 //
 
-vec2 RTXDI_RandomlySelectInfiniteLightUV(inout RAB_RandomSamplerState rng)
+float2 RTXDI_RandomlySelectInfiniteLightUV(inout RAB_RandomSamplerState rng)
 {
-    vec2 uv;
+    float2 uv;
     uv.x = RAB_GetNextRandom(rng);
     uv.y = RAB_GetNextRandom(rng);
     return uv;
@@ -359,7 +359,7 @@ void RTXDI_StreamInfiniteLightAtUVIntoReservoir(
     RAB_LightInfo lightInfo,
     RAB_Surface surface,
     uint lightIndex,
-    vec2 uv,
+    float2 uv,
     float invSourcePdf,
     inout RTXDI_DIReservoir state,
     inout RAB_LightSample o_selectedSample)
@@ -398,7 +398,7 @@ RTXDI_DIReservoir RTXDI_SampleInfiniteLights(
         RAB_LightInfo lightInfo;
 
         RTXDI_RandomlySelectLightUniformly(rng, infiniteLightBufferRegion, lightInfo, lightIndex, invSourcePdf);
-        vec2 uv = RTXDI_RandomlySelectInfiniteLightUV(rng);
+        float2 uv = RTXDI_RandomlySelectInfiniteLightUV(rng);
         RTXDI_StreamInfiniteLightAtUVIntoReservoir(rng, lightInfo, surface, lightIndex, uv, invSourcePdf, state, o_selectedSample);
     }
 
@@ -415,24 +415,24 @@ RTXDI_DIReservoir RTXDI_SampleInfiniteLights(
 //
 
 void RTXDI_UnpackEnvironmentLightDataFromRISData(
-    uvec2 tileData,
-    out vec2 uv,
+    uint2 tileData,
+    out float2 uv,
     out float invSourcePdf
 )
 {
     uint packedUv = tileData.x;
     invSourcePdf = asfloat(tileData.y);
-    uv = vec2(packedUv & 0xffff, packedUv >> 16) / float(0xffff);
+    uv = float2(packedUv & 0xffff, packedUv >> 16) / float(0xffff);
 }
 
 void RTXDI_RandomlySelectEnvironmentLightUVFromRISTile(
     inout RAB_RandomSamplerState rng,
     RTXDI_RISTileInfo risTileInfo,
-    out vec2 uv,
+    out float2 uv,
     out float invSourcePdf
 )
 {
-    uvec2 tileData;
+    uint2 tileData;
     uint risBufferPtr;
     RTXDI_RandomlySelectLightDataFromRISTile(rng, risTileInfo, tileData, risBufferPtr);
     RTXDI_UnpackEnvironmentLightDataFromRISData(tileData, uv, invSourcePdf);
@@ -444,7 +444,7 @@ void RTXDI_StreamEnvironmentLightAtUVIntoReservoir(
     RAB_Surface surface,
     RAB_LightInfo lightInfo,
     uint environmentLightIndex,
-    vec2 uv,
+    float2 uv,
     float invSourcePdf,
     inout RTXDI_DIReservoir state,
     inout RAB_LightSample o_selectedSample)
@@ -486,7 +486,7 @@ RTXDI_DIReservoir RTXDI_SampleEnvironmentMap(
 
     for (uint i = 0; i < sampleParams.numEnvironmentMapSamples; i++)
     {
-        vec2 uv;
+        float2 uv;
         float invSourcePdf;
         RTXDI_RandomlySelectEnvironmentLightUVFromRISTile(rng, risTileInfo, uv, invSourcePdf);
         RTXDI_StreamEnvironmentLightAtUVIntoReservoir(rng, sampleParams, surface, lightInfo, params.lightIndex, uv, invSourcePdf, state, o_selectedSample);
@@ -516,9 +516,9 @@ RTXDI_DIReservoir RTXDI_SampleBrdf(
     for (uint i = 0; i < sampleParams.numBrdfSamples; ++i)
     {
         float lightSourcePdf = 0;
-        vec3 sampleDir;
+        float3 sampleDir;
         uint lightIndex = RTXDI_InvalidLightIndex;
-        vec2 randXY = vec2(0, 0);
+        float2 randXY = float2(0, 0);
         RAB_LightSample candidateSample = RAB_EmptyLightSample();
 
         if (RAB_GetSurfaceBrdfSample(surface, rng, sampleDir))
@@ -538,7 +538,7 @@ RTXDI_DIReservoir RTXDI_SampleBrdf(
                 {
                     // If Mis cutoff is used, we need to evaluate the sample and make sure it actually could have been
                     // generated by the area sampling technique. This is due to numerical precision.
-                    vec3 lightDir;
+                    float3 lightDir;
                     float lightDistance;
                     RAB_GetLightDirDistance(surface, candidateSample, lightDir, lightDistance);
 

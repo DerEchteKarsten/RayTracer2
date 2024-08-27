@@ -1,10 +1,12 @@
 use std::time::Duration;
 
-use glam::{vec3, Mat3, Mat4, Quat, Vec3};
+use glam::{vec3, Mat3, Mat4, Quat, Vec3, Vec4};
 use winit::{
     event::{DeviceEvent, ElementState, Event, MouseButton, WindowEvent},
     keyboard::{KeyCode, PhysicalKey},
 };
+
+use crate::shader_params::PlanarViewConstants;
 
 const MOVE_SPEED: f32 = 20.0;
 const ANGLE_PER_POINT: f32 = 2.0;
@@ -19,18 +21,6 @@ pub struct Camera {
     pub aspect_ratio: f32,
     pub z_near: f32,
     pub z_far: f32,
-}
-
-#[derive(Clone, Copy)]
-pub struct UniformData {
-    pub view_inverse: Mat4,
-    pub proj_inverse: Mat4,
-}
-#[derive(Clone, Copy)]
-pub struct GUniformData {
-    pub view: Mat4,
-    pub proj: Mat4,
-    pub model: Mat4,
 }
 
 impl Camera {
@@ -121,6 +111,31 @@ impl Camera {
             self.z_near,
             self.z_far,
         )
+    }
+    pub fn planar_view_constants(&self) -> PlanarViewConstants {
+        let window_size = glam::vec2(1920.0, 1080.0);
+        let clipToWindowScale = glam::vec2(0.5 * window_size.x, -0.5 * window_size.y);
+
+        PlanarViewConstants {
+            matWorldToView: self.view_matrix(),
+            matViewToClip: self.projection_matrix(),
+            matWorldToClip: self.projection_matrix() * self.view_matrix(),
+            matClipToView: self.projection_matrix().inverse(),
+            matViewToWorld: self.view_matrix().inverse(),
+            matClipToWorld: (self.projection_matrix() * self.view_matrix()).inverse(),
+            viewportOrigin: glam::vec2(0.0, 0.0),
+            viewportSize: window_size,
+            viewportSizeInv: 1.0 / window_size,
+            
+            clipToWindowScale,
+            clipToWindowBias: window_size * 0.5,
+
+            windowToClipScale: 1.0 / clipToWindowScale,
+            windowToClipBias: -window_size * 0.5 * (1.0 / clipToWindowScale),
+
+            cameraDirectionOrPosition: glam::vec4(self.position.x, self.position.y, self.position.z, 1.0),
+            pixelOffset: glam::vec2(0.0, 0.0),
+        }
     }
 }
 

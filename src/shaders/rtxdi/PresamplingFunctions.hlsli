@@ -20,7 +20,7 @@
 #endif
 
 #if RTXDI_ENABLE_PRESAMPLING && !defined(RTXDI_RIS_BUFFER)
-#error "RTXDI_RIS_BUFFER must be defined to point to a RWBuffer<uvec2> type resource"
+#error "RTXDI_RIS_BUFFER must be defined to point to a RWBuffer<uint2> type resource"
 #endif
 
 #if !RTXDI_ENABLE_PRESAMPLING && (RTXDI_REGIR_MODE != RTXDI_REGIR_DISABLED)
@@ -30,19 +30,19 @@
 void RTXDI_SamplePdfMipmap(
     inout RAB_RandomSamplerState rng,
     RTXDI_TEX2D pdfTexture, // full mip chain starting from unnormalized sampling pdf in mip 0
-    uvec2 pdfTextureSize,   // dimensions of pdfTexture at mip 0; must be 16k or less
-    out uvec2 position,
+    uint2 pdfTextureSize,   // dimensions of pdfTexture at mip 0; must be 16k or less
+    out uint2 position,
     out float pdf)
 {
     int lastMipLevel = max(0, int(floor(log2(max(pdfTextureSize.x, pdfTextureSize.y)))) - 1);
 
-    position = uvec2(0, 0);
+    position = uint2(0, 0);
     pdf = 1.0;
     for (int mipLevel = lastMipLevel; mipLevel >= 0; mipLevel--)
     {
         position *= 2;
 
-        vec4 samples;
+        float4 samples;
         samples.x = max(0, RTXDI_TEX2D_LOAD(pdfTexture, int2(position.x + 0, position.y + 0), mipLevel).x);
         samples.y = max(0, RTXDI_TEX2D_LOAD(pdfTexture, int2(position.x + 0, position.y + 1), mipLevel).x);
         samples.z = max(0, RTXDI_TEX2D_LOAD(pdfTexture, int2(position.x + 1, position.y + 0), mipLevel).x);
@@ -71,7 +71,7 @@ void RTXDI_SamplePdfMipmap(
 
             if (rnd < samples.y)
             {
-                position += uvec2(0, 1);
+                position += uint2(0, 1);
                 pdf *= samples.y;
             }
             else
@@ -80,12 +80,12 @@ void RTXDI_SamplePdfMipmap(
 
                 if (rnd < samples.z)
                 {
-                    position += uvec2(1, 0);
+                    position += uint2(1, 0);
                     pdf *= samples.z;
                 }
                 else
                 {
-                    position += uvec2(1, 1);
+                    position += uint2(1, 1);
                     pdf *= samples.w;
                 }
             }
@@ -96,13 +96,13 @@ void RTXDI_SamplePdfMipmap(
 void RTXDI_PresampleLocalLights(
     inout RAB_RandomSamplerState rng,
     RTXDI_TEX2D pdfTexture,
-    uvec2 pdfTextureSize,
+    uint2 pdfTextureSize,
     uint tileIndex,
     uint sampleInTile,
     RTXDI_LightBufferRegion localLightBufferRegion,
     RTXDI_RISBufferSegmentParameters localLightsRISBufferSegmentParams)
 {
-    uvec2 texelPosition;
+    uint2 texelPosition;
     float pdf;
     RTXDI_SamplePdfMipmap(rng, pdfTexture, pdfTextureSize, texelPosition, pdf);
 
@@ -129,28 +129,28 @@ void RTXDI_PresampleLocalLights(
 
     // Store the index of the light that we found and its inverse pdf.
     // Or zero and zero if we somehow found nothing.
-    RTXDI_RIS_BUFFER[risBufferPtr] = uvec2(lightIndex, asuint(invSourcePdf));
+    RTXDI_RIS_BUFFER[risBufferPtr] = uint2(lightIndex, asuint(invSourcePdf));
 }
 
 void RTXDI_PresampleEnvironmentMap(
     inout RAB_RandomSamplerState rng,
     RTXDI_TEX2D pdfTexture,
-    uvec2 pdfTextureSize,
+    uint2 pdfTextureSize,
     uint tileIndex,
     uint sampleInTile,
     RTXDI_RISBufferSegmentParameters risBufferSegmentParams)
 {
-    uvec2 texelPosition;
+    uint2 texelPosition;
     float pdf;
     RTXDI_SamplePdfMipmap(rng, pdfTexture, pdfTextureSize, texelPosition, pdf);
 
     // Uniform sampling inside the pixels
-    vec2 fPos = vec2(texelPosition);
+    float2 fPos = float2(texelPosition);
     fPos.x += RAB_GetNextRandom(rng);
     fPos.y += RAB_GetNextRandom(rng);
 
     // Convert texel position to UV and pack it
-    vec2 uv = fPos / vec2(pdfTextureSize);
+    float2 uv = fPos / float2(pdfTextureSize);
     uint packedUv = uint(saturate(uv.x) * 0xffff) | (uint(saturate(uv.y) * 0xffff) << 16);
 
     // Compute the inverse PDF if we found something
@@ -158,7 +158,7 @@ void RTXDI_PresampleEnvironmentMap(
 
     // Store the result
     uint risBufferPtr = risBufferSegmentParams.bufferOffset + sampleInTile + tileIndex * risBufferSegmentParams.tileSize;
-    RTXDI_RIS_BUFFER[risBufferPtr] = uvec2(packedUv, asuint(invSourcePdf));
+    RTXDI_RIS_BUFFER[risBufferPtr] = uint2(packedUv, asuint(invSourcePdf));
 }
 
 #if RTXDI_REGIR_MODE != RTXDI_REGIR_DISABLED
@@ -177,7 +177,7 @@ void RTXDI_PresampleLocalLightsForReGIR(
 
     if (regirParams.commonParams.numRegirBuildSamples == 0)
     {
-        RTXDI_RIS_BUFFER[risBufferPtr] = uvec2(0, 0);
+        RTXDI_RIS_BUFFER[risBufferPtr] = uint2(0, 0);
         return;
     }
 
@@ -185,11 +185,11 @@ void RTXDI_PresampleLocalLightsForReGIR(
 
     uint cellIndex = lightSlot / regirParams.commonParams.lightsPerCell;
 
-    vec3 cellCenter;
+    float3 cellCenter;
     float cellRadius;
     if (!RTXDI_ReGIR_CellIndexToWorldPos(regirParams, int(cellIndex), cellCenter, cellRadius))
     {
-        RTXDI_RIS_BUFFER[risBufferPtr] = uvec2(0, 0);
+        RTXDI_RIS_BUFFER[risBufferPtr] = uint2(0, 0);
         return;
     }
 
@@ -245,7 +245,7 @@ void RTXDI_PresampleLocalLightsForReGIR(
         selectedLight |= RTXDI_LIGHT_COMPACT_BIT;
     }
 
-    RTXDI_RIS_BUFFER[risBufferPtr] = uvec2(selectedLight, asuint(weight));
+    RTXDI_RIS_BUFFER[risBufferPtr] = uint2(selectedLight, asuint(weight));
 }
 
 #endif // (RTXDI_REGIR_MODE != RTXDI_REGIR_DISABLED)

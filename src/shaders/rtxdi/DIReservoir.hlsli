@@ -106,7 +106,7 @@ RTXDI_PackedDIReservoir RTXDI_PackDIReservoir(const RTXDI_DIReservoir reservoir)
 void RTXDI_StoreDIReservoir(
     const RTXDI_DIReservoir reservoir,
     RTXDI_ReservoirBufferParameters reservoirParams,
-    uvec2 reservoirPosition,
+    uint2 reservoirPosition,
     uint reservoirArrayIndex)
 {
     uint pointer = RTXDI_ReservoirPositionToPointer(reservoirParams, reservoirPosition, reservoirArrayIndex);
@@ -154,7 +154,7 @@ RTXDI_DIReservoir RTXDI_UnpackDIReservoir(RTXDI_PackedDIReservoir data)
 
 RTXDI_DIReservoir RTXDI_LoadDIReservoir(
     RTXDI_ReservoirBufferParameters reservoirParams,
-    uvec2 reservoirPosition,
+    uint2 reservoirPosition,
     uint reservoirArrayIndex)
 {
     uint pointer = RTXDI_ReservoirPositionToPointer(reservoirParams, reservoirPosition, reservoirArrayIndex);
@@ -163,7 +163,7 @@ RTXDI_DIReservoir RTXDI_LoadDIReservoir(
 
 void RTXDI_StoreVisibilityInDIReservoir(
     inout RTXDI_DIReservoir reservoir,
-    vec3 visibility,
+    float3 visibility,
     bool discardIfInvisible)
 {
     reservoir.packedVisibility = uint(saturate(visibility.x) * RTXDI_PackedDIReservoir_VisibilityChannelMax) 
@@ -199,11 +199,11 @@ struct RTXDI_VisibilityReuseParameters
 bool RTXDI_GetDIReservoirVisibility(
     const RTXDI_DIReservoir reservoir,
     const RTXDI_VisibilityReuseParameters params,
-    out vec3 o_visibility)
+    out float3 o_visibility)
 {
     if (reservoir.age > 0 &&
         reservoir.age <= params.maxAge &&
-        length(vec2(reservoir.spatialDistance)) < params.maxDistance)
+        length(float2(reservoir.spatialDistance)) < params.maxDistance)
     {
         o_visibility.x = float(reservoir.packedVisibility & RTXDI_PackedDIReservoir_VisibilityChannelMax) / RTXDI_PackedDIReservoir_VisibilityChannelMax;
         o_visibility.y = float((reservoir.packedVisibility >> RTXDI_PackedDIReservoir_VisibilityChannelShift) & RTXDI_PackedDIReservoir_VisibilityChannelMax) / RTXDI_PackedDIReservoir_VisibilityChannelMax;
@@ -212,7 +212,7 @@ bool RTXDI_GetDIReservoirVisibility(
         return true;
     }
 
-    o_visibility = vec3(0, 0, 0);
+    o_visibility = float3(0, 0, 0);
     return false;
 }
 
@@ -226,9 +226,9 @@ uint RTXDI_GetDIReservoirLightIndex(const RTXDI_DIReservoir reservoir)
     return reservoir.lightData & RTXDI_DIReservoir_LightIndexMask;
 }
 
-vec2 RTXDI_GetDIReservoirSampleUV(const RTXDI_DIReservoir reservoir)
+float2 RTXDI_GetDIReservoirSampleUV(const RTXDI_DIReservoir reservoir)
 {
-    return vec2(reservoir.uvData & 0xffff, reservoir.uvData >> 16) / float(0xffff);
+    return float2(reservoir.uvData & 0xffff, reservoir.uvData >> 16) / float(0xffff);
 }
 
 float RTXDI_GetDIReservoirInvPdf(const RTXDI_DIReservoir reservoir)
@@ -241,7 +241,7 @@ float RTXDI_GetDIReservoirInvPdf(const RTXDI_DIReservoir reservoir)
 bool RTXDI_StreamSample(
     inout RTXDI_DIReservoir reservoir,
     uint lightIndex,
-    vec2 uv,
+    float2 uv,
     float random,
     float targetPdf,
     float invSourcePdf)

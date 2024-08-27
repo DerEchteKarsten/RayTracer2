@@ -21,7 +21,7 @@
 #endif
 
 #ifndef RTXDI_NEIGHBOR_OFFSETS_BUFFER
-#error "RTXDI_NEIGHBOR_OFFSETS_BUFFER must be defined to point to a Buffer<vec2> type resource"
+#error "RTXDI_NEIGHBOR_OFFSETS_BUFFER must be defined to point to a Buffer<float2> type resource"
 #endif
 
 #define RTXDI_NAIVE_SAMPLING_M_THRESHOLD 2
@@ -105,7 +105,7 @@ bool RTXDI_StreamCanonicalWithPairwiseStep(inout RTXDI_DIReservoir reservoir,
 // The filter analyzes the weights of all reservoirs in a thread group, and discards
 // the reservoirs whose weights are very high, i.e. above a certain threshold.
 void RTXDI_BoilingFilter(
-    uvec2 LocalIndex,
+    uint2 LocalIndex,
     float filterStrength, // (0..1]
     inout RTXDI_DIReservoir reservoir)
 {
@@ -120,7 +120,7 @@ struct RTXDI_DITemporalResamplingParameters
     // Screen-space motion vector, computed as (previousPosition - currentPosition).
     // The X and Y components are measured in pixels.
     // The Z component is in linear depth units.
-    vec3 screenSpaceMotion;
+    float3 screenSpaceMotion;
 
     // The index of the reservoir buffer to pull the temporal samples from.
     uint sourceBufferIndex;
@@ -168,7 +168,7 @@ struct RTXDI_DITemporalResamplingParameters
 // The selectedLightSample parameter is used to update and return the selected sample; it's optional,
 // and it's safe to pass a null structure there and ignore the result.
 RTXDI_DIReservoir RTXDI_DITemporalResampling(
-    uvec2 pixelPosition,
+    uint2 pixelPosition,
     RAB_Surface surface,
     RTXDI_DIReservoir curSample,
     inout RAB_RandomSamplerState rng,
@@ -199,14 +199,14 @@ RTXDI_DIReservoir RTXDI_DITemporalResampling(
     RTXDI_CombineDIReservoirs(state, curSample, /* random = */ 0.5, curSample.targetPdf);
 
     // Backproject this pixel to last frame
-    vec3 motion = tparams.screenSpaceMotion;
+    float3 motion = tparams.screenSpaceMotion;
     
     if (!tparams.enablePermutationSampling)
     {
-        motion.xy += vec2(RAB_GetNextRandom(rng), RAB_GetNextRandom(rng)) - 0.5;
+        motion.xy += float2(RAB_GetNextRandom(rng), RAB_GetNextRandom(rng)) - 0.5;
     }
 
-    vec2 reprojectedSamplePosition = vec2(pixelPosition) + motion.xy;
+    float2 reprojectedSamplePosition = float2(pixelPosition) + motion.xy;
     int2 prevPos = int2(round(reprojectedSamplePosition));
 
     float expectedPrevLinearDepth = RAB_GetSurfaceLinearDepth(surface) + motion.z;
@@ -260,7 +260,7 @@ RTXDI_DIReservoir RTXDI_DITemporalResampling(
     {
         // Resample the previous frame sample into the current reservoir, but reduce the light's weight
         // according to the bilinear weight of the current pixel
-        uvec2 prevReservoirPos = RTXDI_PixelPosToReservoirPos(prevPos, params.activeCheckerboardField);
+        uint2 prevReservoirPos = RTXDI_PixelPosToReservoirPos(prevPos, params.activeCheckerboardField);
         RTXDI_DIReservoir prevSample = RTXDI_LoadDIReservoir(reservoirParams,
             prevReservoirPos, tparams.sourceBufferIndex);
         prevSample.M = min(prevSample.M, historyLimit);
@@ -407,7 +407,7 @@ struct RTXDI_DISpatialResamplingParameters
 // Can call this directly, or call RTXDI_SpatialResampling() with sparams.biasCorrectionMode 
 // set to RTXDI_BIAS_CORRECTION_PAIRWISE, which simply calls this function.
 RTXDI_DIReservoir RTXDI_DISpatialResamplingWithPairwiseMIS(
-    uvec2 pixelPosition,
+    uint2 pixelPosition,
     RAB_Surface centerSurface,
     RTXDI_DIReservoir centerSample,
     inout RAB_RandomSamplerState rng,
@@ -433,7 +433,7 @@ RTXDI_DIReservoir RTXDI_DISpatialResamplingWithPairwiseMIS(
     {
         // Get screen-space location of neighbor
         uint sampleIdx = (startIdx + i) & params.neighborOffsetMask;
-        int2 spatialOffset = int2(vec2(RTXDI_NEIGHBOR_OFFSETS_BUFFER[sampleIdx].xy) * sparams.samplingRadius);
+        int2 spatialOffset = int2(float2(RTXDI_NEIGHBOR_OFFSETS_BUFFER[sampleIdx].xy) * sparams.samplingRadius);
         int2 idx = int2(pixelPosition)+spatialOffset;
         idx = RAB_ClampSamplePositionIntoView(idx, false);
 
@@ -502,7 +502,7 @@ RTXDI_DIReservoir RTXDI_DISpatialResamplingWithPairwiseMIS(
 // The selectedLightSample parameter is used to update and return the selected sample; it's optional,
 // and it's safe to pass a null structure there and ignore the result.
 RTXDI_DIReservoir RTXDI_DISpatialResampling(
-    uvec2 pixelPosition,
+    uint2 pixelPosition,
     RAB_Surface centerSurface,
     RTXDI_DIReservoir centerSample,
     inout RAB_RandomSamplerState rng,
@@ -553,7 +553,7 @@ RTXDI_DIReservoir RTXDI_DISpatialResampling(
     {
         // Get screen-space location of neighbor
         uint sampleIdx = (startIdx + i) & params.neighborOffsetMask;
-        int2 spatialOffset = int2(vec2(RTXDI_NEIGHBOR_OFFSETS_BUFFER[sampleIdx].xy) * sparams.samplingRadius);
+        int2 spatialOffset = int2(float2(RTXDI_NEIGHBOR_OFFSETS_BUFFER[sampleIdx].xy) * sparams.samplingRadius);
         int2 idx = int2(pixelPosition) + spatialOffset;
 
         idx = RAB_ClampSamplePositionIntoView(idx, false);
@@ -573,7 +573,7 @@ RTXDI_DIReservoir RTXDI_DISpatialResampling(
         if (sparams.enableMaterialSimilarityTest && !RAB_AreMaterialsSimilar(centerSurface, neighborSurface))
             continue;
 
-        uvec2 neighborReservoirPos = RTXDI_PixelPosToReservoirPos(idx, params.activeCheckerboardField);
+        uint2 neighborReservoirPos = RTXDI_PixelPosToReservoirPos(idx, params.activeCheckerboardField);
 
         RTXDI_DIReservoir neighborSample = RTXDI_LoadDIReservoir(reservoirParams,
             neighborReservoirPos, sparams.sourceBufferIndex);
@@ -625,7 +625,7 @@ RTXDI_DIReservoir RTXDI_DISpatialResampling(
                 uint sampleIdx = (startIdx + i) & params.neighborOffsetMask;
 
                 // Get the screen-space location of our neighbor
-                int2 idx = int2(pixelPosition) + int2(vec2(RTXDI_NEIGHBOR_OFFSETS_BUFFER[sampleIdx].xy) * sparams.samplingRadius);
+                int2 idx = int2(pixelPosition) + int2(float2(RTXDI_NEIGHBOR_OFFSETS_BUFFER[sampleIdx].xy) * sparams.samplingRadius);
 
                 idx = RAB_ClampSamplePositionIntoView(idx, false);
 
@@ -650,7 +650,7 @@ RTXDI_DIReservoir RTXDI_DISpatialResampling(
                 }
 #endif
 
-                uvec2 neighborReservoirPos = RTXDI_PixelPosToReservoirPos(idx, params.activeCheckerboardField);
+                uint2 neighborReservoirPos = RTXDI_PixelPosToReservoirPos(idx, params.activeCheckerboardField);
 
                 RTXDI_DIReservoir neighborSample = RTXDI_LoadDIReservoir(reservoirParams,
                     neighborReservoirPos, sparams.sourceBufferIndex);
@@ -683,7 +683,7 @@ struct RTXDI_DISpatioTemporalResamplingParameters
     // Screen-space motion vector, computed as (previousPosition - currentPosition).
     // The X and Y components are measured in pixels.
     // The Z component is in linear depth units.
-    vec3 screenSpaceMotion;
+    float3 screenSpaceMotion;
 
     // The index of the reservoir buffer to pull the temporal samples from.
     uint sourceBufferIndex;
@@ -744,7 +744,7 @@ struct RTXDI_DISpatioTemporalResamplingParameters
 // Can call this directly, or call RTXDI_SpatioTemporalResampling() with sparams.biasCorrectionMode 
 // set to RTXDI_BIAS_CORRECTION_PAIRWISE, which simply calls this function.
 RTXDI_DIReservoir RTXDI_DISpatioTemporalResamplingWithPairwiseMIS(
-    uvec2 pixelPosition,
+    uint2 pixelPosition,
     RAB_Surface surface,
     RTXDI_DIReservoir curSample,
     inout RAB_RandomSamplerState rng,
@@ -757,12 +757,12 @@ RTXDI_DIReservoir RTXDI_DISpatioTemporalResamplingWithPairwiseMIS(
     uint historyLimit = min(RTXDI_PackedDIReservoir_MaxM, uint(stparams.maxHistoryLength * curSample.M));
 
     // Backproject this pixel to last frame
-    vec3 motion = stparams.screenSpaceMotion;
+    float3 motion = stparams.screenSpaceMotion;
     if (!stparams.enablePermutationSampling)
     {
-        motion.xy += vec2(RAB_GetNextRandom(rng), RAB_GetNextRandom(rng)) - 0.5;
+        motion.xy += float2(RAB_GetNextRandom(rng), RAB_GetNextRandom(rng)) - 0.5;
     }
-    int2 prevPos = int2(round(vec2(pixelPosition)+motion.xy));
+    int2 prevPos = int2(round(float2(pixelPosition)+motion.xy));
     float expectedPrevLinearDepth = RAB_GetSurfaceLinearDepth(surface) + motion.z;
 
     // Some default initializations
@@ -852,7 +852,7 @@ RTXDI_DIReservoir RTXDI_DISpatioTemporalResamplingWithPairwiseMIS(
     for (i = 1; i < numSpatialSamples; ++i)
     {
         uint sampleIdx = (startIdx + i) & params.neighborOffsetMask;
-        int2 spatialOffset = int2(vec2(RTXDI_NEIGHBOR_OFFSETS_BUFFER[sampleIdx].xy) * stparams.samplingRadius);
+        int2 spatialOffset = int2(float2(RTXDI_NEIGHBOR_OFFSETS_BUFFER[sampleIdx].xy) * stparams.samplingRadius);
         int2 idx = prevPos + spatialOffset;
 
         if (idx.x < 0 || idx.y < 0)
@@ -933,7 +933,7 @@ RTXDI_DIReservoir RTXDI_DISpatioTemporalResamplingWithPairwiseMIS(
 // The selectedLightSample parameter is used to update and return the selected sample; it's optional,
 // and it's safe to pass a null structure there and ignore the result.
 RTXDI_DIReservoir RTXDI_DISpatioTemporalResampling(
-    uvec2 pixelPosition,
+    uint2 pixelPosition,
     RAB_Surface surface,
     RTXDI_DIReservoir curSample,
     inout RAB_RandomSamplerState rng,
@@ -966,14 +966,14 @@ RTXDI_DIReservoir RTXDI_DISpatioTemporalResampling(
     uint startIdx = uint(RAB_GetNextRandom(rng) * params.neighborOffsetMask);
 
     // Backproject this pixel to last frame
-    vec3 motion = stparams.screenSpaceMotion;
+    float3 motion = stparams.screenSpaceMotion;
 
     if (!stparams.enablePermutationSampling)
     {
-        motion.xy += vec2(RAB_GetNextRandom(rng), RAB_GetNextRandom(rng)) - 0.5;
+        motion.xy += float2(RAB_GetNextRandom(rng), RAB_GetNextRandom(rng)) - 0.5;
     }
 
-    vec2 reprojectedSamplePosition = vec2(pixelPosition) + motion.xy;
+    float2 reprojectedSamplePosition = float2(pixelPosition) + motion.xy;
     int2 prevPos = int2(round(reprojectedSamplePosition));
 
     float expectedPrevLinearDepth = RAB_GetSurfaceLinearDepth(surface) + motion.z;
@@ -1049,7 +1049,7 @@ RTXDI_DIReservoir RTXDI_DISpatioTemporalResampling(
         else
         {
             uint sampleIdx = (startIdx + i) & params.neighborOffsetMask;
-            spatialOffset = int2(vec2(RTXDI_NEIGHBOR_OFFSETS_BUFFER[sampleIdx].xy) * stparams.samplingRadius);
+            spatialOffset = int2(float2(RTXDI_NEIGHBOR_OFFSETS_BUFFER[sampleIdx].xy) * stparams.samplingRadius);
 
             idx = prevPos + spatialOffset;
 
@@ -1073,7 +1073,7 @@ RTXDI_DIReservoir RTXDI_DISpatioTemporalResampling(
         
         cachedResult |= (1u << uint(i));
 
-        uvec2 neighborReservoirPos = RTXDI_PixelPosToReservoirPos(idx, params.activeCheckerboardField);
+        uint2 neighborReservoirPos = RTXDI_PixelPosToReservoirPos(idx, params.activeCheckerboardField);
 
         RTXDI_DIReservoir prevSample = RTXDI_LoadDIReservoir(reservoirParams,
             neighborReservoirPos, stparams.sourceBufferIndex);
@@ -1160,7 +1160,7 @@ RTXDI_DIReservoir RTXDI_DISpatioTemporalResampling(
                     // Get the screen-space location of our neighbor
                     int2 spatialOffset = (i == 0 && foundTemporalSurface) 
                         ? temporalSpatialOffset 
-                        : int2(vec2(RTXDI_NEIGHBOR_OFFSETS_BUFFER[sampleIdx].xy) * stparams.samplingRadius);
+                        : int2(float2(RTXDI_NEIGHBOR_OFFSETS_BUFFER[sampleIdx].xy) * stparams.samplingRadius);
                     int2 idx = prevPos + spatialOffset;
 
                     if (!(i == 0 && foundTemporalSurface))
@@ -1196,7 +1196,7 @@ RTXDI_DIReservoir RTXDI_DISpatioTemporalResampling(
                     }
 #endif
 
-                    uvec2 neighborReservoirPos = RTXDI_PixelPosToReservoirPos(idx, params.activeCheckerboardField);
+                    uint2 neighborReservoirPos = RTXDI_PixelPosToReservoirPos(idx, params.activeCheckerboardField);
 
                     RTXDI_DIReservoir prevSample = RTXDI_LoadDIReservoir(reservoirParams,
                         neighborReservoirPos, stparams.sourceBufferIndex);

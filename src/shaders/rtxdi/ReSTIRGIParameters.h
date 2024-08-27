@@ -17,10 +17,10 @@
 struct RTXDI_PackedGIReservoir
 {
 #ifdef __cplusplus
-    using vec3 = float[3];
+    using float3 = float[3];
 #endif
 
-    vec3      position;
+    float3      position;
     uint32_t    packed_miscData_age_M; // See Reservoir.hlsli about the detail of the bit field.
 
     uint32_t    packed_radiance;    // Stored as 32bit LogLUV format.

@@ -8,6 +8,7 @@ use context::*;
 mod camera;
 use camera::*;
 mod gltf;
+mod shader_params;
 mod pipelines;
 
 use memoffset::offset_of;
@@ -19,14 +20,16 @@ use model::*;
 
 use anyhow::Result;
 use ash::vk::{
-    self, AabbPositionsKHR, AccelerationStructureTypeKHR, BufferUsageFlags, GeometryTypeKHR,
-    Packed24_8, TransformMatrixKHR, KHR_SPIRV_1_4_NAME,
+    self, AabbPositionsKHR, AccelerationStructureTypeKHR, BufferUsageFlags, GeometryTypeKHR, ImageLayout, Packed24_8, TransformMatrixKHR, KHR_SPIRV_1_4_NAME
 };
 use gpu_allocator::MemoryLocation;
 
 use ash::Device;
 
 use glam::{vec3, Mat4, Vec3, Vec4};
+use pipelines::{create_render_recources, CalculateReservoirBufferParameters};
+use shader_params::{GConst, RTXDI_ReservoirBufferParameters, RTXDI_RuntimeParameters, ReSTIRGI_BufferIndices, ReSTIRGI_FinalShadingParameters, ReSTIRGI_Parameters, ReSTIRGI_SpatialResamplingParameters, ReSTIRGI_TemporalResamplingParameters};
+use simple_logger::SimpleLogger;
 use std::default::{self, Default};
 use std::ffi::{CStr, CString};
 use std::os::unix::thread;
@@ -45,19 +48,23 @@ use winit::{
     event_loop::{ControlFlow, EventLoop},
 };
 
+const NEIGHBOR_OFFSET_COUNT: u32 = 8;
+const RTXDI_RESERVOIR_BLOCK_SIZE: u32 = 16;
+
 fn main() {
     let model_thread =
-        std::thread::spawn(|| gltf::load_file("./src/models/sponza_scene.glb").unwrap());
+        std::thread::spawn(|| gltf::load_file("./src/models/box.glb").unwrap());
     let image_thread = std::thread::spawn(|| image::open("./src/models/skybox.exr").unwrap());
 
-    let device_extensions: [&CStr; 11] = [
+    SimpleLogger::new().init().unwrap();
+
+    let device_extensions: [&CStr; 10] = [
         swapchain::NAME,
         ray_tracing_pipeline::NAME,
         acceleration_structure::NAME,
         ash::ext::descriptor_indexing::NAME,
         ash::ext::scalar_block_layout::NAME,
         get_memory_requirements2::NAME,
-        buffer_device_address::NAME,
         deferred_host_operations::NAME,
         KHR_SPIRV_1_4_NAME,
         shader_float_controls::NAME,
@@ -121,74 +128,12 @@ fn main() {
     log::trace!("Starting Image Load");
     let image = image_thread.join().unwrap();
     let sky_box = Image::new_from_data(&mut ctx, image, vk::Format::R32G32B32A32_SFLOAT).unwrap();
-    let sky_box_sampler = unsafe { ctx.device.create_sampler(&sampler_info, None) }.unwrap();
+    ctx.transition_image_layout(&sky_box.image, ImageLayout::SHADER_READ_ONLY_OPTIMAL).unwrap();
     log::trace!("Starting Model");
     let model = model_thread.join().unwrap();
     let model = Model::from_gltf(&mut ctx, model).unwrap();
     log::trace!("Model Loaded");
 
-    let mut uniform_data = UniformData {
-        proj_inverse: camera.projection_matrix().inverse(),
-        view_inverse: camera.view_matrix().inverse(),
-    };
-
-    let uniform_buffer = ctx
-        .create_buffer(
-            vk::BufferUsageFlags::UNIFORM_BUFFER,
-            MemoryLocation::CpuToGpu,
-            size_of::<UniformData>() as u64,
-            Some("Uniform Buffer"),
-        )
-        .unwrap();
-    uniform_buffer
-        .copy_data_to_buffer(std::slice::from_ref(&uniform_data))
-        .unwrap();
-
-    let storage_images = {
-        (0..ctx.swapchain.images.len())
-            .map(|_| {
-                let image = Image::new_2d(
-                    &ctx.device,
-                    &mut ctx.allocator,
-                    vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::INPUT_ATTACHMENT,
-                    MemoryLocation::GpuOnly,
-                    vk::Format::R32G32B32A32_SFLOAT,
-                    window_size.width,
-                    window_size.height,
-                )
-                .unwrap();
-                let view = create_image_view(&ctx.device, &image, vk::Format::R32G32B32A32_SFLOAT);
-                Renderer::transition_image_layout_to_general(
-                    &ctx.device,
-                    &ctx.command_pool,
-                    &image,
-                    &ctx.graphics_queue,
-                )
-                .unwrap();
-                (view, image)
-            })
-            .collect::<Vec<(vk::ImageView, Image)>>()
-    };
-    let post_proccesing_pipeline =
-        create_post_proccesing_pipelien(&mut ctx, &storage_images).unwrap();
-
-    let present_frame_buffers = {
-        (0..ctx.swapchain.images.len())
-            .map(|i| unsafe {
-                ctx.device
-                    .create_framebuffer(
-                        &vk::FramebufferCreateInfo::default()
-                            .attachments(&[ctx.swapchain.images[i].view])
-                            .attachment_count(1)
-                            .height(window_size.height)
-                            .width(window_size.width)
-                            .render_pass(post_proccesing_pipeline.render_pass),
-                        None,
-                    )
-                    .unwrap()
-            })
-            .collect::<Vec<vk::Framebuffer>>()
-    };
 
     let model_mat = Mat4::from_scale(vec3(0.1, 0.1, 0.1));
     let tlas = {
@@ -228,8 +173,7 @@ fn main() {
             .primitive_offset(0)
             .transform_offset(0);
 
-        create_acceleration_structure(
-            &mut ctx,
+        ctx.create_acceleration_structure(
             AccelerationStructureTypeKHR::TOP_LEVEL,
             &[as_struct_geo],
             &[as_ranges],
@@ -237,70 +181,68 @@ fn main() {
         )
         .unwrap()
     };
+    
+    let renderer = create_render_recources(&mut ctx, &model, &tlas, sky_box.view).unwrap();
 
-    let shaders_create_info = [
-        RayTracingShaderCreateInfo {
-            source: &[(
-                &include_bytes!("./shaders/raygen.rgen.spv")[..],
-                vk::ShaderStageFlags::RAYGEN_KHR,
-            )],
-            group: RayTracingShaderGroup::RayGen,
-        },
-        RayTracingShaderCreateInfo {
-            source: &[(
-                &include_bytes!("./shaders/raymiss.rmiss.spv")[..],
-                vk::ShaderStageFlags::MISS_KHR,
-            )],
-            group: RayTracingShaderGroup::Miss,
-        },
-        RayTracingShaderCreateInfo {
-            source: &[(
-                &include_bytes!("./shaders/rayhit.rchit.spv")[..],
-                vk::ShaderStageFlags::CLOSEST_HIT_KHR,
-            )],
-            group: RayTracingShaderGroup::Hit,
-        },
-    ];
-    let pipeline = create_ray_tracing_pipeline(&ctx, &model, &shaders_create_info).unwrap();
-    let shader_binding_table = ctx.create_shader_binding_table(&pipeline).unwrap();
+    let view = camera.planar_view_constants();
 
-    let temporal_reservoir_buffers = [
-        ctx.create_buffer(
-            BufferUsageFlags::STORAGE_BUFFER,
-            MemoryLocation::GpuOnly,
-            (window_size.width * window_size.height * 100) as u64,
-            Some("Buffer"),
-        )
-        .unwrap(),
-        ctx.create_buffer(
-            BufferUsageFlags::STORAGE_BUFFER,
-            MemoryLocation::GpuOnly,
-            (window_size.width * window_size.height * 100) as u64,
-            Some("Buffer"),
-        )
-        .unwrap(),
-    ];
+    
+    let mut g_const = GConst {
+        view,
+        prevView: view,
+        restirGI: ReSTIRGI_Parameters {
+            bufferIndices: ReSTIRGI_BufferIndices { 
+                secondarySurfaceReSTIRDIOutputBufferIndex: 0, 
+                temporalResamplingInputBufferIndex: 0, 
+                temporalResamplingOutputBufferIndex: 0, 
+                spatialResamplingInputBufferIndex: 0, 
+                spatialResamplingOutputBufferIndex: 0, 
+                finalShadingInputBufferIndex: 0, 
+                pad1: 0, 
+                pad2: 0 
+            },
+            finalShadingParams: ReSTIRGI_FinalShadingParameters {
+                enableFinalMIS: 1,
+                enableFinalVisibility: 0,
+                pad1: 0,
+                pad2: 0,
+            },
+            reservoirBufferParams: CalculateReservoirBufferParameters(1920, 1080),
+            spatialResamplingParams: ReSTIRGI_SpatialResamplingParameters {
+                numSpatialSamples: 2,
+                spatialBiasCorrectionMode: 1,
+                spatialDepthThreshold: 0.1,
+                spatialNormalThreshold: 0.6,
+                spatialSamplingRadius: 32.0,
 
-    let (static_set, dynamic_set, dynamic_set2) = {
-        create_raytracing_descriptor_sets(
-            &mut ctx,
-            &pipeline,
-            &tlas,
-            &uniform_buffer,
-            &model,
-            &storage_images,
-            &mut vec![WriteDescriptorSet {
-                binding: 8,
-                kind: WriteDescriptorSetKind::CombinedImageSampler {
-                    view: sky_box.view,
-                    sampler: sky_box_sampler,
-                    layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-                },
-            }],
-            temporal_reservoir_buffers,
-        )
-        .unwrap()
+                pad1: 0,
+                pad2: 0,
+                pad3: 0,
+            },
+            temporalResamplingParams: ReSTIRGI_TemporalResamplingParameters { 
+                boilingFilterStrength: 0.2, 
+                depthThreshold: 0.1, 
+                enableBoilingFilter: 1, 
+                enableFallbackSampling: 1, 
+                enablePermutationSampling: 0, 
+                maxHistoryLength: 1000000, 
+                maxReservoirAge: 1000000, 
+                normalThreshold: 0.6, 
+                temporalBiasCorrectionMode: 0, 
+                uniformRandomNumber: rand::random(), 
+                pad2: 0,
+                pad3: 0, 
+            }
+        },
+        runtimeParams: RTXDI_RuntimeParameters { 
+            neighborOffsetMask: NEIGHBOR_OFFSET_COUNT - 1, 
+            activeCheckerboardField: 0, 
+            pad1: 0, 
+            pad2: 0, 
+        },
     };
+    renderer.uniform_buffer.copy_data_to_aligned_buffer(std::slice::from_ref(&g_const), 16).unwrap();
+
     let mut moved = false;
     let mut frame: u32 = 0;
     let mut now = Instant::now();
@@ -334,21 +276,17 @@ fn main() {
                         frame += 1;
                         let new_cam = camera.update(&controles, frame_time);
                         moved = new_cam != camera;
-                        if moved {
-                            camera = new_cam;
-                        }
-
-                        uniform_data.proj_inverse = camera.projection_matrix().inverse();
-                        uniform_data.view_inverse = camera.view_matrix().inverse();
-                        uniform_buffer
-                            .copy_data_to_buffer(std::slice::from_ref(&uniform_data))
-                            .unwrap();
-
                         camera = new_cam;
-
+                        
+                        let temp = g_const.view;
+                        g_const.view = camera.planar_view_constants();
+                        g_const.prevView = temp;
+                        
+                        renderer.uniform_buffer.copy_data_to_buffer(std::slice::from_ref(&g_const)).unwrap();
+                        
                         ctx.render(|ctx, i| {
                             let cmd = &ctx.cmd_buffs[i as usize];
-
+                            
                             unsafe {
                                 let frame_c = std::slice::from_raw_parts(
                                     &frame as *const u32 as *const u8,
@@ -359,14 +297,14 @@ fn main() {
 
                                 ctx.device.cmd_push_constants(
                                     *cmd,
-                                    pipeline.layout,
+                                    renderer.raytracing_pipeline.layout,
                                     vk::ShaderStageFlags::RAYGEN_KHR,
                                     0,
                                     &frame_c,
                                 );
                                 ctx.device.cmd_push_constants(
                                     *cmd,
-                                    pipeline.layout,
+                                    renderer.raytracing_pipeline.layout,
                                     vk::ShaderStageFlags::RAYGEN_KHR,
                                     size_of::<u32>() as u32,
                                     moved_c,
@@ -375,14 +313,12 @@ fn main() {
                                 ctx.device.cmd_bind_descriptor_sets(
                                     *cmd,
                                     vk::PipelineBindPoint::RAY_TRACING_KHR,
-                                    pipeline.layout,
+                                    renderer.raytracing_pipeline.layout,
                                     0,
                                     &[
-                                        static_set,
-                                        dynamic_set[i as usize],
-                                        dynamic_set[ctx.last_swapchain_image_index as usize],
-                                        dynamic_set2[(frame % 2) as usize],
-                                        dynamic_set2[1 - (frame % 2) as usize],
+                                        renderer.raytracing_pipeline.descriptor_set0,
+                                        renderer.raytracing_pipeline.descriptor_set1[(frame % 2) as usize],
+                                        renderer.raytracing_pipeline.descriptor_set2[1 - (frame % 2) as usize],
                                     ],
                                     &[],
                                 );
@@ -390,16 +326,43 @@ fn main() {
                                 ctx.device.cmd_bind_pipeline(
                                     *cmd,
                                     vk::PipelineBindPoint::RAY_TRACING_KHR,
-                                    pipeline.handle,
+                                    renderer.raytracing_pipeline.handle,
                                 );
 
                                 let call_region = vk::StridedDeviceAddressRegionKHR::default();
 
                                 ctx.ray_tracing.pipeline_fn.cmd_trace_rays(
                                     *cmd,
-                                    &shader_binding_table.raygen_region,
-                                    &shader_binding_table.miss_region,
-                                    &shader_binding_table.hit_region,
+                                    &renderer.shader_binding_table.raygen_region,
+                                    &renderer.shader_binding_table.miss_region,
+                                    &renderer.shader_binding_table.hit_region,
+                                    &call_region,
+                                    window_size.width,
+                                    window_size.height,
+                                    1,
+                                );
+
+                                let dependency_info = 
+
+                                ctx.device.cmd_pipeline_barrier2(*cmd, dependency_info);
+
+
+                                let handle_size = ctx.ray_tracing.pipeline_properties.shader_group_handle_size;
+                                let handle_alignment = ctx
+                                    .ray_tracing
+                                    .pipeline_properties
+                                    .shader_group_handle_alignment;
+                                let aligned_handle_size = alinged_size(handle_size, handle_alignment);
+
+                                let mut raygen_region2 = renderer.shader_binding_table.raygen_region;
+                                raygen_region2.device_address += aligned_handle_size as u64;
+
+
+                                ctx.ray_tracing.pipeline_fn.cmd_trace_rays(
+                                    *cmd,
+                                    &raygen_region2,
+                                    &renderer.shader_binding_table.miss_region,
+                                    &renderer.shader_binding_table.hit_region,
                                     &call_region,
                                     window_size.width,
                                     window_size.height,
@@ -407,8 +370,8 @@ fn main() {
                                 );
 
                                 let begin_info = vk::RenderPassBeginInfo::default()
-                                    .render_pass(post_proccesing_pipeline.render_pass)
-                                    .framebuffer(present_frame_buffers[i as usize])
+                                    .render_pass(renderer.post_proccesing_pipeline.render_pass)
+                                    .framebuffer(renderer.post_proccesing_pipeline.frame_buffers[i as usize])
                                     .render_area(vk::Rect2D {
                                         extent: vk::Extent2D {
                                             width: window_size.width,
@@ -448,19 +411,21 @@ fn main() {
                                 ctx.device.cmd_bind_pipeline(
                                     *cmd,
                                     vk::PipelineBindPoint::GRAPHICS,
-                                    post_proccesing_pipeline.pipeline,
+                                    renderer.post_proccesing_pipeline.pipeline,
                                 );
 
                                 ctx.device.cmd_bind_descriptor_sets(
                                     *cmd,
                                     vk::PipelineBindPoint::GRAPHICS,
-                                    post_proccesing_pipeline.layout,
+                                    renderer.post_proccesing_pipeline.layout,
                                     0,
-                                    &[post_proccesing_pipeline.descriptors[i as usize]],
+                                    &[
+                                        renderer.post_proccesing_pipeline.static_descriptor,
+                                        renderer.post_proccesing_pipeline.dynamic_descriptors[(frame % 2) as usize],
+                                    ],
                                     &[],
                                 );
                                 ctx.device.cmd_draw(*cmd, 6, 1, 0, 0);
-
                                 ctx.device.cmd_end_render_pass(*cmd);
                             }
                         })

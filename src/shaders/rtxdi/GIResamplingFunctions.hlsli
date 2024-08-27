@@ -64,17 +64,17 @@ void RTXDI_FinalizeGIResampling(
 }
 
 // Calculate the elements of the Jacobian to transform the sample's solid angle.
-void RTXDI_CalculatePartialJacobian(const vec3 recieverPos, const vec3 samplePos, const vec3 sampleNormal,
+void RTXDI_CalculatePartialJacobian(const float3 recieverPos, const float3 samplePos, const float3 sampleNormal,
     out float distanceToSurface, out float cosineEmissionAngle)
 {
-    vec3 vec = recieverPos - samplePos;
+    float3 vec = recieverPos - samplePos;
 
     distanceToSurface = length(vec);
     cosineEmissionAngle = saturate(dot(sampleNormal, vec / distanceToSurface));
 }
 
 // Calculates the full Jacobian for resampling neighborReservoir into a new receiver surface
-float RTXDI_CalculateJacobian(vec3 recieverPos, vec3 neighborReceiverPos, const RTXDI_GIReservoir neighborReservoir)
+float RTXDI_CalculateJacobian(float3 recieverPos, float3 neighborReceiverPos, const RTXDI_GIReservoir neighborReservoir)
 {
     // Calculate Jacobian determinant to adjust weight.
     // See Equation (11) in the ReSTIR GI paper.
@@ -95,9 +95,9 @@ float RTXDI_CalculateJacobian(vec3 recieverPos, vec3 neighborReceiverPos, const 
 // Creates a GI reservoir from a raw light sample.
 // Note: the original sample PDF can be embedded into sampleRadiance, in which case the samplePdf parameter should be set to 1.0.
 RTXDI_GIReservoir RTXDI_MakeGIReservoir(
-    const vec3 samplePos,
-    const vec3 sampleNormal,
-    const vec3 sampleRadiance,
+    const float3 samplePos,
+    const float3 sampleNormal,
+    const float3 sampleRadiance,
     const float samplePdf)
 {
     RTXDI_GIReservoir reservoir;
@@ -132,7 +132,7 @@ int2 RTXDI_CalculateTemporalResamplingOffset(int sampleIdx, int radius)
 int2 RTXDI_CalculateSpatialResamplingOffset(int sampleIdx, float radius, const uint neighborOffsetMask)
 {
     sampleIdx &= int(neighborOffsetMask);
-    return int2(vec2(RTXDI_NEIGHBOR_OFFSETS_BUFFER[sampleIdx].xy) * radius);
+    return int2(float2(RTXDI_NEIGHBOR_OFFSETS_BUFFER[sampleIdx].xy) * radius);
 }
 
 // A structure that groups the application-provided settings for spatio-temporal resampling.
@@ -141,7 +141,7 @@ struct RTXDI_GITemporalResamplingParameters
     // Screen-space motion vector, computed as (previousPosition - currentPosition).
     // The X and Y components are measured in pixels.
     // The Z component is in linear depth units.
-    vec3 screenSpaceMotion;
+    float3 screenSpaceMotion;
 
     // The index of the reservoir buffer to pull the temporal samples from.
     uint sourceBufferIndex;
@@ -184,7 +184,7 @@ struct RTXDI_GITemporalResamplingParameters
 
 // Temporal resampling for GI reservoir pass.
 RTXDI_GIReservoir RTXDI_GITemporalResampling(
-    const uvec2 pixelPosition,
+    const uint2 pixelPosition,
     const RAB_Surface surface,
     const RTXDI_GIReservoir inputReservoir,
     inout RAB_RandomSamplerState rng,
@@ -193,7 +193,7 @@ RTXDI_GIReservoir RTXDI_GITemporalResampling(
     const RTXDI_GITemporalResamplingParameters tparams)
 {
     // Backproject this pixel to last frame
-    int2 prevPos = int2(round(vec2(pixelPosition) + tparams.screenSpaceMotion.xy));
+    int2 prevPos = int2(round(float2(pixelPosition) + tparams.screenSpaceMotion.xy));
     const float expectedPrevLinearDepth = RAB_GetSurfaceLinearDepth(surface) + tparams.screenSpaceMotion.z;
     const int radius = (params.activeCheckerboardField == 0) ? 1 : 2;
 
@@ -258,7 +258,7 @@ RTXDI_GIReservoir RTXDI_GITemporalResampling(
         }
 
         // Read temporal reservoir.
-        uvec2 prevReservoirPos = RTXDI_PixelPosToReservoirPos(idx, params.activeCheckerboardField);
+        uint2 prevReservoirPos = RTXDI_PixelPosToReservoirPos(idx, params.activeCheckerboardField);
         temporalReservoir = RTXDI_LoadGIReservoir(reservoirParams, prevReservoirPos, tparams.sourceBufferIndex);
 
         // Check if the reservoir is a valid one.
@@ -389,7 +389,7 @@ struct RTXDI_GISpatialResamplingParameters
 };
 
 RTXDI_GIReservoir RTXDI_GISpatialResampling(
-    const uvec2 pixelPosition,
+    const uint2 pixelPosition,
     const RAB_Surface surface,
     const RTXDI_GIReservoir inputReservoir,
     inout RAB_RandomSamplerState rng,
@@ -445,7 +445,7 @@ RTXDI_GIReservoir RTXDI_GISpatialResampling(
             continue;
         }
 
-        const uvec2 neighborReservoirPos = RTXDI_PixelPosToReservoirPos(idx, params.activeCheckerboardField);
+        const uint2 neighborReservoirPos = RTXDI_PixelPosToReservoirPos(idx, params.activeCheckerboardField);
         RTXDI_GIReservoir neighborReservoir = RTXDI_LoadGIReservoir(reservoirParams, neighborReservoirPos, sparams.sourceBufferIndex);
 
         if (!RTXDI_IsValidGIReservoir(neighborReservoir))
@@ -487,7 +487,7 @@ RTXDI_GIReservoir RTXDI_GISpatialResampling(
 
         // If the GI reservoir has selected other than the initial sample, the position should be come from the previous frame.
         // However, there is no idea for the previous position of the initial GI reservoir, so it just uses the current position as its previous one.
-        // vec3 selectedPositionInPreviousFrame = curReservoir.position;
+        // float3 selectedPositionInPreviousFrame = curReservoir.position;
 
         // We need to walk our neighbors again
         for (int i = 0; i < numSamples; ++i)
@@ -505,7 +505,7 @@ RTXDI_GIReservoir RTXDI_GISpatialResampling(
             // Load our neighbor's G-buffer and its GI reservoir again.
             RAB_Surface neighborSurface = RAB_GetGBufferSurface(idx, false);
 
-            const uvec2 neighborReservoirPos = RTXDI_PixelPosToReservoirPos(idx, params.activeCheckerboardField);
+            const uint2 neighborReservoirPos = RTXDI_PixelPosToReservoirPos(idx, params.activeCheckerboardField);
             RTXDI_GIReservoir neighborReservoir = RTXDI_LoadGIReservoir(reservoirParams, neighborReservoirPos, sparams.sourceBufferIndex);
 
             // Get the PDF of the sample RIS selected in the first loop, above, *at this neighbor*
@@ -558,7 +558,7 @@ struct RTXDI_GISpatioTemporalResamplingParameters
     // Screen-space motion vector, computed as (previousPosition - currentPosition).
     // The X and Y components are measured in pixels.
     // The Z component is in linear depth units.
-    vec3 screenSpaceMotion;
+    float3 screenSpaceMotion;
 
     // The index of the reservoir buffer to pull the temporal and spatio-temporal samples from.
     // The first one is used as the source buffer for temporal filter, and the second one is used as the source of spatial filter.
@@ -609,7 +609,7 @@ struct RTXDI_GISpatioTemporalResamplingParameters
 };
 
 RTXDI_GIReservoir RTXDI_GISpatioTemporalResampling(
-    const uvec2 pixelPosition,
+    const uint2 pixelPosition,
     const RAB_Surface surface,
     RTXDI_GIReservoir inputReservoir,
     inout RAB_RandomSamplerState rng,
@@ -618,7 +618,7 @@ RTXDI_GIReservoir RTXDI_GISpatioTemporalResampling(
     const RTXDI_GISpatioTemporalResamplingParameters stparams)
 {
     // Backproject this pixel to last frame
-    int2 prevPos = int2(round(vec2(pixelPosition) + stparams.screenSpaceMotion.xy));
+    int2 prevPos = int2(round(float2(pixelPosition) + stparams.screenSpaceMotion.xy));
     const float expectedPrevLinearDepth = RAB_GetSurfaceLinearDepth(surface) + stparams.screenSpaceMotion.z;
 
     // The current reservoir.
@@ -730,7 +730,7 @@ RTXDI_GIReservoir RTXDI_GISpatioTemporalResampling(
             continue;
         }
 
-        const uvec2 neighborReservoirPos = RTXDI_PixelPosToReservoirPos(idx, params.activeCheckerboardField);
+        const uint2 neighborReservoirPos = RTXDI_PixelPosToReservoirPos(idx, params.activeCheckerboardField);
         RTXDI_GIReservoir neighborReservoir = RTXDI_LoadGIReservoir(reservoirParams, neighborReservoirPos, stparams.sourceBufferIndex);
 
         if (!RTXDI_IsValidGIReservoir(neighborReservoir))
@@ -786,7 +786,7 @@ RTXDI_GIReservoir RTXDI_GISpatioTemporalResampling(
 
         // If the GI reservoir has selected other than the initial sample, the position should be come from the previous frame.
         // However, there is no idea for the previous position of the initial GI reservoir, so it just uses the current position as its previous one.
-        // vec3 selectedPositionInPreviousFrame = curReservoir.position;
+        // float3 selectedPositionInPreviousFrame = curReservoir.position;
 
         // We need to walk our neighbors again
         for (int i = 0; i < totalSampleCount; ++i)
@@ -823,7 +823,7 @@ RTXDI_GIReservoir RTXDI_GISpatioTemporalResampling(
             // Load our neighbor's G-buffer and its GI reservoir again.
             RAB_Surface neighborSurface = RAB_GetGBufferSurface(idx, true);
 
-            const uvec2 neighborReservoirPos = RTXDI_PixelPosToReservoirPos(idx, params.activeCheckerboardField);
+            const uint2 neighborReservoirPos = RTXDI_PixelPosToReservoirPos(idx, params.activeCheckerboardField);
             RTXDI_GIReservoir neighborReservoir = RTXDI_LoadGIReservoir(reservoirParams, neighborReservoirPos, stparams.sourceBufferIndex);
 
             // Clamp history length
@@ -883,7 +883,7 @@ RTXDI_GIReservoir RTXDI_GISpatioTemporalResampling(
 
 // Same as RTXDI_BoilingFilter but for GI reservoirs.
 void RTXDI_GIBoilingFilter(
-    uvec2 LocalIndex,
+    uint2 LocalIndex,
     float filterStrength, // (0..1]
     inout RTXDI_GIReservoir reservoir)
 {

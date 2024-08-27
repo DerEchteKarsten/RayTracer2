@@ -26,6 +26,7 @@ struct Payload {
   	vec3 emission;
 	vec3 hitPoint;
 	vec3 hitNormal;
+	float depth;
 };
 
 const float tmin = 0.1;

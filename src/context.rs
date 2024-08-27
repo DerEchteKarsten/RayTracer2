@@ -2,7 +2,7 @@ use anyhow::Result;
 use ash::{
     ext::debug_utils,
     khr::{self, acceleration_structure, ray_tracing_pipeline},
-    vk::{self, ImageView},
+    vk::{self, ImageAspectFlags, ImageView},
     Device, Entry, Instance,
 };
 
@@ -16,11 +16,7 @@ use raw_window_handle::{
     HasRawDisplayHandle, HasRawWindowHandle, RawDisplayHandle, RawWindowHandle,
 };
 use std::{
-    borrow::BorrowMut,
-    ffi::{c_char, CStr, CString},
-    mem::{align_of, size_of, size_of_val},
-    os::raw::c_void,
-    time::Instant,
+    borrow::BorrowMut, ffi::{c_char, CStr, CString}, mem::{align_of, size_of, size_of_val}, os::raw::c_void, ptr, time::Instant
 };
 // use raw_window_handle::{RawDisplayHandle, RawWindowHandle};
 use simple_logger::SimpleLogger;
@@ -95,7 +91,7 @@ impl<'a> Renderer<'a> {
         window_handle: &dyn HasRawWindowHandle,
         display_handle: &dyn HasRawDisplayHandle,
         required_device_features: &DeviceFeatures,
-        device_extensions: [&CStr; 11],
+        device_extensions: [&CStr; 10],
         window_width: u32,
         window_height: u32,
     ) -> Result<Self> {
@@ -570,8 +566,9 @@ impl<'a> Renderer<'a> {
             begin_command_buffer(cmd, &self.device, None)?;
             (image_index, frame_index)
         };
-        func(self, image_index);
         self.frame = frame_index;
+        func(self, image_index);
+        self.last_frame = frame_index;
         let frame = &self.frames_in_flight[frame_index as usize];
         let cmd = &self.cmd_buffs[image_index as usize];
         unsafe { self.device.end_command_buffer(*cmd) }.unwrap();
@@ -592,7 +589,7 @@ impl<'a> Renderer<'a> {
                 .queue_submit2(self.graphics_queue, &[submit_info], frame.fence.handel)?;
         };
         // println!("{:?}", Instant::now().duration_since(last_time));
-
+        
         let rf = &[frame.render_finished];
         let sc = &[self.swapchain.vk_swapchain];
         let image_indices = vec![image_index];
@@ -835,6 +832,10 @@ impl<'a> Renderer<'a> {
             device_address: address,
         })
     }
+
+    pub fn transition_image_layout(&self, image: &Image, layout: vk::ImageLayout) -> Result<()>{
+        Renderer::transition_image_layout_to(&self.device, &self.command_pool, image, &self.graphics_queue, layout, ImageAspectFlags::COLOR)
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -949,7 +950,7 @@ impl ShaderBindingTable {
         let raygen_region = vk::StridedDeviceAddressRegionKHR::default()
             .device_address(address)
             .size(raygen_region_size as _)
-            .stride(raygen_region_size as _);
+            .stride(raygen_region_size as _); //REMINDER
 
         let miss_region = vk::StridedDeviceAddressRegionKHR::default()
             .device_address(address + raygen_region.size)
@@ -1232,6 +1233,8 @@ impl Image {
             mip_levls: 1,
         })
     }
+
+    
 
     pub fn new_from_data(
         renderer: &mut Renderer,
@@ -1861,6 +1864,11 @@ impl Buffer {
     }
 
     pub fn copy_data_to_buffer<T: Copy>(&self, data: &[T]) -> Result<()> {
+        self.copy_data_to_aligned_buffer(data, align_of::<T>() as _)
+    }
+
+
+    pub fn copy_data_to_aligned_buffer<T: Copy>(&self, data: &[T], alignment: u32) -> Result<()> {
         unsafe {
             let data_ptr = self
                 .allocation
@@ -1870,7 +1878,7 @@ impl Buffer {
                 .unwrap()
                 .as_ptr();
             let mut align =
-                ash::util::Align::new(data_ptr, align_of::<T>() as _, size_of_val(data) as _);
+                ash::util::Align::new(data_ptr, alignment as _, size_of_val(data) as _);
             align.copy_from_slice(data);
         };
 
@@ -1912,6 +1920,11 @@ fn new_device(
     };
     // let mut atomics = vk::PhysicalDeviceShaderAtomicFloatFeaturesEXT::default()
     //     .shader_buffer_float64_atomic_add(true);
+    let mut ray_tracing_feature = vk::PhysicalDeviceRayTracingPipelineFeaturesKHR::default()
+        .ray_tracing_pipeline(true);
+    let mut acceleration_struct_feature =
+        vk::PhysicalDeviceAccelerationStructureFeaturesKHR::default()
+        .acceleration_structure(true);
     let mut vulkan_12_features = vk::PhysicalDeviceVulkan12Features::default()
         .runtime_descriptor_array(true)
         .buffer_device_address(true)
@@ -1922,12 +1935,14 @@ fn new_device(
         .maintenance4(true)
         .synchronization2(true);
 
-    let features = vk::PhysicalDeviceFeatures::default().shader_int64(true);
+    let features = vk::PhysicalDeviceFeatures::default().shader_int64(true).fragment_stores_and_atomics(true);
 
     let mut features = vk::PhysicalDeviceFeatures2::default()
         .features(features)
         .push_next(&mut vulkan_12_features)
-        .push_next(&mut vulkan_13_features);
+        .push_next(&mut vulkan_13_features)
+        .push_next(&mut ray_tracing_feature)
+        .push_next(&mut acceleration_struct_feature);
     // .push_next(&mut atomics);
 
     let device_extensions_as_ptr = required_extensions
@@ -2037,13 +2052,14 @@ unsafe extern "system" fn vulkan_debug_callback(
     _: *mut c_void,
 ) -> vk::Bool32 {
     use vk::DebugUtilsMessageSeverityFlagsEXT as Flag;
-
-    let message = CStr::from_ptr((*p_callback_data).p_message);
-    match flag {
-        Flag::VERBOSE => log::info!("{:?} - {:?}", typ, message),
-        Flag::INFO => log::info!("{:?} - {:?}", typ, message),
-        Flag::WARNING => log::warn!("{:?} - {:?}", typ, message),
-        _ => log::error!("{:?} - {:?}", typ, message),
+    if p_callback_data != ptr::null() && (*p_callback_data).p_message != ptr::null() {
+        let message = CStr::from_ptr((*p_callback_data).p_message);
+        match flag {
+            Flag::VERBOSE => log::info!("{:?} - {:?}", typ, message),
+            Flag::INFO => log::info!("{:?} - {:?}", typ, message),
+            Flag::WARNING => log::warn!("{:?} - {:?}", typ, message),
+            _ => log::error!("{:?} - {:?}", typ, message),
+        }
     }
     vk::FALSE
 }

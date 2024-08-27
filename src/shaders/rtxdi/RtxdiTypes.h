@@ -19,12 +19,12 @@
 // Macros to compile HLSL code as GLSL
 #define int2 ivec2
 #define int3 ivec3
-#define uvec2 uvec2
+#define uint2 uvec2
 #define uint3 uvec3
-#define vec2 vec2
-#define vec3 vec3
-#define vec4 vec4
-#define vec3x3 mat3
+#define float2 vec2
+#define float3 vec3
+#define float4 vec4
+#define float3x3 mat3
 #define static
 #define atan2 atan
 #define sincos(x,s,c) {s=sin(x);c=cos(x);}

@@ -20,7 +20,7 @@ struct RTXDI_RISTileInfo
 void RTXDI_RandomlySelectLightDataFromRISTile(
     inout RAB_RandomSamplerState rng,
     RTXDI_RISTileInfo bufferInfo,
-    out uvec2 tileData,
+    out uint2 tileData,
     out uint risBufferPtr)
 {
     float rnd = RAB_GetNextRandom(rng);

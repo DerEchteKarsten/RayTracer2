@@ -9,6 +9,18 @@
 #extension GL_EXT_shader_explicit_arithmetic_types : enable
 #extension GL_GOOGLE_include_directive : enable
 
+layout( push_constant ) uniform Frame {
+	uint frame;
+	uint moved;
+} f;
+
+layout(binding = 0, set = 1, r32f) uniform image2D u_GBufferDepth;
+layout(binding = 1, set = 1, r32ui) uniform uimage2D u_GBufferNormals;
+layout(binding = 2, set = 1, r32ui) uniform uimage2D u_GBufferGeoNormals;
+layout(binding = 3, set = 1, r32ui) uniform uimage2D u_GBufferDiffuseAlbedo;
+layout(binding = 4, set = 1, r32ui) uniform uimage2D u_GBufferSpecularRough;
+layout(binding = 5, set = 1, rgba32f) uniform image2D u_MotionVectors;
+
 #include "common.glsl"
 layout(location = 0) rayPayloadEXT Payload p;
 #define RTXDI_ENABLE_PRESAMPLING 0
@@ -18,17 +30,6 @@ layout(location = 0) rayPayloadEXT Payload p;
 #include "rtxdi/InitialSamplingFunctions.hlsli"
 #include "rtxdi/GIResamplingFunctions.hlsli"
 
-layout( push_constant ) uniform Frame {
-	uint frame;
-	uint moved;
-} f;
-
-layout(binding = 0, set = 1, r32f) uniform writeonly image2D u_GBufferDepth;
-layout(binding = 1, set = 1, r32ui) uniform writeonly uimage2D u_GBufferNormals;
-layout(binding = 2, set = 1, r32ui) uniform writeonly uimage2D u_GBufferGeoNormals;
-layout(binding = 3, set = 1, r32ui) uniform writeonly uimage2D u_GBufferDiffuseAlbedo;
-layout(binding = 4, set = 1, r32ui) uniform writeonly uimage2D u_GBufferSpecularRough;
-layout(binding = 5, set = 1, rgba32f) uniform writeonly image2D u_MotionVectors;
 
 vec2 octWrap(vec2 v)
 {
@@ -49,12 +50,12 @@ uint ndirToOctUnorm32(vec3 n)
     return uint(p.x * 0xfffe) | (uint(p.y * 0xfffe) << 16);
 }
 
+const float EMISSION_STREANGTH = 100.0;
+
 void main() 
 {	
 	ivec2 size = ivec2(gl_LaunchSizeEXT.xy);
 	ivec2 pixelCord = ivec2(gl_LaunchIDEXT.xy);
-
-    const RTXDI_LightBufferParameters lightBufferParams = g_Const.lightBufferParams;
 
     PrimarySurfaceOutput primary = TracePrimaryRay(pixelCord);
 
@@ -67,13 +68,15 @@ void main()
 
     RTXDI_GIReservoir reservoir;
 
+    vec3 emission = p.emission *EMISSION_STREANGTH;
+
     if (RAB_IsSurfaceValid(primary.surface))
     {
         RAB_RandomSamplerState rng = RAB_InitRandomSampler(pixelCord, 1);
         
         RayDesc ray;
         ray.TMin = tmin;
-        ray.TMax = tmax;
+        ray.TMax = BACKGROUND_DEPTH;
         ray.Origin = primary.surface.worldPos;
         vec3 dir; 
         RAB_GetSurfaceBrdfSample(primary.surface, rng, dir);
@@ -84,12 +87,9 @@ void main()
         float overall_PDF = RAB_GetSurfaceBrdfPdf(primary.surface, dir);
 
         if(RAB_IsSurfaceValid(secondarySurface)) {
-            reservoir = RTXDI_MakeGIReservoir(secondarySurface.worldPos,
-                    secondarySurface.geoNormal, vec3(0.0), overall_PDF);
-            
             RayDesc ray;
             ray.TMin = tmin;
-            ray.TMax = tmax;
+            ray.TMax = BACKGROUND_DEPTH;
             ray.Origin = secondarySurface.worldPos;
             vec3 dir; 
             RAB_GetSurfaceBrdfSample(secondarySurface, rng, dir);
@@ -97,18 +97,25 @@ void main()
             trace(ray);
             
             if(!p.missed) {
-                reservoir.radiance = vec3(0.0);
+                SplitBrdf brdf = EvaluateBrdf(secondarySurface, p.hitPoint);
+
+                vec3 diffuse = brdf.demodulatedDiffuse * p.emission * EMISSION_STREANGTH;
+                vec3 specular = brdf.specular * p.emission * EMISSION_STREANGTH;
+                
+                reservoir = RTXDI_MakeGIReservoir(secondarySurface.worldPos,
+                    secondarySurface.geoNormal, diffuse + specular + emission, overall_PDF);
             }else {
                 SplitBrdf brdf = EvaluateBrdf(secondarySurface, ray.Origin + ray.Direction * BACKGROUND_DEPTH);
 
                 vec3 diffuse = brdf.demodulatedDiffuse * p.color.rgb; // used for skybox radiance
                 vec3 specular = brdf.specular * p.color.rgb; // used for skybox radiance
 
-                reservoir.radiance = diffuse + specular;
+                reservoir = RTXDI_MakeGIReservoir(secondarySurface.worldPos,
+                    secondarySurface.geoNormal, diffuse + specular + emission, overall_PDF);
             }
         }else {
             reservoir = RTXDI_MakeGIReservoir(ray.Origin + ray.Direction * BACKGROUND_DEPTH,
-                -ray.Direction, p.color.rgb, overall_PDF);
+                -ray.Direction, p.color.rgb + emission, overall_PDF);
         }
     }
     else

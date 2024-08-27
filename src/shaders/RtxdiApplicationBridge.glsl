@@ -1,4 +1,3 @@
-
 #ifndef RTXDI_APPLICATION_BRIDGE_HLSLI
 #define RTXDI_APPLICATION_BRIDGE_HLSLI
 
@@ -7,7 +6,6 @@
 #include "Helpers.glsl"
 #include "packing.glsl"
 #include "rtxdi/ReSTIRGIParameters.h"
-
 
 layout(binding = 0, set = 0) uniform accelerationStructureEXT SceneBVH;
 layout(binding = 1, set = 0) uniform Uniform {ResamplingConstants g_Const;};
@@ -20,9 +18,13 @@ layout(binding = 2, set = 2, r32ui) uniform readonly uimage2D t_PrevGBufferGeoNo
 layout(binding = 3, set = 2, r32ui) uniform readonly uimage2D t_PrevGBufferDiffuseAlbedo;
 layout(binding = 4, set = 2, r32ui) uniform readonly uimage2D t_PrevGBufferSpecularRough;
 
-
 #define RTXDI_GI_RESERVOIR_BUFFER reservoirs
 #include "rtxdi/GIReservoir.hlsli"
+
+struct RAB_LightInfo
+{
+    float _;
+};
 
 RTXDI_PackedDIReservoir light_reservoirs[1];
 RAB_LightInfo t_LightDataBuffer[1];
@@ -31,47 +33,10 @@ RAB_LightInfo t_LightDataBuffer[1];
 #define RTXDI_LIGHT_RESERVOIR_BUFFER light_reservoirs
 
 
-const float kMinRoughness = 0.05f;
 
+#include "finalShadingHelpers.glsl"
 
 // A surface with enough information to evaluate BRDFs
-struct RAB_Surface
-{
-    vec3 worldPos;
-    vec3 viewDir;
-    float viewDepth;
-    vec3 normal;
-    vec3 geoNormal;
-    vec3 diffuseAlbedo;
-    vec3 specularF0;
-    float roughness;
-    float diffuseProbability;
-};
-
-float Schlick_Fresnel(float F0, float VdotH)
-{
-    return F0 + (1 - F0) * pow(max(1 - VdotH, 0), 5);
-}
-
-vec3 Schlick_Fresnel(vec3 F0, float VdotH)
-{
-    return F0 + (1 - F0) * pow(max(1 - VdotH, 0), 5);
-}
-
-float getSurfaceDiffuseProbability(RAB_Surface surface)
-{
-    float diffuseWeight = calcLuminance(surface.diffuseAlbedo);
-    float specularWeight = calcLuminance(Schlick_Fresnel(surface.specularF0, dot(surface.viewDir, surface.normal)));
-    float sumWeights = diffuseWeight + specularWeight;
-    return sumWeights < 1e-7f ? 1.f : (diffuseWeight / sumWeights);
-}
-
-RAB_Surface RAB_EmptySurface()
-{
-    RAB_Surface surface;
-    surface.viewDepth = BACKGROUND_DEPTH;
-    return surface;
-}
 
 
 struct RAB_LightSample
@@ -84,7 +49,7 @@ struct RAB_LightSample
 
 RAB_LightInfo RAB_EmptyLightInfo()
 {
-    return RAB_LightInfo(vec3(0), 0, uvec2(0), 0 ,0);
+    return RAB_LightInfo(0.0);
 }
 
 RAB_LightSample RAB_EmptyLightSample()
@@ -126,7 +91,7 @@ float RAB_EvaluateEnvironmentMapSamplingPdf(vec3 L)
 float RAB_EvaluateLocalLightSourcePdf(uint lightIndex)
 {
     // Uniform pdf
-    return 1.0 / g_Const.lightBufferParams.localLightBufferRegion.numLights;
+    return 0.0;//1.0 / g_Const.lightBufferParams.localLightBufferRegion.numLights;
 }
 
 RayDesc setupVisibilityRay(RAB_Surface surface, RAB_LightSample lightSample)
@@ -163,7 +128,7 @@ bool RAB_GetConservativeVisibility(RAB_Surface surface, vec3 pos)
 {
     RayDesc ray;
     ray.TMin = 0.0001;
-    ray.TMax = 1000000.0;
+    ray.TMax = 100000.0;
     ray.Direction = normalize(pos - surface.worldPos);
     ray.Origin = surface.worldPos;
 
@@ -191,37 +156,12 @@ ivec2 RAB_ClampSamplePositionIntoView(ivec2 pixelPosition, bool previousFrame)
     return clamp(pixelPosition, ivec2(0), ivec2(g_Const.view.viewportSize) - 1);
 }
 
-vec3 octToNdirSigned(vec2 p)
-{
-    // https://twitter.com/Stubbesaurus/status/937994790553227264
-    vec3 n = vec3(p.x, p.y, 1.0 - abs(p.x) - abs(p.y));
-    float t = max(0, -n.z);
-
-    n.xy += (n.x >= 0.0 || n.y >= 0.0) ? -t : t;
-    return normalize(n);
-}
-
-vec3 octToNdirUnorm32(uint pUnorm)
-{
-    vec2 p;
-    p.x = clamp(float(pUnorm & 0xffff) / float(0xfffel), 0, 1);
-    p.y = clamp(float(pUnorm >> 16) / float(0xfffel), 0, 1);
-    p = p * 2.0 - 1.0;
-    return octToNdirSigned(p);
-}
-
-// Load a sample from the previous G-buffer.
-RAB_Surface RAB_GetGBufferSurface(ivec2 pixelPosition, bool previousFrame)
+RAB_Surface GetPrevGBufferSurface(
+    ivec2 pixelPosition, 
+    PlanarViewConstants view
+)
 {
     RAB_Surface surface = RAB_EmptySurface();
-
-    // We do not have access to the current G-buffer in this sample because it's using
-    // a single render pass with a fused resampling kernel, so just return an invalid surface.
-    // This should never happen though, as the fused kernel doesn't call RAB_GetGBufferSurface(..., false)
-    if (!previousFrame)
-        return surface;
-
-    const PlanarViewConstants view = g_Const.prevView;
 
     if (pixelPosition.x >= view.viewportSize.x || pixelPosition.y >= view.viewportSize.y)
         return surface;
@@ -238,10 +178,29 @@ RAB_Surface RAB_GetGBufferSurface(ivec2 pixelPosition, bool previousFrame)
     surface.specularF0 = specularRough.rgb;
     surface.roughness = specularRough.a;
     surface.worldPos = viewDepthToWorldPos(view, pixelPosition, surface.viewDepth);
-    surface.viewDir = normalize(g_Const.view.cameraDirectionOrPosition.xyz - surface.worldPos);
+    surface.viewDir = normalize(view.cameraDirectionOrPosition.xyz - surface.worldPos);
     surface.diffuseProbability = getSurfaceDiffuseProbability(surface);
 
     return surface;
+}
+
+
+RAB_Surface RAB_GetGBufferSurface(int2 pixelPosition, bool previousFrame)
+{
+    if(previousFrame)
+    {
+        return GetPrevGBufferSurface(
+            pixelPosition,
+            g_Const.prevView
+        );
+    }
+    else
+    {
+        return GetGBufferSurface(
+            pixelPosition, 
+            g_Const.view
+        );
+    }
 }
 
 bool RAB_IsSurfaceValid(RAB_Surface surface)
@@ -305,7 +264,7 @@ vec3 tangentToWorld(RAB_Surface surface, vec3 h)
 
 RAB_RandomSamplerState RAB_InitRandomSampler(uvec2 index, uint pass)
 {
-    return initRandomSampler(index, g_Const.frameIndex + pass * 13);
+    return initRandomSampler(index, f.frame + pass * 13);
 }
 
 float RAB_GetNextRandom(inout RAB_RandomSamplerState rng)
@@ -370,8 +329,6 @@ bool RAB_GetSurfaceBrdfSample(RAB_Surface surface, inout RAB_RandomSamplerState 
     return dot(surface.normal, dir) > 0.f;
 }
 
-#define square(a) a * a
-
 float ImportanceSampleGGX_VNDF_PDF(float roughness, vec3 N, vec3 V, vec3 L)
 {
     vec3 H = normalize(L + V);
@@ -391,41 +348,6 @@ float RAB_GetSurfaceBrdfPdf(RAB_Surface surface, vec3 dir)
     float specularPdf = ImportanceSampleGGX_VNDF_PDF(max(surface.roughness, kMinRoughness), surface.normal, surface.viewDir, dir);
     float pdf = cosTheta > 0.f ? mix(specularPdf, diffusePdf, surface.diffuseProbability) : 0.f;
     return pdf;
-}
-
-float Lambert(vec3 normal, vec3 lightIncident)
-{
-    return max(0, -dot(normal, lightIncident)) / RTXDI_PI;
-}
-
-float G_Smith_over_NdotV(float roughness, float NdotV, float NdotL)
-{
-    float alpha = square(roughness);
-    float g1 = NdotV * sqrt(square(alpha) + (1.0 - square(alpha)) * square(NdotL));
-    float g2 = NdotL * sqrt(square(alpha) + (1.0 - square(alpha)) * square(NdotV));
-    return 2.0 * NdotL / (g1 + g2);
-}
-
-vec3 GGX_times_NdotL(vec3 V, vec3 L, vec3 N, float roughness, vec3 F0)
-{
-    vec3 H = normalize(L + V);
-
-    float NoL = saturate(dot(N, L));
-    float VoH = saturate(dot(V, H));
-    float NoV = saturate(dot(N, V));
-    float NoH = saturate(dot(N, H));
-
-    if (NoL > 0)
-    {
-        float G = G_Smith_over_NdotV(roughness, NoV, NoL);
-        float alpha = square(roughness);
-        float D = square(alpha) / (RTXDI_PI * square(square(NoH) * square(alpha) + (1 - square(NoH))));
-
-        vec3 F = Schlick_Fresnel(F0, VoH);
-
-        return F * (D * G / 4);
-    }
-    return vec3(0);
 }
 
 // Evaluate the surface BRDF and compute the weighted reflected radiance for the given light sample
@@ -527,27 +449,6 @@ bool RAB_ValidateGISampleWithJacobian(inout float jacobian)
     return true;
 }
 
-
-struct SplitBrdf
-{
-    float demodulatedDiffuse;
-    vec3 specular;
-};
-
-SplitBrdf EvaluateBrdf(RAB_Surface surface, vec3 samplePosition)
-{
-    vec3 N = surface.normal;
-    vec3 V = surface.viewDir;
-    vec3 L = normalize(samplePosition - surface.worldPos);
-
-    SplitBrdf brdf;
-    brdf.demodulatedDiffuse = Lambert(surface.normal, -L);
-    if (surface.roughness == 0)
-        brdf.specular = vec3(0);
-    else
-        brdf.specular = GGX_times_NdotL(V, L, surface.normal, max(surface.roughness, kMinRoughness), surface.specularF0);
-    return brdf;
-}
 
 
 // Computes the weight of the given GI sample when the given surface is shaded using that GI sample.

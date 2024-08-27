@@ -4,33 +4,34 @@ use glam::Vec2;
 use gpu_allocator::MemoryLocation;
 
 use std::ffi::CString;
+use std::mem::size_of;
 use std::{array::from_ref, default::Default};
 
+use crate::shader_params::{GConst, RTXDI_ReservoirBufferParameters};
 use crate::{
-    allocate_descriptor_set, allocate_descriptor_sets, create_descriptor_pool,
-    create_descriptor_set_layout, module_from_bytes, update_descriptor_sets, AccelerationStructure,
-    Buffer, Image, ImageAndView, Model, RayTracingShaderGroupInfo, Renderer, WriteDescriptorSet,
-    WriteDescriptorSetKind, FRAMES_IN_FLIGHT,
+    allocate_descriptor_set, allocate_descriptor_sets, create_descriptor_pool, create_descriptor_set_layout, module_from_bytes, update_descriptor_sets, AccelerationStructure, Buffer, Image, ImageAndView, Model, RayTracingShaderGroupInfo, Renderer, ShaderBindingTable, WriteDescriptorSet, WriteDescriptorSetKind, FRAMES_IN_FLIGHT, NEIGHBOR_OFFSET_COUNT, RTXDI_RESERVOIR_BLOCK_SIZE
 };
 
-struct GBuffer {
-    depth: ImageAndView,
-    normal: ImageAndView,
-    geo_normals: ImageAndView,
-    diffuse_albedo: ImageAndView,
-    specular_rough: ImageAndView,
-    motion_vectors: ImageAndView,
+pub struct GBuffer {
+    pub depth: ImageAndView,
+    pub normal: ImageAndView,
+    pub geo_normals: ImageAndView,
+    pub diffuse_albedo: ImageAndView,
+    pub specular_rough: ImageAndView,
+    pub motion_vectors: ImageAndView,
 }
 
-struct RendererResources {
+pub struct RendererResources {
     pub raytracing_pipeline: RayTracingPipeline,
     pub post_proccesing_pipeline: PostProccesingPipeline,
     pub g_buffer: Vec<GBuffer>,
     pub reservoirs: Buffer,
     pub neighbors: Buffer,
+    pub shader_binding_table: ShaderBindingTable,
+    pub uniform_buffer: Buffer,
 }
 
-struct PostProccesingPipeline {
+pub struct PostProccesingPipeline {
     pub pipeline: vk::Pipeline,
     pub layout: vk::PipelineLayout,
     pub dynamic_descriptors: Vec<vk::DescriptorSet>,
@@ -41,6 +42,7 @@ struct PostProccesingPipeline {
 }
 
 pub struct RayTracingPipeline {
+    pub shader_group_info: RayTracingShaderGroupInfo,
     pub layout: vk::PipelineLayout,
     pub handle: vk::Pipeline,
     pub descriptor_set0: vk::DescriptorSet,
@@ -232,7 +234,7 @@ fn create_post_proccesing_pipelien(
 
     let pool_sizes = [
         vk::DescriptorPoolSize::default()
-            .descriptor_count(6)
+            .descriptor_count(6 * 2)
             .ty(vk::DescriptorType::STORAGE_IMAGE),
         vk::DescriptorPoolSize::default()
             .descriptor_count(1)
@@ -250,7 +252,7 @@ fn create_post_proccesing_pipelien(
         allocate_descriptor_sets(&ctx.device, &descriptor_pool, &dynamic_layout, 2)?;
 
     let static_descriptor =
-        allocate_descriptor_set(&ctx.device, &descriptor_pool, &dynamic_layout)?;
+        allocate_descriptor_set(&ctx.device, &descriptor_pool, &static_layout)?;
 
     let writes = [
         WriteDescriptorSet {
@@ -332,8 +334,8 @@ fn create_post_proccesing_pipelien(
         let frame_buffer_create_info = vk::FramebufferCreateInfo::default()
             .attachments(&attachments)
             .layers(1)
-            .width(1080)
-            .height(1920)
+            .width(1920)
+            .height(1080)
             .render_pass(render_pass)
             .attachment_count(1);
         let frame_buffer = unsafe {
@@ -398,7 +400,7 @@ fn create_ray_tracing_pipeline(
             .binding(3)
             .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
             .descriptor_count(1)
-            .stage_flags(vk::ShaderStageFlags::INTERSECTION_KHR),
+            .stage_flags(vk::ShaderStageFlags::INTERSECTION_KHR | vk::ShaderStageFlags::RAYGEN_KHR),
         vk::DescriptorSetLayoutBinding::default()
             .binding(4)
             .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
@@ -431,32 +433,32 @@ fn create_ray_tracing_pipeline(
             .binding(0)
             .descriptor_count(1)
             .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
-            .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+            .stage_flags(vk::ShaderStageFlags::RAYGEN_KHR),
         vk::DescriptorSetLayoutBinding::default()
             .binding(1)
             .descriptor_count(1)
             .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
-            .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+            .stage_flags(vk::ShaderStageFlags::RAYGEN_KHR),
         vk::DescriptorSetLayoutBinding::default()
             .binding(2)
             .descriptor_count(1)
             .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
-            .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+            .stage_flags(vk::ShaderStageFlags::RAYGEN_KHR),
         vk::DescriptorSetLayoutBinding::default()
             .binding(3)
             .descriptor_count(1)
             .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
-            .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+            .stage_flags(vk::ShaderStageFlags::RAYGEN_KHR),
         vk::DescriptorSetLayoutBinding::default()
             .binding(4)
             .descriptor_count(1)
             .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
-            .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+            .stage_flags(vk::ShaderStageFlags::RAYGEN_KHR),
         vk::DescriptorSetLayoutBinding::default()
             .binding(5)
             .descriptor_count(1)
             .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
-            .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+            .stage_flags(vk::ShaderStageFlags::RAYGEN_KHR),
     ];
 
     let static_dsl = ctx.create_descriptor_set_layout(&static_layout_bindings, &[])?;
@@ -567,13 +569,13 @@ fn create_ray_tracing_pipeline(
             .descriptor_count(1),
         vk::DescriptorPoolSize::default()
             .ty(vk::DescriptorType::STORAGE_IMAGE)
-            .descriptor_count(6),
+            .descriptor_count(6 * 4),
         vk::DescriptorPoolSize::default()
             .ty(vk::DescriptorType::UNIFORM_BUFFER)
             .descriptor_count(1),
         vk::DescriptorPoolSize::default()
             .ty(vk::DescriptorType::STORAGE_BUFFER)
-            .descriptor_count(6),
+            .descriptor_count(5),
         vk::DescriptorPoolSize::default()
             .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
             .descriptor_count((model.images.len() as u32) + 1),
@@ -590,12 +592,6 @@ fn create_ray_tracing_pipeline(
             binding: 0,
             kind: WriteDescriptorSetKind::AccelerationStructure {
                 acceleration_structure: top_as.handle,
-            },
-        },
-        WriteDescriptorSet {
-            binding: 1,
-            kind: WriteDescriptorSetKind::UniformBuffer {
-                buffer: uniform_buffer.inner,
             },
         },
         WriteDescriptorSet {
@@ -628,9 +624,23 @@ fn create_ray_tracing_pipeline(
                 buffer: model.geometry_info_buffer.inner,
             },
         },
+        WriteDescriptorSet {
+            binding: 8,
+            kind: WriteDescriptorSetKind::CombinedImageSampler { view: *skybox_view, sampler: *skybox_sampler, layout: ImageLayout::SHADER_READ_ONLY_OPTIMAL },
+        },
     ];
 
     update_descriptor_sets(ctx, &static_set, &writes);
+
+    let write = [
+        WriteDescriptorSet {
+            binding: 1,
+            kind: WriteDescriptorSetKind::UniformBuffer {
+                buffer: uniform_buffer.inner,
+            },
+        },
+    ];
+    update_descriptor_sets(ctx, &static_set, &write);
 
     for i in 0..2 {
         let writes = [
@@ -677,7 +687,8 @@ fn create_ray_tracing_pipeline(
                 },
             },
         ];
-        update_descriptor_sets(ctx, &dynamic_sets[i], &writes);
+        update_descriptor_sets(ctx, &dynamic_sets[i], &writes);        
+        update_descriptor_sets(ctx, &dynamic_sets2[i], &writes);
     }
 
     for (i, (image_index, sampler_index)) in model.textures.iter().enumerate() {
@@ -707,6 +718,7 @@ fn create_ray_tracing_pipeline(
         descriptor_set0: static_set,
         descriptor_set1: dynamic_sets,
         descriptor_set2: dynamic_sets2,
+        shader_group_info,
     })
 }
 
@@ -735,11 +747,8 @@ fn fill_neighbor_offset_buffer(neighbor_offset_count: u32) -> Vec<u8> {
     buffer
 }
 
-struct GConst {
-    //TODO
-}
 
-fn create_render_recources(ctx: &mut Renderer, model: &Model, top_as: &AccelerationStructure, skybox_view: vk::ImageView) -> Result<RendererResources> {
+pub fn create_render_recources(ctx: &mut Renderer, model: &Model, top_as: &AccelerationStructure, skybox_view: vk::ImageView) -> Result<RendererResources> {
     let sampler_create_info: vk::SamplerCreateInfo = vk::SamplerCreateInfo {
         mag_filter: vk::Filter::NEAREST,
         min_filter: vk::Filter::NEAREST,
@@ -753,10 +762,10 @@ fn create_render_recources(ctx: &mut Renderer, model: &Model, top_as: &Accelerat
         ..Default::default()
     };
 
-    let skybox_sampler = unsafe { ctx.device.create_sampler(&sampler_create_info, None)? };
+    let skybox_sampler = unsafe { ctx.device.create_sampler(&sampler_create_info, None).unwrap() };
 
-    let width = 1020;
-    let height = 1920;
+    let width = 1920;
+    let height = 1080;
 
     let mut g_buffer = vec![];
     for i in 0..2 {
@@ -766,8 +775,9 @@ fn create_render_recources(ctx: &mut Renderer, model: &Model, top_as: &Accelerat
             vk::Format::R32_SFLOAT,
             width,
             height,
-        )?;
-        let depth_image_view = ctx.create_image_view(&depth_image)?;
+        ).unwrap();
+        Renderer::transition_image_layout_to_general(&ctx.device, &ctx.command_pool, &depth_image, &ctx.graphics_queue).unwrap();
+        let depth_image_view = ctx.create_image_view(&depth_image).unwrap();
 
         let normal_image = ctx.create_image(
             vk::ImageUsageFlags::STORAGE,
@@ -775,8 +785,10 @@ fn create_render_recources(ctx: &mut Renderer, model: &Model, top_as: &Accelerat
             vk::Format::R32_UINT,
             width,
             height,
-        )?;
-        let normal_image_view = ctx.create_image_view(&depth_image)?;
+        ).unwrap();
+        Renderer::transition_image_layout_to_general(&ctx.device, &ctx.command_pool, &normal_image, &ctx.graphics_queue).unwrap();
+        let normal_image_view = ctx.create_image_view(&normal_image).unwrap();
+
 
         let geo_normal_image = ctx.create_image(
             vk::ImageUsageFlags::STORAGE,
@@ -784,8 +796,9 @@ fn create_render_recources(ctx: &mut Renderer, model: &Model, top_as: &Accelerat
             vk::Format::R32_UINT,
             width,
             height,
-        )?;
-        let geo_normal_image_view = ctx.create_image_view(&depth_image)?;
+        ).unwrap();
+        Renderer::transition_image_layout_to_general(&ctx.device, &ctx.command_pool, &geo_normal_image, &ctx.graphics_queue).unwrap();
+        let geo_normal_image_view = ctx.create_image_view(&geo_normal_image).unwrap();
 
         let diffuse_albedo_image = ctx.create_image(
             vk::ImageUsageFlags::STORAGE,
@@ -793,8 +806,9 @@ fn create_render_recources(ctx: &mut Renderer, model: &Model, top_as: &Accelerat
             vk::Format::R32_UINT,
             width,
             height,
-        )?;
-        let diffuse_albedo_image_view = ctx.create_image_view(&depth_image)?;
+        ).unwrap();
+        Renderer::transition_image_layout_to_general(&ctx.device, &ctx.command_pool, &diffuse_albedo_image, &ctx.graphics_queue).unwrap();
+        let diffuse_albedo_image_view = ctx.create_image_view(&diffuse_albedo_image).unwrap();
 
         let specular_rough_image = ctx.create_image(
             vk::ImageUsageFlags::STORAGE,
@@ -802,8 +816,9 @@ fn create_render_recources(ctx: &mut Renderer, model: &Model, top_as: &Accelerat
             vk::Format::R32_UINT,
             width,
             height,
-        )?;
-        let specular_rough_image_view = ctx.create_image_view(&depth_image)?;
+        ).unwrap();
+        Renderer::transition_image_layout_to_general(&ctx.device, &ctx.command_pool, &specular_rough_image, &ctx.graphics_queue).unwrap();
+        let specular_rough_image_view = ctx.create_image_view(&specular_rough_image)?;
 
         let motion_vectors = ctx.create_image(
             vk::ImageUsageFlags::STORAGE,
@@ -811,8 +826,9 @@ fn create_render_recources(ctx: &mut Renderer, model: &Model, top_as: &Accelerat
             vk::Format::R32G32B32A32_SFLOAT,
             width,
             height,
-        )?;
-        let motion_vectors_image_view = ctx.create_image_view(&depth_image)?;
+        ).unwrap();
+        Renderer::transition_image_layout_to_general(&ctx.device, &ctx.command_pool, &motion_vectors, &ctx.graphics_queue).unwrap();
+        let motion_vectors_image_view = ctx.create_image_view(&motion_vectors).unwrap();
 
         let g_buffe = GBuffer {
             depth: ImageAndView {
@@ -845,18 +861,18 @@ fn create_render_recources(ctx: &mut Renderer, model: &Model, top_as: &Accelerat
 
     let uniform_buffer = ctx.create_buffer(
         vk::BufferUsageFlags::UNIFORM_BUFFER,
-        MemoryLocation::GpuToCpu,
+        MemoryLocation::CpuToGpu,
         size_of::<GConst>() as u64,
         None,
-    )?;
+    ).unwrap();
     let reservoirs = ctx.create_buffer(
         vk::BufferUsageFlags::STORAGE_BUFFER,
         MemoryLocation::GpuOnly,
-        (64 * width * height) as u64,
+        (100 * width * height) as u64,
         None,
-    )?;
-    let neighbor_offsets = fill_neighbor_offset_buffer(10);
-    let neighbors = ctx.create_gpu_only_buffer_from_data(vk::BufferUsageFlags::STORAGE_BUFFER, neighbor_offsets.as_slice(), None)?;
+    ).unwrap();
+    let neighbor_offsets = fill_neighbor_offset_buffer(NEIGHBOR_OFFSET_COUNT);
+    let neighbors = ctx.create_gpu_only_buffer_from_data(vk::BufferUsageFlags::STORAGE_BUFFER, neighbor_offsets.as_slice(), None).unwrap();
 
     let post_proccesing_pipeline = create_post_proccesing_pipelien(
         ctx,
@@ -865,7 +881,7 @@ fn create_render_recources(ctx: &mut Renderer, model: &Model, top_as: &Accelerat
         &skybox_view,
         &uniform_buffer,
         &reservoirs,
-    )?;
+    ).unwrap();
 
     let shaders_create_info = [
         RayTracingShaderCreateInfo {
@@ -909,7 +925,9 @@ fn create_render_recources(ctx: &mut Renderer, model: &Model, top_as: &Accelerat
         &neighbors,
         &g_buffer,
         &shaders_create_info,
-    )?;
+    ).unwrap();
+
+    let shader_binding_table = ctx.create_shader_binding_table(&raytracing_pipeline.handle, &raytracing_pipeline.shader_group_info).unwrap();
 
     Ok(RendererResources {
         g_buffer,
@@ -917,5 +935,21 @@ fn create_render_recources(ctx: &mut Renderer, model: &Model, top_as: &Accelerat
         post_proccesing_pipeline,
         raytracing_pipeline,
         reservoirs,
+        shader_binding_table,
+        uniform_buffer,
     })
+}
+
+pub fn CalculateReservoirBufferParameters(renderWidth: u32, renderHeight: u32) -> RTXDI_ReservoirBufferParameters {
+    let renderWidthBlocks = (renderWidth + RTXDI_RESERVOIR_BLOCK_SIZE - 1) / RTXDI_RESERVOIR_BLOCK_SIZE;
+    let renderHeightBlocks = (renderHeight + RTXDI_RESERVOIR_BLOCK_SIZE - 1) / RTXDI_RESERVOIR_BLOCK_SIZE;
+
+    let reservoirBlockRowPitch = renderWidthBlocks * (RTXDI_RESERVOIR_BLOCK_SIZE * RTXDI_RESERVOIR_BLOCK_SIZE);
+    let reservoirArrayPitch = reservoirBlockRowPitch * renderHeightBlocks;
+    return RTXDI_ReservoirBufferParameters {
+        reservoirArrayPitch,
+        reservoirBlockRowPitch,
+        pad1: 0,
+        pad2: 0,
+    };
 }
