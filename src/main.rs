@@ -10,6 +10,7 @@ use camera::*;
 mod gltf;
 mod shader_params;
 mod pipelines;
+mod ui;
 
 use memoffset::offset_of;
 
@@ -48,13 +49,13 @@ use winit::{
     event_loop::{ControlFlow, EventLoop},
 };
 
-const NEIGHBOR_OFFSET_COUNT: u32 = 8;
+const NEIGHBOR_OFFSET_COUNT: u32 = 8192;
 const RTXDI_RESERVOIR_BLOCK_SIZE: u32 = 16;
 
 fn main() {
     let model_thread =
         std::thread::spawn(|| gltf::load_file("./src/models/box.glb").unwrap());
-    let image_thread = std::thread::spawn(|| image::open("./src/models/skybox.exr").unwrap());
+    let image_thread = std::thread::spawn(|| image::open("./src/models/skybox2.exr").unwrap());
 
     SimpleLogger::new().init().unwrap();
 
@@ -186,49 +187,50 @@ fn main() {
 
     let view = camera.planar_view_constants();
 
-    
+    let last_index = window_size.width * window_size.height;
+
     let mut g_const = GConst {
         view,
         prevView: view,
         restirGI: ReSTIRGI_Parameters {
             bufferIndices: ReSTIRGI_BufferIndices { 
-                secondarySurfaceReSTIRDIOutputBufferIndex: 0, 
-                temporalResamplingInputBufferIndex: 0, 
-                temporalResamplingOutputBufferIndex: 0, 
+                secondarySurfaceReSTIRDIOutputBufferIndex: 0, //Reservoir to Resample
+                temporalResamplingInputBufferIndex: 1,  //Resampeling input buffer
+                temporalResamplingOutputBufferIndex: 0,
                 spatialResamplingInputBufferIndex: 0, 
-                spatialResamplingOutputBufferIndex: 0, 
-                finalShadingInputBufferIndex: 0, 
+                spatialResamplingOutputBufferIndex: 1, //Resampeld reservoir output
+                finalShadingInputBufferIndex: 1, //Final Shade input
                 pad1: 0, 
                 pad2: 0 
             },
             finalShadingParams: ReSTIRGI_FinalShadingParameters {
                 enableFinalMIS: 1,
-                enableFinalVisibility: 0,
+                enableFinalVisibility: 1,
                 pad1: 0,
                 pad2: 0,
             },
             reservoirBufferParams: CalculateReservoirBufferParameters(1920, 1080),
             spatialResamplingParams: ReSTIRGI_SpatialResamplingParameters {
-                numSpatialSamples: 2,
-                spatialBiasCorrectionMode: 1,
+                numSpatialSamples: 8,
+                spatialBiasCorrectionMode: 2,
                 spatialDepthThreshold: 0.1,
                 spatialNormalThreshold: 0.6,
-                spatialSamplingRadius: 32.0,
+                spatialSamplingRadius: 6.0,
 
                 pad1: 0,
                 pad2: 0,
                 pad3: 0,
             },
             temporalResamplingParams: ReSTIRGI_TemporalResamplingParameters { 
-                boilingFilterStrength: 0.2, 
+                boilingFilterStrength: 0.0, 
                 depthThreshold: 0.1, 
-                enableBoilingFilter: 1, 
+                normalThreshold: 0.6, 
+                enableBoilingFilter: 0, 
                 enableFallbackSampling: 1, 
                 enablePermutationSampling: 0, 
-                maxHistoryLength: 1000000, 
-                maxReservoirAge: 1000000, 
-                normalThreshold: 0.6, 
-                temporalBiasCorrectionMode: 0, 
+                maxHistoryLength: 20, 
+                maxReservoirAge: 50, 
+                temporalBiasCorrectionMode: 2, 
                 uniformRandomNumber: rand::random(), 
                 pad2: 0,
                 pad3: 0, 
@@ -280,8 +282,8 @@ fn main() {
                         
                         let temp = g_const.view;
                         g_const.view = camera.planar_view_constants();
-                        g_const.prevView = temp;
-                        
+                        g_const.prevView = temp;   
+
                         renderer.uniform_buffer.copy_data_to_buffer(std::slice::from_ref(&g_const)).unwrap();
                         
                         ctx.render(|ctx, i| {
@@ -342,10 +344,17 @@ fn main() {
                                     1,
                                 );
 
-                                let dependency_info = 
+                                let memory_barriers = [vk::MemoryBarrier2 {
+                                    src_access_mask: vk::AccessFlags2::empty(),
+                                    src_stage_mask: vk::PipelineStageFlags2::ALL_COMMANDS,
+                                    dst_access_mask: vk::AccessFlags2::empty(),
+                                    dst_stage_mask: vk::PipelineStageFlags2::ALL_COMMANDS,
+                                    ..Default::default()
+                                }];
 
-                                ctx.device.cmd_pipeline_barrier2(*cmd, dependency_info);
-
+                                let dependency_info = vk::DependencyInfo::default()
+                                    .memory_barriers(&memory_barriers);
+                                ctx.device.cmd_pipeline_barrier2(*cmd, &dependency_info);
 
                                 let handle_size = ctx.ray_tracing.pipeline_properties.shader_group_handle_size;
                                 let handle_alignment = ctx
@@ -368,6 +377,18 @@ fn main() {
                                     window_size.height,
                                     1,
                                 );
+                                let memory_barriers = [vk::MemoryBarrier2 {
+                                    src_access_mask: vk::AccessFlags2::empty(),
+                                    src_stage_mask: vk::PipelineStageFlags2::ALL_COMMANDS,
+                                    dst_access_mask: vk::AccessFlags2::empty(),
+                                    dst_stage_mask: vk::PipelineStageFlags2::ALL_COMMANDS,
+                                    ..Default::default()
+                                }];
+
+
+                                let dependency_info = vk::DependencyInfo::default()
+                                    .memory_barriers(&memory_barriers);
+                                ctx.device.cmd_pipeline_barrier2(*cmd, &dependency_info);
 
                                 let begin_info = vk::RenderPassBeginInfo::default()
                                     .render_pass(renderer.post_proccesing_pipeline.render_pass)

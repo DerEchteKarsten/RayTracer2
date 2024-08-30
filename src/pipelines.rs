@@ -868,7 +868,7 @@ pub fn create_render_recources(ctx: &mut Renderer, model: &Model, top_as: &Accel
     let reservoirs = ctx.create_buffer(
         vk::BufferUsageFlags::STORAGE_BUFFER,
         MemoryLocation::GpuOnly,
-        (100 * width * height) as u64,
+        (200 * width * height) as u64,
         None,
     ).unwrap();
     let neighbor_offsets = fill_neighbor_offset_buffer(NEIGHBOR_OFFSET_COUNT);

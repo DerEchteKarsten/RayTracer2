@@ -30,26 +30,25 @@ vec3 getMotionVector(
     PlanarViewConstants viewPrev,
     vec3 objectSpacePosition,
     vec3 prevObjectSpacePosition,
+    out float o_clipDepth,
     out float o_viewDepth)
 {
     vec3 worldSpacePosition = vec4(objectSpacePosition, 1.0).xyz;
     vec3 prevWorldSpacePosition = vec4(prevObjectSpacePosition, 1.0).xyz;
 
-    vec4 clipPos = view.matWorldToClip * vec4(worldSpacePosition, 1.0);
+    vec4 clipPos = mul(vec4(worldSpacePosition, 1.0), view.matWorldToClip);
     clipPos.xyz /= clipPos.w;
-    vec4 prevClipPos = viewPrev.matWorldToClip * vec4(prevWorldSpacePosition, 1.0);
+    vec4 prevClipPos = mul(vec4(prevWorldSpacePosition, 1.0), viewPrev.matWorldToClip);
     prevClipPos.xyz /= prevClipPos.w;
 
+    o_clipDepth = clipPos.z;
     o_viewDepth = clipPos.w;
 
     if (clipPos.w <= 0 || prevClipPos.w <= 0)
-        return vec3(0);
-
-    vec2 windowPos = clipPos.xy * view.clipToWindowScale + view.clipToWindowBias;
-    vec2 prevWindowPos = prevClipPos.xy * viewPrev.clipToWindowScale + viewPrev.clipToWindowBias;
+        return 0;
 
     vec3 motion;
-    motion.xy = prevWindowPos.xy - windowPos.xy;
+    motion.xy = (prevClipPos.xy - clipPos.xy) * view.clipToWindowScale;
     motion.xy += (view.pixelOffset - viewPrev.pixelOffset);
     motion.z = prevClipPos.w - clipPos.w;
     return motion;
@@ -76,10 +75,10 @@ vec3 convertMotionVectorToPixelSpace(
     ivec2 pixelPosition,
     vec3 motionVector)
 {
-    vec2 curerntPixelCenter = vec2(pixelPosition.xy) + 0.5;
-    vec2 previousPosition = curerntPixelCenter + motionVector.xy;
-    previousPosition *= viewPrev.viewportSize * view.viewportSizeInv;
-    motionVector.xy = previousPosition - curerntPixelCenter;
+    // vec2 curerntPixelCenter = vec2(pixelPosition.xy) + 0.5;
+    // vec2 previousPosition = curerntPixelCenter + motionVector.xy;
+    // previousPosition *= viewPrev.viewportSize * view.viewportSizeInv;
+    // motionVector.xy = previousPosition - curerntPixelCenter;
     return motionVector;
 }
 #endif

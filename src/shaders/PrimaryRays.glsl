@@ -21,8 +21,10 @@ PrimarySurfaceOutput TracePrimaryRay(int2 pixelPosition)
     { 
         result.surface.viewDepth = p.depth;
         float viewDepth;
+        float viewDepth2;
+
         result.motionVector = getMotionVector(g_Const.view, g_Const.prevView, 
-            p.hitPoint, p.hitPoint, viewDepth);
+            p.hitPoint, p.hitPoint, viewDepth, viewDepth2);
         
         result.surface.worldPos = p.hitPoint;
         result.surface.normal = p.hitNormal;

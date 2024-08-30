@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use glam::{vec3, Mat3, Mat4, Quat, Vec3, Vec4};
+use glam::{vec3, Affine3A, Mat3, Mat4, Quat, Vec3, Vec4};
 use winit::{
     event::{DeviceEvent, ElementState, Event, MouseButton, WindowEvent},
     keyboard::{KeyCode, PhysicalKey},
@@ -8,10 +8,10 @@ use winit::{
 
 use crate::shader_params::PlanarViewConstants;
 
-const MOVE_SPEED: f32 = 20.0;
+const MOVE_SPEED: f32 = 5.0;
 const ANGLE_PER_POINT: f32 = 2.0;
 
-const UP: Vec3 = vec3(0.0, 1.0, 0.0);
+const UP: Vec3 = vec3(0.0, -1.0, 0.0);
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Camera {
@@ -65,22 +65,22 @@ impl Camera {
         let mut direction = Vec3::ZERO;
 
         if controls.go_forward {
-            direction += new_direction;
-        }
-        if controls.go_backward {
             direction -= new_direction;
         }
-        if controls.strafe_right {
-            direction += side;
+        if controls.go_backward {
+            direction += new_direction;
         }
-        if controls.strafe_left {
+        if controls.strafe_right {
             direction -= side;
         }
+        if controls.strafe_left {
+            direction += side;
+        }
         if controls.go_up {
-            direction += UP;
+            direction -= UP;
         }
         if controls.go_down {
-            direction -= UP;
+            direction += UP;
         }
 
         let direction = if direction.length_squared() == 0.0 {
@@ -97,11 +97,9 @@ impl Camera {
     }
 
     pub fn view_matrix(&self) -> Mat4 {
-        Mat4::look_at_rh(
-            self.position,
-            self.position + self.direction,
-            vec3(0.0, 1.0, 0.0),
-        )
+        let side = self.direction.cross(UP);
+        let translate_world_to_view = Affine3A::from_mat3(Mat3::from_cols(side, UP, self.direction));
+        Mat4::from_translation(-self.position) * translate_world_to_view
     }
 
     pub fn projection_matrix(&self) -> Mat4 {
@@ -114,8 +112,10 @@ impl Camera {
     }
     pub fn planar_view_constants(&self) -> PlanarViewConstants {
         let window_size = glam::vec2(1920.0, 1080.0);
-        let clipToWindowScale = glam::vec2(0.5 * window_size.x, -0.5 * window_size.y);
-
+        let clipToWindowScale = glam::vec2(0.5 * window_size.x, -0.5 *window_size.y);
+        let clipToWindowBias = window_size * 0.5;
+        let windowToClipScale = 1.0 / clipToWindowScale;
+        
         PlanarViewConstants {
             matWorldToView: self.view_matrix(),
             matViewToClip: self.projection_matrix(),
@@ -128,10 +128,10 @@ impl Camera {
             viewportSizeInv: 1.0 / window_size,
             
             clipToWindowScale,
-            clipToWindowBias: window_size * 0.5,
+            clipToWindowBias,
 
-            windowToClipScale: 1.0 / clipToWindowScale,
-            windowToClipBias: -window_size * 0.5 * (1.0 / clipToWindowScale),
+            windowToClipScale,
+            windowToClipBias: -clipToWindowBias * windowToClipScale,
 
             cameraDirectionOrPosition: glam::vec4(self.position.x, self.position.y, self.position.z, 1.0),
             pixelOffset: glam::vec2(0.0, 0.0),
@@ -142,34 +142,15 @@ impl Camera {
 #[rustfmt::skip]
 pub fn perspective(fovy: f32, aspect: f32, near: f32, far: f32) -> Mat4 {
     
-    let f = (fovy / 2.0).tan().recip();
-
-    let c0r0 = f / aspect;
-    let c0r1 = 0.0f32;
-    let c0r2 = 0.0f32;
-    let c0r3 = 0.0f32;
-
-    let c1r0 = 0.0f32;
-    let c1r1 = -f;
-    let c1r2 = 0.0f32;
-    let c1r3 = 0.0f32;
-
-    let c2r0 = 0.0f32;
-    let c2r1 = 0.0f32;
-    let c2r2 = -far / (far - near);
-    let c2r3 = -1.0f32;
-
-    let c3r0 = 0.0f32;
-    let c3r1 = 0.0f32;
-    let c3r2 = -(far * near) / (far - near);
-    let c3r3 = 0.0f32;
-
-    Mat4::from_cols_array(&[
-        c0r0, c0r1, c0r2, c0r3,
-        c1r0, c1r1, c1r2, c1r3,
-        c2r0, c2r1, c2r2, c2r3,
-        c3r0, c3r1, c3r2, c3r3
-    ])
+    let yScale = 1.0 / f32::tan(0.5 * fovy);
+    let xScale = yScale / aspect;
+    let zScale = 1.0 / (far - near);
+    return Mat4::from_cols_array(&[
+                xScale, 0.0, 0.0, 0.0,
+                0.0, yScale, 0.0, 0.0,
+                0.0, 0.0, -(near + far) * zScale, 1.0,
+                0.0, 0.0, -2.0 * near * far * zScale, 0.0
+            ]);
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -238,6 +219,21 @@ impl Controls {
                         }
                         if event.physical_key == PhysicalKey::Code(KeyCode::ShiftLeft) {
                             new_state.go_down = event.state == ElementState::Pressed;
+                        }
+                        if event.physical_key == PhysicalKey::Code(KeyCode::ArrowLeft) && event.state == ElementState::Pressed {
+                            new_state.look_around = true;
+                            new_state.cursor_delta = [-0.1, 0.0];
+                        }
+                        if event.physical_key == PhysicalKey::Code(KeyCode::ArrowRight) && event.state == ElementState::Pressed {
+                            new_state.look_around = true;
+                            new_state.cursor_delta = [0.1, 0.0];
+                        }
+
+                        if event.physical_key == PhysicalKey::Code(KeyCode::ArrowRight) && event.state == ElementState::Released {
+                            new_state.look_around = false;
+                        }
+                        if event.physical_key == PhysicalKey::Code(KeyCode::ArrowLeft) && event.state == ElementState::Released {
+                            new_state.look_around = false;
                         }
                     }
                     WindowEvent::MouseInput { state, button, .. } => {

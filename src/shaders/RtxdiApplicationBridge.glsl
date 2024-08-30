@@ -33,7 +33,6 @@ RAB_LightInfo t_LightDataBuffer[1];
 #define RTXDI_LIGHT_RESERVOIR_BUFFER light_reservoirs
 
 
-
 #include "finalShadingHelpers.glsl"
 
 // A surface with enough information to evaluate BRDFs
@@ -153,7 +152,17 @@ bool RAB_GetTemporalConservativeVisibility(RAB_Surface currentSurface, RAB_Surfa
 // The simplest implementation will just return the input pixelPosition.
 ivec2 RAB_ClampSamplePositionIntoView(ivec2 pixelPosition, bool previousFrame)
 {
-    return clamp(pixelPosition, ivec2(0), ivec2(g_Const.view.viewportSize) - 1);
+    int width = int(g_Const.view.viewportSize.x);
+    int height = int(g_Const.view.viewportSize.y);
+
+    // Reflect the position across the screen edges.
+    // Compared to simple clamping, this prevents the spread of colorful blobs from screen edges.
+    if (pixelPosition.x < 0) pixelPosition.x = -pixelPosition.x;
+    if (pixelPosition.y < 0) pixelPosition.y = -pixelPosition.y;
+    if (pixelPosition.x >= width) pixelPosition.x = 2 * width - pixelPosition.x - 1;
+    if (pixelPosition.y >= height) pixelPosition.y = 2 * height - pixelPosition.y - 1;
+
+    return pixelPosition;
 }
 
 RAB_Surface GetPrevGBufferSurface(
@@ -187,14 +196,14 @@ RAB_Surface GetPrevGBufferSurface(
 
 RAB_Surface RAB_GetGBufferSurface(int2 pixelPosition, bool previousFrame)
 {
-    if(previousFrame)
-    {
-        return GetPrevGBufferSurface(
-            pixelPosition,
-            g_Const.prevView
-        );
-    }
-    else
+    // if(previousFrame)
+    // {
+    //     return GetPrevGBufferSurface(
+    //         pixelPosition,
+    //         g_Const.prevView
+    //     );
+    // }
+    // else
     {
         return GetGBufferSurface(
             pixelPosition, 
@@ -273,16 +282,16 @@ float RAB_GetNextRandom(inout RAB_RandomSamplerState rng)
 }
 
 
-vec2 SampleDisk(vec2 random)
+vec2 sampleDisk(vec2 random)
 {
     float angle = 2 * RTXDI_PI * random.x;
     return vec2(cos(angle), sin(angle)) * sqrt(random.y);
 }
 
 
-vec3 SampleCosHemisphere(vec2 random, out float solidAnglePdf)
+vec3 sampleCosHemisphere(vec2 random, out float solidAnglePdf)
 {
-    vec2 tangential = SampleDisk(random);
+    vec2 tangential = sampleDisk(random);
     float elevation = sqrt(saturate(1.0 - random.y));
 
     solidAnglePdf = elevation / RTXDI_PI;
@@ -306,6 +315,34 @@ vec3 ImportanceSampleGGX(vec2 random, float roughness)
     return H;
 }
 
+vec3 ImportanceSampleGGX_VNDF(float2 random, float roughness, vec3 Ve, float ndf_trim)
+{
+    float alpha = square(roughness);
+
+    vec3 Vh = normalize(vec3(alpha * Ve.x, alpha * Ve.y, Ve.z));
+
+    float lensq = square(Vh.x) + square(Vh.y);
+    vec3 T1 = lensq > 0.0 ? vec3(-Vh.y, Vh.x, 0.0) * (1 / sqrt(lensq)) : vec3(1.0, 0.0, 0.0);
+    vec3 T2 = cross(Vh, T1);
+
+    float r = sqrt(random.x * ndf_trim);
+    float phi = 2.0 * RTXDI_PI * random.y;
+    float t1 = r * cos(phi);
+    float t2 = r * sin(phi);
+    float s = 0.5 * (1.0 + Vh.z);
+    t2 = (1.0 - s) * sqrt(1.0 - square(t1)) + s * t2;
+
+    vec3 Nh = t1 * T1 + t2 * T2 + sqrt(max(0.0, 1.0 - square(t1) - square(t2))) * Vh;
+
+    vec3 H;
+    H.x = alpha * Nh.x;
+    H.y = alpha * Nh.y;
+    H.z = max(0.0, Nh.z);
+
+    return H;
+}
+
+
 // Output an importanced sampled reflection direction from the BRDF given the view
 // Return true if the returned direction is above the surface
 bool RAB_GetSurfaceBrdfSample(RAB_Surface surface, inout RAB_RandomSamplerState rng, out vec3 dir)
@@ -317,12 +354,14 @@ bool RAB_GetSurfaceBrdfSample(RAB_Surface surface, inout RAB_RandomSamplerState 
     if (rand.x < surface.diffuseProbability)
     {
         float pdf;
-        vec3 h = SampleCosHemisphere(rand.yz, pdf);
+        vec3 h = sampleCosHemisphere(rand.yz, pdf);
         dir = tangentToWorld(surface, h);
     }
     else
     {
-        vec3 h = ImportanceSampleGGX(rand.yz, max(surface.roughness, kMinRoughness));
+         vec3 Ve = normalize(worldToTangent(surface, surface.viewDir));
+        vec3 h = ImportanceSampleGGX_VNDF(rand.yz, max(surface.roughness, kMinRoughness), Ve, 1.0);
+        h = normalize(h);
         dir = reflect(-surface.viewDir, tangentToWorld(surface, h));
     }
 
@@ -374,6 +413,7 @@ vec3 ShadeSurfaceWithLightSample(RAB_LightSample lightSample, RAB_Surface surfac
 
     return reflectedRadiance / lightSample.solidAnglePdf;
 }
+bool RTXDI_CompareRelativeDifference(float reference, float candidate, float threshold);
 
 // Compute the target PDF (p-hat) for the given light sample relative to a surface
 float RAB_GetLightSampleTargetPdfForSurface(RAB_LightSample lightSample, RAB_Surface surface)
@@ -408,6 +448,19 @@ int RAB_TranslateLightIndex(uint lightIndex, bool currentToPrevious)
 // Just say that everything is similar for simplicity.
 bool RAB_AreMaterialsSimilar(RAB_Surface a, RAB_Surface b)
 {
+    const float roughnessThreshold = 0.5;
+    const float reflectivityThreshold = 0.25;
+    const float albedoThreshold = 0.25;
+
+    if (!RTXDI_CompareRelativeDifference(a.roughness, b.roughness, roughnessThreshold))
+        return false;
+
+    if (abs(calcLuminance(a.specularF0) - calcLuminance(b.specularF0)) > reflectivityThreshold)
+        return false;
+    
+    if (abs(calcLuminance(a.diffuseAlbedo) - calcLuminance(b.diffuseAlbedo)) > albedoThreshold)
+        return false;
+
     return true;
 }
 

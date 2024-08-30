@@ -114,7 +114,7 @@ void main() {
     const RAB_Surface primarySurface = GetGBufferSurface(pixelPosition, g_Const.view);
     const float viewDepth = imageLoad(u_GBufferDepth, pixelPosition).r;
     const uvec2 reservoirPosition = RTXDI_PixelPosToReservoirPos(pixelPosition, g_Const.runtimeParams.activeCheckerboardField);
-    const RTXDI_GIReservoir reservoir = RTXDI_LoadGIReservoir(g_Const.restirGI.reservoirBufferParams, reservoirPosition, 0);
+    const RTXDI_GIReservoir reservoir = RTXDI_LoadGIReservoir(g_Const.restirGI.reservoirBufferParams, reservoirPosition, g_Const.restirGI.bufferIndices.finalShadingInputBufferIndex);
 
     if (RTXDI_IsValidGIReservoir(reservoir))
     {
@@ -141,7 +141,10 @@ void main() {
         float v = (0.5 - asin(direction.y)/PI);
         col = texture(skyBox, vec2(u,v)).rgb;
     }
+    vec3 motionVector = imageLoad(u_MotionVectors, ivec2(pixelPosition)).xyz;
+    motionVector = convertMotionVectorToPixelSpace(g_Const.view, g_Const.prevView, ivec2(pixelPosition), motionVector);
 
+    // col = abs(motionVector);
     col = agx(col);
     col = agxLook(col);
     col = agxEotf(col);
