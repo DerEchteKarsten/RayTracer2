@@ -16,12 +16,12 @@ layout( push_constant ) uniform Frame {
 } f;
 
 
-layout(binding = 0, set = 1, r32f) uniform readonly image2D u_GBufferDepth;
-layout(binding = 1, set = 1, r32ui) uniform readonly uimage2D u_GBufferNormals;
-layout(binding = 2, set = 1, r32ui) uniform readonly uimage2D u_GBufferGeoNormals;
-layout(binding = 3, set = 1, r32ui) uniform readonly uimage2D u_GBufferDiffuseAlbedo;
-layout(binding = 4, set = 1, r32ui) uniform readonly uimage2D u_GBufferSpecularRough;
-layout(binding = 5, set = 1, rgba32f) uniform readonly image2D u_MotionVectors;
+layout(binding = 0, set = 1, r32f) uniform image2D u_GBufferDepth;
+layout(binding = 1, set = 1, r32ui) uniform uimage2D u_GBufferNormals;
+layout(binding = 2, set = 1, r32ui) uniform uimage2D u_GBufferGeoNormals;
+layout(binding = 3, set = 1, r32ui) uniform uimage2D u_GBufferDiffuseAlbedo;
+layout(binding = 4, set = 1, r32ui) uniform uimage2D u_GBufferSpecularRough;
+layout(binding = 5, set = 1, rgba32f) uniform image2D u_MotionVectors;
 
 
 #define RTXDI_ENABLE_PRESAMPLING 0
@@ -64,7 +64,6 @@ void main() {
 
         // Execute resampling.
         reservoir = RTXDI_GISpatioTemporalResampling(pixelPosition, primarySurface, reservoir, rng, g_Const.runtimeParams, g_Const.restirGI.reservoirBufferParams, stParams);
-
     }
     RTXDI_StoreGIReservoir(reservoir, g_Const.restirGI.reservoirBufferParams, reservoirPosition, g_Const.restirGI.bufferIndices.spatialResamplingOutputBufferIndex);
 }

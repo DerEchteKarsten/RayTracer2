@@ -102,8 +102,8 @@ fn main() {
 
     let mut camera = Camera::new(
         vec3(0.0, 0.0, 10.0),
-        vec3(0.0, 0.0, -1.0),
-        40.0,
+        vec3(0.0, 0.0, 1.0),
+        65.0,
         window_size.width as f32 / window_size.height as f32,
         0.1,
         1000.0,
@@ -187,8 +187,6 @@ fn main() {
 
     let view = camera.planar_view_constants();
 
-    let last_index = window_size.width * window_size.height;
-
     let mut g_const = GConst {
         view,
         prevView: view,
@@ -214,7 +212,7 @@ fn main() {
                 numSpatialSamples: 8,
                 spatialBiasCorrectionMode: 2,
                 spatialDepthThreshold: 0.1,
-                spatialNormalThreshold: 0.6,
+                spatialNormalThreshold: 0.3,
                 spatialSamplingRadius: 6.0,
 
                 pad1: 0,
@@ -224,7 +222,7 @@ fn main() {
             temporalResamplingParams: ReSTIRGI_TemporalResamplingParameters { 
                 boilingFilterStrength: 0.0, 
                 depthThreshold: 0.1, 
-                normalThreshold: 0.6, 
+                normalThreshold: 0.3, 
                 enableBoilingFilter: 0, 
                 enableFallbackSampling: 1, 
                 enablePermutationSampling: 0, 

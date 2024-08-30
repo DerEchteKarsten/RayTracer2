@@ -15,12 +15,12 @@ layout(binding = 0, set = 0) buffer TemporalReservoirBuffer {RTXDI_PackedGIReser
 layout(binding = 1, set = 0) uniform Uniform {ResamplingConstants g_Const;};
 layout(binding = 2, set = 0) uniform sampler2D skyBox;
 
-layout(binding = 0, set = 1, r32f) uniform readonly image2D u_GBufferDepth;
-layout(binding = 1, set = 1, r32ui) uniform readonly uimage2D u_GBufferNormals;
-layout(binding = 2, set = 1, r32ui) uniform readonly uimage2D u_GBufferGeoNormals;
-layout(binding = 3, set = 1, r32ui) uniform readonly uimage2D u_GBufferDiffuseAlbedo;
-layout(binding = 4, set = 1, r32ui) uniform readonly uimage2D u_GBufferSpecularRough;
-layout(binding = 5, set = 1, rgba32f) uniform readonly image2D u_MotionVectors;
+layout(binding = 0, set = 1, r32f) uniform  image2D u_GBufferDepth;
+layout(binding = 1, set = 1, r32ui) uniform  uimage2D u_GBufferNormals;
+layout(binding = 2, set = 1, r32ui) uniform  uimage2D u_GBufferGeoNormals;
+layout(binding = 3, set = 1, r32ui) uniform  uimage2D u_GBufferDiffuseAlbedo;
+layout(binding = 4, set = 1, r32ui) uniform  uimage2D u_GBufferSpecularRough;
+layout(binding = 5, set = 1, rgba32f) uniform  image2D u_MotionVectors;
 #define PI 3.1415926
 
 #define AGX_LOOK 0
@@ -141,10 +141,9 @@ void main() {
         float v = (0.5 - asin(direction.y)/PI);
         col = texture(skyBox, vec2(u,v)).rgb;
     }
-    vec3 motionVector = imageLoad(u_MotionVectors, ivec2(pixelPosition)).xyz;
-    motionVector = convertMotionVectorToPixelSpace(g_Const.view, g_Const.prevView, ivec2(pixelPosition), motionVector);
 
-    // col = abs(motionVector);
+    // col = imageLoad(u_MotionVectors, pixelPosition).rgb;
+
     col = agx(col);
     col = agxLook(col);
     col = agxEotf(col);

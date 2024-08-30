@@ -1,5 +1,6 @@
 #ifndef GBufferHelpers
 #define GBufferHelpers
+#define mul(a, b) (b * a)
 
 struct RayDesc {
     vec3 Origin;
@@ -25,31 +26,47 @@ RayDesc setupPrimaryRay(uvec2 pixelPosition, PlanarViewConstants view)
     return ray;
 }
 
+ivec2 ClampSamplePositionIntoView(ivec2 pixelPosition, PlanarViewConstants view)
+{
+    int width = int(view.viewportSize.x);
+    int height = int(view.viewportSize.y);
+
+    // Reflect the position across the screen edges.
+    // Compared to simple clamping, this prevents the spread of colorful blobs from screen edges.
+    if (pixelPosition.x < 0) pixelPosition.x = -pixelPosition.x;
+    if (pixelPosition.y < 0) pixelPosition.y = -pixelPosition.y;
+    if (pixelPosition.x >= width) pixelPosition.x = 2 * width - pixelPosition.x - 1;
+    if (pixelPosition.y >= height) pixelPosition.y = 2 * height - pixelPosition.y - 1;
+
+    return pixelPosition;
+}
+
 vec3 getMotionVector(
     PlanarViewConstants view,
     PlanarViewConstants viewPrev,
     vec3 objectSpacePosition,
     vec3 prevObjectSpacePosition,
-    out float o_clipDepth,
-    out float o_viewDepth)
-{
-    vec3 worldSpacePosition = vec4(objectSpacePosition, 1.0).xyz;
-    vec3 prevWorldSpacePosition = vec4(prevObjectSpacePosition, 1.0).xyz;
+    float o_viewDepth,
+    float o_clipDepth)
+{   
+    vec3 worldSpacePosition = objectSpacePosition;
+    vec3 prevWorldSpacePosition = prevObjectSpacePosition;
 
-    vec4 clipPos = mul(vec4(worldSpacePosition, 1.0), view.matWorldToClip);
+    vec4 clipPos = view.matWorldToClip * vec4(worldSpacePosition, 1.0);
     clipPos.xyz /= clipPos.w;
-    vec4 prevClipPos = mul(vec4(prevWorldSpacePosition, 1.0), viewPrev.matWorldToClip);
-    prevClipPos.xyz /= prevClipPos.w;
+    ivec2 pos = ivec2(((clipPos.xy + vec2(1.0)) / 2.0) * view.viewportSize);
+    ivec2 cpos = ClampSamplePositionIntoView(pos, view);
 
-    o_clipDepth = clipPos.z;
-    o_viewDepth = clipPos.w;
+    vec4 prevClipPos = viewPrev.matWorldToClip * vec4(prevWorldSpacePosition, 1.0);
+    prevClipPos.xyz /= prevClipPos.w;
+    ivec2 prev_pos = ivec2(((prevClipPos.xy + vec2(1.0)) / 2.0) * viewPrev.viewportSize);
+    ivec2 cprev_pos = ClampSamplePositionIntoView(prev_pos, viewPrev);
 
     if (clipPos.w <= 0 || prevClipPos.w <= 0)
-        return 0;
+        return vec3(0);
 
     vec3 motion;
-    motion.xy = (prevClipPos.xy - clipPos.xy) * view.clipToWindowScale;
-    motion.xy += (view.pixelOffset - viewPrev.pixelOffset);
+    motion.xy = cprev_pos.xy - cpos.xy;
     motion.z = prevClipPos.w - clipPos.w;
     return motion;
 }
@@ -75,10 +92,10 @@ vec3 convertMotionVectorToPixelSpace(
     ivec2 pixelPosition,
     vec3 motionVector)
 {
-    // vec2 curerntPixelCenter = vec2(pixelPosition.xy) + 0.5;
-    // vec2 previousPosition = curerntPixelCenter + motionVector.xy;
-    // previousPosition *= viewPrev.viewportSize * view.viewportSizeInv;
-    // motionVector.xy = previousPosition - curerntPixelCenter;
+    vec2 curerntPixelCenter = vec2(pixelPosition.xy) + 0.5;
+    vec2 previousPosition = curerntPixelCenter + motionVector.xy;
+    previousPosition *= viewPrev.viewportSize * view.viewportSizeInv;
+    motionVector.xy = previousPosition - curerntPixelCenter;
     return motionVector;
 }
 #endif

@@ -9,7 +9,7 @@ use winit::{
 use crate::shader_params::PlanarViewConstants;
 
 const MOVE_SPEED: f32 = 5.0;
-const ANGLE_PER_POINT: f32 = 2.0;
+const ANGLE_PER_POINT: f32 = 1.0;
 
 const UP: Vec3 = vec3(0.0, -1.0, 0.0);
 
@@ -71,10 +71,10 @@ impl Camera {
             direction += new_direction;
         }
         if controls.strafe_right {
-            direction -= side;
+            direction += side;
         }
         if controls.strafe_left {
-            direction += side;
+            direction -= side;
         }
         if controls.go_up {
             direction -= UP;
@@ -97,9 +97,7 @@ impl Camera {
     }
 
     pub fn view_matrix(&self) -> Mat4 {
-        let side = self.direction.cross(UP);
-        let translate_world_to_view = Affine3A::from_mat3(Mat3::from_cols(side, UP, self.direction));
-        Mat4::from_translation(-self.position) * translate_world_to_view
+        Mat4::look_at_rh(self.position, self.position + self.direction, UP)
     }
 
     pub fn projection_matrix(&self) -> Mat4 {
@@ -115,14 +113,14 @@ impl Camera {
         let clipToWindowScale = glam::vec2(0.5 * window_size.x, -0.5 *window_size.y);
         let clipToWindowBias = window_size * 0.5;
         let windowToClipScale = 1.0 / clipToWindowScale;
-        
+
         PlanarViewConstants {
             matWorldToView: self.view_matrix(),
             matViewToClip: self.projection_matrix(),
             matWorldToClip: self.projection_matrix() * self.view_matrix(),
             matClipToView: self.projection_matrix().inverse(),
             matViewToWorld: self.view_matrix().inverse(),
-            matClipToWorld: (self.projection_matrix() * self.view_matrix()).inverse(),
+            matClipToWorld: self.projection_matrix().inverse() * self.view_matrix().inverse(),
             viewportOrigin: glam::vec2(0.0, 0.0),
             viewportSize: window_size,
             viewportSizeInv: 1.0 / window_size,
@@ -222,17 +220,23 @@ impl Controls {
                         }
                         if event.physical_key == PhysicalKey::Code(KeyCode::ArrowLeft) && event.state == ElementState::Pressed {
                             new_state.look_around = true;
-                            new_state.cursor_delta = [-0.1, 0.0];
+                            new_state.cursor_delta = [-1.0, 0.0];
                         }
                         if event.physical_key == PhysicalKey::Code(KeyCode::ArrowRight) && event.state == ElementState::Pressed {
                             new_state.look_around = true;
-                            new_state.cursor_delta = [0.1, 0.0];
+                            new_state.cursor_delta = [1.0, 0.0];
                         }
 
-                        if event.physical_key == PhysicalKey::Code(KeyCode::ArrowRight) && event.state == ElementState::Released {
-                            new_state.look_around = false;
+                        if event.physical_key == PhysicalKey::Code(KeyCode::ArrowUp) && event.state == ElementState::Pressed {
+                            new_state.look_around = true;
+                            new_state.cursor_delta = [0.0, -1.0];
                         }
-                        if event.physical_key == PhysicalKey::Code(KeyCode::ArrowLeft) && event.state == ElementState::Released {
+                        if event.physical_key == PhysicalKey::Code(KeyCode::ArrowDown) && event.state == ElementState::Pressed {
+                            new_state.look_around = true;
+                            new_state.cursor_delta = [0.0, 1.0];
+                        }
+
+                        if (event.physical_key == PhysicalKey::Code(KeyCode::ArrowRight) || event.physical_key == PhysicalKey::Code(KeyCode::ArrowLeft) || event.physical_key == PhysicalKey::Code(KeyCode::ArrowDown) || event.physical_key == PhysicalKey::Code(KeyCode::ArrowUp)) && event.state == ElementState::Released {
                             new_state.look_around = false;
                         }
                     }
