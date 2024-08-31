@@ -108,6 +108,21 @@ vec3 agxLook(vec3 val) {
 
 const float gamma = 2.2;
 
+const float kMaxBrdfValue = 1e4;
+const float kMISRoughness = 0.3;
+
+float GetMISWeight(const SplitBrdf roughBrdf, const SplitBrdf trueBrdf, const float3 diffuseAlbedo)
+{
+    float3 combinedRoughBrdf = roughBrdf.demodulatedDiffuse * diffuseAlbedo + roughBrdf.specular;
+    float3 combinedTrueBrdf = trueBrdf.demodulatedDiffuse * diffuseAlbedo + trueBrdf.specular;
+
+    combinedRoughBrdf = clamp(combinedRoughBrdf, 1e-4, kMaxBrdfValue);
+    combinedTrueBrdf = clamp(combinedTrueBrdf, 0, kMaxBrdfValue);
+
+    const float initWeight = saturate(calcLuminance(combinedTrueBrdf) / calcLuminance(combinedTrueBrdf + combinedRoughBrdf));
+    return initWeight * initWeight * initWeight;
+}
+
 void main() {
     vec3 col = vec3(0.0);
     ivec2 pixelPosition = ivec2(gl_FragCoord.xy);
@@ -115,15 +130,41 @@ void main() {
     const float viewDepth = imageLoad(u_GBufferDepth, pixelPosition).r;
     const uvec2 reservoirPosition = RTXDI_PixelPosToReservoirPos(pixelPosition, g_Const.runtimeParams.activeCheckerboardField);
     const RTXDI_GIReservoir reservoir = RTXDI_LoadGIReservoir(g_Const.restirGI.reservoirBufferParams, reservoirPosition, g_Const.restirGI.bufferIndices.finalShadingInputBufferIndex);
+    RTXDI_StoreGIReservoir(reservoir, g_Const.restirGI.reservoirBufferParams, pixelPosition, g_Const.restirGI.bufferIndices.temporalResamplingInputBufferIndex);
 
     if (RTXDI_IsValidGIReservoir(reservoir))
     {
         vec3 radiance = reservoir.radiance * reservoir.weightSum;
 
         const SplitBrdf brdf = EvaluateBrdf(primarySurface, reservoir.position);
+		vec3 diffuse, specular;
+        if (g_Const.restirGI.finalShadingParams.enableFinalMIS == 1)
+        {
+            const RTXDI_GIReservoir initialReservoir = RTXDI_LoadGIReservoir(g_Const.restirGI.reservoirBufferParams, reservoirPosition, g_Const.restirGI.bufferIndices.secondarySurfaceReSTIRDIOutputBufferIndex);//LoadInitialSampleReservoir(reservoirPosition, primarySurface);
+            const SplitBrdf brdf0 = EvaluateBrdf(primarySurface, initialReservoir.position);
 
-        vec3 diffuse = brdf.demodulatedDiffuse * radiance;
-        vec3 specular = DemodulateSpecular(brdf.specular * radiance, primarySurface.specularF0);
+            RAB_Surface roughenedSurface = primarySurface;
+            roughenedSurface.roughness = max(roughenedSurface.roughness, kMISRoughness);
+
+            const SplitBrdf roughBrdf = EvaluateBrdf(roughenedSurface, reservoir.position);
+            const SplitBrdf roughBrdf0 = EvaluateBrdf(roughenedSurface, initialReservoir.position);
+
+            const float finalWeight = 1.0 - GetMISWeight(roughBrdf, brdf, primarySurface.diffuseAlbedo);
+            const float initialWeight = GetMISWeight(roughBrdf0, brdf0, primarySurface.diffuseAlbedo);
+
+            const float3 initialRadiance = initialReservoir.radiance * initialReservoir.weightSum;
+
+            diffuse = brdf.demodulatedDiffuse * radiance * finalWeight 
+                    + brdf0.demodulatedDiffuse * initialRadiance * initialWeight;
+
+            specular = brdf.specular * radiance * finalWeight 
+                     + brdf0.specular * initialRadiance * initialWeight;
+        }else {
+            diffuse = brdf.demodulatedDiffuse * radiance;
+			specular = brdf.specular * radiance;
+        }
+
+        specular = DemodulateSpecular(brdf.specular * radiance, primarySurface.specularF0);
 
         diffuse.rgb *= primarySurface.diffuseAlbedo;
         specular.rgb *= max(vec3(0.01), primarySurface.specularF0);
@@ -142,8 +183,7 @@ void main() {
         col = texture(skyBox, vec2(u,v)).rgb;
     }
 
-    // col = imageLoad(u_MotionVectors, pixelPosition).rgb;
-
+    // col = Unpack_R11G11B10_UFLOAT(imageLoad(u_GBufferDiffuseAlbedo, pixelPosition).r);
     col = agx(col);
     col = agxLook(col);
     col = agxEotf(col);

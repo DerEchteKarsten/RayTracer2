@@ -46,27 +46,23 @@ vec3 getMotionVector(
     PlanarViewConstants viewPrev,
     vec3 objectSpacePosition,
     vec3 prevObjectSpacePosition,
-    float o_viewDepth,
-    float o_clipDepth)
+    float viewDepth,
+    float prevViewDepth)
 {   
     vec3 worldSpacePosition = objectSpacePosition;
     vec3 prevWorldSpacePosition = prevObjectSpacePosition;
 
     vec4 clipPos = view.matWorldToClip * vec4(worldSpacePosition, 1.0);
     clipPos.xyz /= clipPos.w;
-    ivec2 pos = ivec2(((clipPos.xy + vec2(1.0)) / 2.0) * view.viewportSize);
-    ivec2 cpos = ClampSamplePositionIntoView(pos, view);
-
     vec4 prevClipPos = viewPrev.matWorldToClip * vec4(prevWorldSpacePosition, 1.0);
     prevClipPos.xyz /= prevClipPos.w;
-    ivec2 prev_pos = ivec2(((prevClipPos.xy + vec2(1.0)) / 2.0) * viewPrev.viewportSize);
-    ivec2 cprev_pos = ClampSamplePositionIntoView(prev_pos, viewPrev);
 
     if (clipPos.w <= 0 || prevClipPos.w <= 0)
         return vec3(0);
 
     vec3 motion;
-    motion.xy = cprev_pos.xy - cpos.xy;
+    motion.xy = (prevClipPos.xy - clipPos.xy) / 2.0 * view.viewportSize;
+    motion.xy += (view.pixelOffset - viewPrev.pixelOffset);
     motion.z = prevClipPos.w - clipPos.w;
     return motion;
 }

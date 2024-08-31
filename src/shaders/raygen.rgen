@@ -91,8 +91,8 @@ float G1_Smith(float roughness, float NdotL)
     return 2.0 * NdotL / (NdotL + sqrt(square(alpha) + (1.0 - square(alpha)) * square(NdotL)));
 }
 
-const float EMISSION_STREANGTH = 40.0;
-const float SKYBOX = 10.0;
+const float EMISSION_STREANGTH = 20.0;
+const float SKYBOX = 1.0;
 
 void main() 
 {	
@@ -116,15 +116,83 @@ void main()
     {
         RAB_RandomSamplerState rng = RAB_InitRandomSampler(pixelCord, 1);
         
+        float dist = max(1, 0.1 * length(primary.surface.worldPos - g_Const.view.cameraDirectionOrPosition.xyz));
+
         RayDesc ray;
-        ray.TMin = tmin;
-        ray.TMax = BACKGROUND_DEPTH;
+        ray.TMin = 0.001f * dist;
+        ray.TMax = 1000;
+
+        float3 tangent, bitangent;
+        branchlessONB(primary.surface.normal, tangent, bitangent);
+
+        float2 Rand;
+        Rand.x = RAB_GetNextRandom(rng);
+        Rand.y = RAB_GetNextRandom(rng);
+
+        float3 V = normalize(g_Const.view.cameraDirectionOrPosition.xyz - primary.surface.worldPos);
+
+        bool isSpecularRay = false;
+        bool isDeltaSurface = primary.surface.roughness == 0.0;
+        float specular_PDF;
+        float3 BRDF_over_PDF;
+        float overall_PDF;
+
+        {
+            float3 specularDirection;
+            float3 specular_BRDF_over_PDF;
+            {
+                float3 Ve = float3(dot(V, tangent), dot(V, bitangent), dot(V, primary.surface.normal));
+                float3 He = sampleGGX_VNDF(Ve, primary.surface.roughness, Rand);
+                float3 H = isDeltaSurface ? primary.surface.normal : normalize(He.x * tangent + He.y * bitangent + He.z * primary.surface.normal);
+                specularDirection = reflect(-V, H);
+
+                float HoV = saturate(dot(H, V));
+                float NoV = saturate(dot(primary.surface.normal, V));
+                float3 F = Schlick_Fresnel(primary.surface.specularF0, HoV);
+                float G1 = isDeltaSurface ? 1.0 : (NoV > 0) ? G1_Smith(primary.surface.roughness, NoV) : 0;
+                specular_BRDF_over_PDF = F * G1;
+            }
+
+            float3 diffuseDirection;
+            float diffuse_BRDF_over_PDF;
+            {
+                float solidAnglePdf;
+                float3 localDirection = SampleCosHemisphere(Rand, solidAnglePdf);
+                diffuseDirection = tangent * localDirection.x + bitangent * localDirection.y + primary.surface.normal * localDirection.z;
+                diffuse_BRDF_over_PDF = 1.0;
+            }
+
+            specular_PDF = saturate(calcLuminance(specular_BRDF_over_PDF) /
+                calcLuminance(specular_BRDF_over_PDF + diffuse_BRDF_over_PDF * primary.surface.diffuseAlbedo));
+
+            isSpecularRay = RAB_GetNextRandom(rng) < specular_PDF;
+
+            if (isSpecularRay)
+            {
+                ray.Direction = specularDirection;
+                BRDF_over_PDF = specular_BRDF_over_PDF / specular_PDF;
+            }
+            else
+            {
+                ray.Direction = diffuseDirection;
+                BRDF_over_PDF = vec3(diffuse_BRDF_over_PDF / (1.0 - specular_PDF));
+            }
+
+            const float specularLobe_PDF = ImportanceSampleGGX_VNDF_PDF(primary.surface.roughness, primary.surface.normal, V, ray.Direction);
+            const float diffuseLobe_PDF = saturate(dot(ray.Direction, primary.surface.normal)) / RTXDI_PI;
+
+            // For delta surfaces, we only pass the diffuse lobe to ReSTIR GI, and this pdf is for that.
+            overall_PDF = isDeltaSurface ? diffuseLobe_PDF : mix(diffuseLobe_PDF, specularLobe_PDF, specular_PDF);
+        }
+
+        if (dot(primary.surface.geoNormal, ray.Direction) <= 0.0)
+        {
+            BRDF_over_PDF = vec3(0.0);
+            ray.TMax = 0;
+        }
+
         ray.Origin = primary.surface.worldPos;
-        vec3 dir; 
-        RAB_GetSurfaceBrdfSample(primary.surface, rng, dir);
-        ray.Direction = dir;
-        float overall_PDF = RAB_GetSurfaceBrdfPdf(primary.surface, dir);
-        
+
         RAB_Surface secondarySurface = TraceRayToSurface(ray);
 
         if(RAB_IsSurfaceValid(secondarySurface)) {
@@ -136,27 +204,31 @@ void main()
             RAB_GetSurfaceBrdfSample(secondarySurface, rng, dir);
             ray.Direction = dir;
             trace(ray);
-            
+
+            SplitBrdf brdf;
+            vec3 radiance;
             if(!p.missed) {
-                SplitBrdf brdf = EvaluateBrdf(secondarySurface, p.hitPoint);
-
-                vec3 diffuse = brdf.demodulatedDiffuse * p.emission * EMISSION_STREANGTH;
-                vec3 specular = brdf.specular * p.emission * EMISSION_STREANGTH;
-                
-                reservoir = RTXDI_MakeGIReservoir(secondarySurface.worldPos,
-                    secondarySurface.geoNormal, diffuse + specular + emission + p.emission, overall_PDF);
+                brdf = EvaluateBrdf(secondarySurface, p.hitPoint);
+                radiance = p.emission * EMISSION_STREANGTH;
             }else {
-                SplitBrdf brdf = EvaluateBrdf(secondarySurface, ray.Origin + ray.Direction * BACKGROUND_DEPTH);
-
-                vec3 diffuse = brdf.demodulatedDiffuse * p.color.rgb * SKYBOX; // used for skybox radiance
-                vec3 specular = brdf.specular * p.color.rgb * SKYBOX; // used for skybox radiance
-
-                reservoir = RTXDI_MakeGIReservoir(secondarySurface.worldPos,
-                    secondarySurface.geoNormal, diffuse + specular + emission, overall_PDF);
+                brdf = EvaluateBrdf(secondarySurface, ray.Origin + ray.Direction * BACKGROUND_DEPTH);
+                radiance = p.color.rgb * SKYBOX;
             }
+
+            vec3 diffuse = brdf.demodulatedDiffuse * radiance;
+			vec3 specular = brdf.specular * radiance;
+
+            specular = DemodulateSpecular(specular, secondarySurface.specularF0);
+
+            diffuse.rgb *= secondarySurface.diffuseAlbedo;
+            specular.rgb *= max(vec3(0.01), secondarySurface.specularF0);
+
+            reservoir = RTXDI_MakeGIReservoir(secondarySurface.worldPos,
+                secondarySurface.geoNormal, (diffuse + specular + emission + p.emission * EMISSION_STREANGTH), overall_PDF);
+
         }else {
             reservoir = RTXDI_MakeGIReservoir(ray.Origin + ray.Direction * BACKGROUND_DEPTH,
-                -ray.Direction, p.color.rgb * SKYBOX + emission, overall_PDF);
+                -ray.Direction, (p.color.rgb * SKYBOX + emission), overall_PDF);
         }
     }
     else

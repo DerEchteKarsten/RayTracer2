@@ -196,24 +196,24 @@ fn main() {
                 temporalResamplingInputBufferIndex: 1,  //Resampeling input buffer
                 temporalResamplingOutputBufferIndex: 0,
                 spatialResamplingInputBufferIndex: 0, 
-                spatialResamplingOutputBufferIndex: 1, //Resampeld reservoir output
-                finalShadingInputBufferIndex: 1, //Final Shade input
+                spatialResamplingOutputBufferIndex: 2, //Resampeld reservoir output
+                finalShadingInputBufferIndex: 2, //Final Shade input
                 pad1: 0, 
                 pad2: 0 
             },
             finalShadingParams: ReSTIRGI_FinalShadingParameters {
-                enableFinalMIS: 1,
+                enableFinalMIS: 0,
                 enableFinalVisibility: 1,
                 pad1: 0,
                 pad2: 0,
             },
             reservoirBufferParams: CalculateReservoirBufferParameters(1920, 1080),
             spatialResamplingParams: ReSTIRGI_SpatialResamplingParameters {
-                numSpatialSamples: 8,
-                spatialBiasCorrectionMode: 2,
-                spatialDepthThreshold: 0.1,
-                spatialNormalThreshold: 0.3,
-                spatialSamplingRadius: 6.0,
+                numSpatialSamples: 0,
+                spatialBiasCorrectionMode: 3,
+                spatialDepthThreshold: 0.2,
+                spatialNormalThreshold: 0.1,
+                spatialSamplingRadius: 0.0,
 
                 pad1: 0,
                 pad2: 0,
@@ -221,14 +221,14 @@ fn main() {
             },
             temporalResamplingParams: ReSTIRGI_TemporalResamplingParameters { 
                 boilingFilterStrength: 0.0, 
-                depthThreshold: 0.1, 
-                normalThreshold: 0.3, 
+                depthThreshold: 0.2, 
+                normalThreshold: 0.1, 
                 enableBoilingFilter: 0, 
                 enableFallbackSampling: 1, 
                 enablePermutationSampling: 0, 
                 maxHistoryLength: 20, 
                 maxReservoirAge: 50, 
-                temporalBiasCorrectionMode: 2, 
+                temporalBiasCorrectionMode: 3, 
                 uniformRandomNumber: rand::random(), 
                 pad2: 0,
                 pad3: 0, 

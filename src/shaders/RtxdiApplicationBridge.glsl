@@ -1,5 +1,7 @@
 #ifndef RTXDI_APPLICATION_BRIDGE_HLSLI
 #define RTXDI_APPLICATION_BRIDGE_HLSLI
+#define RTXDI_GI_ALLOWED_BIAS_CORRECTION RTXDI_BIAS_CORRECTION_RAY_TRACED
+const bool kSpecularOnly = false;
 
 #include "ShaderParameters.glsl"
 #include "GBufferHelpers.glsl"
@@ -110,6 +112,20 @@ void trace(RayDesc ray) {
     traceRayEXT(SceneBVH, gl_RayFlagsOpaqueEXT, 0xff, 0, 0, 0, ray.Origin, ray.TMin, ray.Direction, ray.TMax, 0);
 }
 
+RayDesc setupVisibilityRay(RAB_Surface surface, float3 samplePosition)
+{
+    float offset = 0.01;
+    vec3 L = samplePosition - surface.worldPos;
+
+    RayDesc ray;
+    ray.TMin = offset;
+    ray.TMax = max(offset, length(L) - offset * 2);
+    ray.Direction = normalize(L);
+    ray.Origin = surface.worldPos;
+
+    return ray;
+}
+
 // Tests the visibility between a surface and a light sample.
 // Returns true if there is nothing between them.
 bool RAB_GetConservativeVisibility(RAB_Surface surface, RAB_LightSample lightSample)
@@ -125,11 +141,7 @@ bool RAB_GetConservativeVisibility(RAB_Surface surface, RAB_LightSample lightSam
 
 bool RAB_GetConservativeVisibility(RAB_Surface surface, vec3 pos)
 {
-    RayDesc ray;
-    ray.TMin = 0.0001;
-    ray.TMax = 100000.0;
-    ray.Direction = normalize(pos - surface.worldPos);
-    ray.Origin = surface.worldPos;
+    RayDesc ray = setupVisibilityRay(surface, pos);
 
     trace(ray);
 
@@ -282,21 +294,10 @@ float RAB_GetNextRandom(inout RAB_RandomSamplerState rng)
 }
 
 
-vec2 sampleDisk(vec2 random)
+vec2 SampleDisk(vec2 random)
 {
     float angle = 2 * RTXDI_PI * random.x;
     return vec2(cos(angle), sin(angle)) * sqrt(random.y);
-}
-
-
-vec3 sampleCosHemisphere(vec2 random, out float solidAnglePdf)
-{
-    vec2 tangential = sampleDisk(random);
-    float elevation = sqrt(saturate(1.0 - random.y));
-
-    solidAnglePdf = elevation / RTXDI_PI;
-
-    return vec3(tangential.xy, elevation);
 }
 
 vec3 ImportanceSampleGGX(vec2 random, float roughness)
@@ -342,25 +343,37 @@ vec3 ImportanceSampleGGX_VNDF(float2 random, float roughness, vec3 Ve, float ndf
     return H;
 }
 
+float3 SampleCosHemisphere(vec2 random, out float solidAnglePdf)
+{
+    vec2 tangential = SampleDisk(random);
+    float elevation = sqrt(saturate(1.0 - random.y));
+
+    solidAnglePdf = elevation / RTXDI_PI;
+
+    return float3(tangential.xy, elevation);
+}
 
 // Output an importanced sampled reflection direction from the BRDF given the view
 // Return true if the returned direction is above the surface
-bool RAB_GetSurfaceBrdfSample(RAB_Surface surface, inout RAB_RandomSamplerState rng, out vec3 dir)
+bool RAB_GetSurfaceBrdfSample(RAB_Surface surface, inout RAB_RandomSamplerState rng, out float3 dir)
 {
-    vec3 rand;
+    float3 rand;
     rand.x = RAB_GetNextRandom(rng);
     rand.y = RAB_GetNextRandom(rng);
     rand.z = RAB_GetNextRandom(rng);
     if (rand.x < surface.diffuseProbability)
     {
+        if (kSpecularOnly)
+            return false;
+
         float pdf;
-        vec3 h = sampleCosHemisphere(rand.yz, pdf);
+        float3 h = SampleCosHemisphere(rand.yz, pdf);
         dir = tangentToWorld(surface, h);
     }
     else
     {
-         vec3 Ve = normalize(worldToTangent(surface, surface.viewDir));
-        vec3 h = ImportanceSampleGGX_VNDF(rand.yz, max(surface.roughness, kMinRoughness), Ve, 1.0);
+        float3 Ve = normalize(worldToTangent(surface, surface.viewDir));
+        float3 h = ImportanceSampleGGX_VNDF(rand.yz, max(surface.roughness, kMinRoughness), Ve, 1.0);
         h = normalize(h);
         dir = reflect(-surface.viewDir, tangentToWorld(surface, h));
     }
@@ -379,11 +392,10 @@ float ImportanceSampleGGX_VNDF_PDF(float roughness, vec3 N, vec3 V, vec3 L)
     return (VoH > 0.0) ? D / (4.0 * VoH) : 0.0;
 }
 
-// Return PDF wrt solid angle for the BRDF in the given dir
-float RAB_GetSurfaceBrdfPdf(RAB_Surface surface, vec3 dir)
+float RAB_GetSurfaceBrdfPdf(RAB_Surface surface, float3 dir)
 {
     float cosTheta = saturate(dot(surface.normal, dir));
-    float diffusePdf = cosTheta / RTXDI_PI;
+    float diffusePdf = kSpecularOnly ? 0.f : (cosTheta / RTXDI_PI);
     float specularPdf = ImportanceSampleGGX_VNDF_PDF(max(surface.roughness, kMinRoughness), surface.normal, surface.viewDir, dir);
     float pdf = cosTheta > 0.f ? mix(specularPdf, diffusePdf, surface.diffuseProbability) : 0.f;
     return pdf;
@@ -501,7 +513,6 @@ bool RAB_ValidateGISampleWithJacobian(inout float jacobian)
 
     return true;
 }
-
 
 
 // Computes the weight of the given GI sample when the given surface is shaded using that GI sample.

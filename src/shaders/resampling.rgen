@@ -44,6 +44,7 @@ void main() {
     motionVector = convertMotionVectorToPixelSpace(g_Const.view, g_Const.prevView, ivec2(pixelPosition), motionVector);
 
     if (RAB_IsSurfaceValid(primarySurface)) {
+
         RTXDI_GISpatioTemporalResamplingParameters stParams;
 
         stParams.screenSpaceMotion = motionVector;
@@ -65,5 +66,6 @@ void main() {
         // Execute resampling.
         reservoir = RTXDI_GISpatioTemporalResampling(pixelPosition, primarySurface, reservoir, rng, g_Const.runtimeParams, g_Const.restirGI.reservoirBufferParams, stParams);
     }
+    
     RTXDI_StoreGIReservoir(reservoir, g_Const.restirGI.reservoirBufferParams, reservoirPosition, g_Const.restirGI.bufferIndices.spatialResamplingOutputBufferIndex);
 }
