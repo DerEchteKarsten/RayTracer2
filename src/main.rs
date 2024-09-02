@@ -8,8 +8,8 @@ use context::*;
 mod camera;
 use camera::*;
 mod gltf;
-mod shader_params;
 mod pipelines;
+mod shader_params;
 mod ui;
 
 use memoffset::offset_of;
@@ -21,7 +21,7 @@ use model::*;
 
 use anyhow::Result;
 use ash::vk::{
-    self, AabbPositionsKHR, AccelerationStructureTypeKHR, BufferUsageFlags, GeometryTypeKHR, ImageLayout, Packed24_8, TransformMatrixKHR, KHR_SPIRV_1_4_NAME
+    self, AabbPositionsKHR, AccelerationStructureTypeKHR, AccessFlags, AccessFlags2, BufferUsageFlags, GeometryTypeKHR, ImageAspectFlags, ImageLayout, Packed24_8, PipelineStageFlags, PipelineStageFlags2, TransformMatrixKHR, KHR_SPIRV_1_4_NAME
 };
 use gpu_allocator::MemoryLocation;
 
@@ -29,7 +29,11 @@ use ash::Device;
 
 use glam::{vec3, Mat4, Vec3, Vec4};
 use pipelines::{create_render_recources, CalculateReservoirBufferParameters};
-use shader_params::{GConst, RTXDI_ReservoirBufferParameters, RTXDI_RuntimeParameters, ReSTIRGI_BufferIndices, ReSTIRGI_FinalShadingParameters, ReSTIRGI_Parameters, ReSTIRGI_SpatialResamplingParameters, ReSTIRGI_TemporalResamplingParameters};
+use shader_params::{
+    GConst, RTXDI_ReservoirBufferParameters, RTXDI_RuntimeParameters, ReSTIRGI_BufferIndices,
+    ReSTIRGI_FinalShadingParameters, ReSTIRGI_Parameters, ReSTIRGI_SpatialResamplingParameters,
+    ReSTIRGI_TemporalResamplingParameters,
+};
 use simple_logger::SimpleLogger;
 use std::default::{self, Default};
 use std::ffi::{CStr, CString};
@@ -53,8 +57,7 @@ const NEIGHBOR_OFFSET_COUNT: u32 = 8192;
 const RTXDI_RESERVOIR_BLOCK_SIZE: u32 = 16;
 
 fn main() {
-    let model_thread =
-        std::thread::spawn(|| gltf::load_file("./src/models/box.glb").unwrap());
+    let model_thread = std::thread::spawn(|| gltf::load_file("./src/models/box.glb").unwrap());
     let image_thread = std::thread::spawn(|| image::open("./src/models/skybox2.exr").unwrap());
 
     SimpleLogger::new().init().unwrap();
@@ -129,12 +132,12 @@ fn main() {
     log::trace!("Starting Image Load");
     let image = image_thread.join().unwrap();
     let sky_box = Image::new_from_data(&mut ctx, image, vk::Format::R32G32B32A32_SFLOAT).unwrap();
-    ctx.transition_image_layout(&sky_box.image, ImageLayout::SHADER_READ_ONLY_OPTIMAL).unwrap();
+    ctx.transition_image_layout(&sky_box.image, ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+        .unwrap();
     log::trace!("Starting Model");
     let model = model_thread.join().unwrap();
     let model = Model::from_gltf(&mut ctx, model).unwrap();
     log::trace!("Model Loaded");
-
 
     let model_mat = Mat4::from_scale(vec3(0.1, 0.1, 0.1));
     let tlas = {
@@ -182,7 +185,7 @@ fn main() {
         )
         .unwrap()
     };
-    
+
     let renderer = create_render_recources(&mut ctx, &model, &tlas, sky_box.view).unwrap();
 
     let view = camera.planar_view_constants();
@@ -191,19 +194,19 @@ fn main() {
         view,
         prevView: view,
         restirGI: ReSTIRGI_Parameters {
-            bufferIndices: ReSTIRGI_BufferIndices { 
+            bufferIndices: ReSTIRGI_BufferIndices {
                 secondarySurfaceReSTIRDIOutputBufferIndex: 0, //Reservoir to Resample
-                temporalResamplingInputBufferIndex: 1,  //Resampeling input buffer
+                temporalResamplingInputBufferIndex: 1,        //Resampeling input buffer
                 temporalResamplingOutputBufferIndex: 0,
-                spatialResamplingInputBufferIndex: 0, 
+                spatialResamplingInputBufferIndex: 0,
                 spatialResamplingOutputBufferIndex: 2, //Resampeld reservoir output
-                finalShadingInputBufferIndex: 2, //Final Shade input
-                pad1: 0, 
-                pad2: 0 
+                finalShadingInputBufferIndex: 2,       //Final Shade input
+                pad1: 0,
+                pad2: 0,
             },
             finalShadingParams: ReSTIRGI_FinalShadingParameters {
                 enableFinalMIS: 0,
-                enableFinalVisibility: 1,
+                enableFinalVisibility: 0,
                 pad1: 0,
                 pad2: 0,
             },
@@ -211,43 +214,58 @@ fn main() {
             spatialResamplingParams: ReSTIRGI_SpatialResamplingParameters {
                 numSpatialSamples: 0,
                 spatialBiasCorrectionMode: 3,
-                spatialDepthThreshold: 0.2,
-                spatialNormalThreshold: 0.1,
+                spatialDepthThreshold: 0.1,
+                spatialNormalThreshold: 0.2,
                 spatialSamplingRadius: 0.0,
 
                 pad1: 0,
                 pad2: 0,
                 pad3: 0,
             },
-            temporalResamplingParams: ReSTIRGI_TemporalResamplingParameters { 
-                boilingFilterStrength: 0.0, 
-                depthThreshold: 0.2, 
-                normalThreshold: 0.1, 
-                enableBoilingFilter: 0, 
-                enableFallbackSampling: 1, 
-                enablePermutationSampling: 0, 
-                maxHistoryLength: 20, 
-                maxReservoirAge: 50, 
-                temporalBiasCorrectionMode: 3, 
-                uniformRandomNumber: rand::random(), 
+            temporalResamplingParams: ReSTIRGI_TemporalResamplingParameters {
+                boilingFilterStrength: 0.0,
+                depthThreshold: 0.1,
+                normalThreshold: 0.2,
+                enableBoilingFilter: 0,
+                enableFallbackSampling: 1,
+                enablePermutationSampling: 0,
+                maxHistoryLength: 20,
+                maxReservoirAge: 50,
+                temporalBiasCorrectionMode: 3,
+                uniformRandomNumber: rand::random(),
                 pad2: 0,
-                pad3: 0, 
-            }
+                pad3: 0,
+            },
         },
-        runtimeParams: RTXDI_RuntimeParameters { 
-            neighborOffsetMask: NEIGHBOR_OFFSET_COUNT - 1, 
-            activeCheckerboardField: 0, 
-            pad1: 0, 
-            pad2: 0, 
+        runtimeParams: RTXDI_RuntimeParameters {
+            neighborOffsetMask: NEIGHBOR_OFFSET_COUNT - 1,
+            activeCheckerboardField: 0,
+            pad1: 0,
+            pad2: 0,
         },
     };
-    renderer.uniform_buffer.copy_data_to_aligned_buffer(std::slice::from_ref(&g_const), 16).unwrap();
+    renderer
+        .uniform_buffer
+        .copy_data_to_aligned_buffer(std::slice::from_ref(&g_const), 16)
+        .unwrap();
 
     let mut moved = false;
     let mut frame: u32 = 0;
     let mut now = Instant::now();
     let mut last_time = Instant::now();
     let mut frame_time = Duration::new(0, 0);
+
+    let event1 = unsafe {
+        ctx.device
+            .create_event(&vk::EventCreateInfo::default(), None)
+            .unwrap()
+    };
+    let event2 = unsafe {
+        ctx.device
+            .create_event(&vk::EventCreateInfo::default(), None)
+            .unwrap()
+    };
+
     #[allow(clippy::collapsible_match, clippy::single_match)]
     event_loop
         .run(move |event, control_flow| {
@@ -272,21 +290,65 @@ fn main() {
                         }
                     }
                     WindowEvent::RedrawRequested => {
-                        // std::thread::sleep(Duration::from_secs(2));
                         frame += 1;
                         let new_cam = camera.update(&controles, frame_time);
                         moved = new_cam != camera;
                         camera = new_cam;
-                        
-                        let temp = g_const.view;
-                        g_const.view = camera.planar_view_constants();
-                        g_const.prevView = temp;   
 
-                        renderer.uniform_buffer.copy_data_to_buffer(std::slice::from_ref(&g_const)).unwrap();
+                        g_const.view = camera.planar_view_constants();
+
+
+                        renderer
+                            .uniform_buffer
+                            .copy_data_to_buffer(std::slice::from_ref(&g_const))
+                            .unwrap();
+
+                        let memory_barriers = [vk::BufferMemoryBarrier::default()
+                            .buffer(renderer.reservoirs.inner)
+                            .src_access_mask(
+                                AccessFlags::SHADER_WRITE | AccessFlags::SHADER_READ,
+                            )
+                            .dst_access_mask(
+                                AccessFlags::SHADER_WRITE | AccessFlags::SHADER_READ,
+                            )
+                            .src_queue_family_index(ctx.graphics_queue_family.index)
+                            .dst_queue_family_index(ctx.graphics_queue_family.index)
+                            .size(renderer.reservoirs.size)
+                            .offset(0)];
+
+                        let mut image_barriers = [vk::ImageMemoryBarrier::default()
+                            .src_access_mask(
+                                AccessFlags::SHADER_WRITE | AccessFlags::SHADER_READ,
+                            )
+                            .dst_access_mask(
+                                AccessFlags::SHADER_WRITE | AccessFlags::SHADER_READ,
+                            )
+                            .src_queue_family_index(ctx.graphics_queue_family.index)
+                            .dst_queue_family_index(ctx.graphics_queue_family.index)
+                            .subresource_range(vk::ImageSubresourceRange {
+                                aspect_mask: ImageAspectFlags::COLOR,
+                                base_array_layer: 0,
+                                base_mip_level: 0,
+                                layer_count: 1,
+                                level_count: 1,
+                            })
+                            .old_layout(ImageLayout::GENERAL)
+                            .new_layout(ImageLayout::GENERAL); 
+                        11];
+
+                        for i in 0..2 {
+                            image_barriers[0 + 5 * i] = image_barriers[0 + 5 * i].image(renderer.g_buffer[i].diffuse_albedo.image.inner);
+                            image_barriers[1 + 5 * i] = image_barriers[1 + 5 * i].image(renderer.g_buffer[i].normal.image.inner);
+                            image_barriers[2 + 5 * i] = image_barriers[2 + 5 * i].image(renderer.g_buffer[i].geo_normals.image.inner);
+                            image_barriers[3 + 5 * i] = image_barriers[3 + 5 * i].image(renderer.g_buffer[i].depth.image.inner);
+                            image_barriers[4 + 5 * i] = image_barriers[4 + 5 * i].image(renderer.g_buffer[i].motion_vectors.image.inner);
+                            image_barriers[5 + 5 * i] = image_barriers[5 + 5 * i].image(renderer.g_buffer[i].specular_rough.image.inner);
+                        }
+                        
                         
                         ctx.render(|ctx, i| {
                             let cmd = &ctx.cmd_buffs[i as usize];
-                            
+
                             unsafe {
                                 let frame_c = std::slice::from_raw_parts(
                                     &frame as *const u32 as *const u8,
@@ -317,8 +379,10 @@ fn main() {
                                     0,
                                     &[
                                         renderer.raytracing_pipeline.descriptor_set0,
-                                        renderer.raytracing_pipeline.descriptor_set1[(frame % 2) as usize],
-                                        renderer.raytracing_pipeline.descriptor_set2[1 - (frame % 2) as usize],
+                                        renderer.raytracing_pipeline.descriptor_set1
+                                            [(frame % 2) as usize],
+                                        renderer.raytracing_pipeline.descriptor_set2
+                                            [1 - (frame % 2) as usize],
                                     ],
                                     &[],
                                 );
@@ -341,29 +405,36 @@ fn main() {
                                     window_size.height,
                                     1,
                                 );
+                                ctx.device.cmd_set_event(
+                                    *cmd,
+                                    event1,
+                                    PipelineStageFlags::RAY_TRACING_SHADER_KHR,
+                                );
 
-                                let memory_barriers = [vk::MemoryBarrier2 {
-                                    src_access_mask: vk::AccessFlags2::empty(),
-                                    src_stage_mask: vk::PipelineStageFlags2::ALL_COMMANDS,
-                                    dst_access_mask: vk::AccessFlags2::empty(),
-                                    dst_stage_mask: vk::PipelineStageFlags2::ALL_COMMANDS,
-                                    ..Default::default()
-                                }];
 
-                                let dependency_info = vk::DependencyInfo::default()
-                                    .memory_barriers(&memory_barriers);
-                                ctx.device.cmd_pipeline_barrier2(*cmd, &dependency_info);
-
-                                let handle_size = ctx.ray_tracing.pipeline_properties.shader_group_handle_size;
+                                let handle_size =
+                                    ctx.ray_tracing.pipeline_properties.shader_group_handle_size;
                                 let handle_alignment = ctx
                                     .ray_tracing
                                     .pipeline_properties
                                     .shader_group_handle_alignment;
-                                let aligned_handle_size = alinged_size(handle_size, handle_alignment);
+                                let aligned_handle_size =
+                                    alinged_size(handle_size, handle_alignment);
 
-                                let mut raygen_region2 = renderer.shader_binding_table.raygen_region;
+                                let mut raygen_region2 =
+                                    renderer.shader_binding_table.raygen_region;
                                 raygen_region2.device_address += aligned_handle_size as u64;
 
+                                ctx.device.cmd_wait_events(
+                                    *cmd,
+                                    &[event1],
+                                    PipelineStageFlags::RAY_TRACING_SHADER_KHR,
+                                    PipelineStageFlags::RAY_TRACING_SHADER_KHR,
+                                    &[],
+                                    &memory_barriers,
+                                    &image_barriers,
+                                );
+                                ctx.device.reset_event(event1).unwrap();
 
                                 ctx.ray_tracing.pipeline_fn.cmd_trace_rays(
                                     *cmd,
@@ -375,22 +446,29 @@ fn main() {
                                     window_size.height,
                                     1,
                                 );
-                                let memory_barriers = [vk::MemoryBarrier2 {
-                                    src_access_mask: vk::AccessFlags2::empty(),
-                                    src_stage_mask: vk::PipelineStageFlags2::ALL_COMMANDS,
-                                    dst_access_mask: vk::AccessFlags2::empty(),
-                                    dst_stage_mask: vk::PipelineStageFlags2::ALL_COMMANDS,
-                                    ..Default::default()
-                                }];
 
+                                ctx.device.cmd_set_event(
+                                    *cmd,
+                                    event2,
+                                    PipelineStageFlags::RAY_TRACING_SHADER_KHR,
+                                );
 
-                                let dependency_info = vk::DependencyInfo::default()
-                                    .memory_barriers(&memory_barriers);
-                                ctx.device.cmd_pipeline_barrier2(*cmd, &dependency_info);
+                                ctx.device.cmd_wait_events(
+                                    *cmd,
+                                    &[event2],
+                                    PipelineStageFlags::RAY_TRACING_SHADER_KHR,
+                                    PipelineStageFlags::FRAGMENT_SHADER,
+                                    &[],
+                                    &memory_barriers,
+                                    &image_barriers,
+                                );
+                                ctx.device.reset_event(event2).unwrap();
 
                                 let begin_info = vk::RenderPassBeginInfo::default()
                                     .render_pass(renderer.post_proccesing_pipeline.render_pass)
-                                    .framebuffer(renderer.post_proccesing_pipeline.frame_buffers[i as usize])
+                                    .framebuffer(
+                                        renderer.post_proccesing_pipeline.frame_buffers[i as usize],
+                                    )
                                     .render_area(vk::Rect2D {
                                         extent: vk::Extent2D {
                                             width: window_size.width,
@@ -433,6 +511,14 @@ fn main() {
                                     renderer.post_proccesing_pipeline.pipeline,
                                 );
 
+                                ctx.device.cmd_push_constants(
+                                    *cmd,
+                                    renderer.post_proccesing_pipeline.layout,
+                                    vk::ShaderStageFlags::FRAGMENT,
+                                    0,
+                                    &frame_c,
+                                );
+
                                 ctx.device.cmd_bind_descriptor_sets(
                                     *cmd,
                                     vk::PipelineBindPoint::GRAPHICS,
@@ -440,7 +526,8 @@ fn main() {
                                     0,
                                     &[
                                         renderer.post_proccesing_pipeline.static_descriptor,
-                                        renderer.post_proccesing_pipeline.dynamic_descriptors[(frame % 2) as usize],
+                                        renderer.post_proccesing_pipeline.dynamic_descriptors
+                                            [(frame % 2) as usize],
                                     ],
                                     &[],
                                 );
@@ -450,6 +537,7 @@ fn main() {
                         })
                         .unwrap();
                         window.request_redraw();
+                        g_const.prevView = g_const.view;
                     }
                     _ => (),
                 },

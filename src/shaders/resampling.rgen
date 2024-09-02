@@ -22,7 +22,7 @@ layout(binding = 2, set = 1, r32ui) uniform uimage2D u_GBufferGeoNormals;
 layout(binding = 3, set = 1, r32ui) uniform uimage2D u_GBufferDiffuseAlbedo;
 layout(binding = 4, set = 1, r32ui) uniform uimage2D u_GBufferSpecularRough;
 layout(binding = 5, set = 1, rgba32f) uniform image2D u_MotionVectors;
-
+layout(binding = 8, set = 0) uniform sampler2D skyBox;
 
 #define RTXDI_ENABLE_PRESAMPLING 0
 #define RTXDI_GLSL
@@ -42,7 +42,7 @@ void main() {
 
     vec3 motionVector = imageLoad(u_MotionVectors, ivec2(pixelPosition)).xyz;
     motionVector = convertMotionVectorToPixelSpace(g_Const.view, g_Const.prevView, ivec2(pixelPosition), motionVector);
-
+   
     if (RAB_IsSurfaceValid(primarySurface)) {
 
         RTXDI_GISpatioTemporalResamplingParameters stParams;

@@ -16,7 +16,12 @@ use raw_window_handle::{
     HasRawDisplayHandle, HasRawWindowHandle, RawDisplayHandle, RawWindowHandle,
 };
 use std::{
-    borrow::BorrowMut, ffi::{c_char, CStr, CString}, mem::{align_of, size_of, size_of_val}, os::raw::c_void, ptr, time::Instant
+    borrow::BorrowMut,
+    ffi::{c_char, CStr, CString},
+    mem::{align_of, size_of, size_of_val},
+    os::raw::c_void,
+    ptr,
+    time::Instant,
 };
 // use raw_window_handle::{RawDisplayHandle, RawWindowHandle};
 use simple_logger::SimpleLogger;
@@ -589,7 +594,7 @@ impl<'a> Renderer<'a> {
                 .queue_submit2(self.graphics_queue, &[submit_info], frame.fence.handel)?;
         };
         // println!("{:?}", Instant::now().duration_since(last_time));
-        
+
         let rf = &[frame.render_finished];
         let sc = &[self.swapchain.vk_swapchain];
         let image_indices = vec![image_index];
@@ -833,8 +838,15 @@ impl<'a> Renderer<'a> {
         })
     }
 
-    pub fn transition_image_layout(&self, image: &Image, layout: vk::ImageLayout) -> Result<()>{
-        Renderer::transition_image_layout_to(&self.device, &self.command_pool, image, &self.graphics_queue, layout, ImageAspectFlags::COLOR)
+    pub fn transition_image_layout(&self, image: &Image, layout: vk::ImageLayout) -> Result<()> {
+        Renderer::transition_image_layout_to(
+            &self.device,
+            &self.command_pool,
+            image,
+            &self.graphics_queue,
+            layout,
+            ImageAspectFlags::COLOR,
+        )
     }
 }
 
@@ -1234,8 +1246,6 @@ impl Image {
         })
     }
 
-    
-
     pub fn new_from_data(
         renderer: &mut Renderer,
         image: DynamicImage,
@@ -1356,9 +1366,9 @@ pub fn alinged_size(size: u32, alignment: u32) -> u32 {
 
 #[derive(Clone, Debug)]
 pub struct QueueFamily {
-    index: u32,
-    handel: vk::QueueFamilyProperties,
-    supports_present: bool,
+    pub index: u32,
+    pub handel: vk::QueueFamilyProperties,
+    pub supports_present: bool,
 }
 
 impl QueueFamily {
@@ -1867,7 +1877,6 @@ impl Buffer {
         self.copy_data_to_aligned_buffer(data, align_of::<T>() as _)
     }
 
-
     pub fn copy_data_to_aligned_buffer<T: Copy>(&self, data: &[T], alignment: u32) -> Result<()> {
         unsafe {
             let data_ptr = self
@@ -1877,8 +1886,7 @@ impl Buffer {
                 .mapped_ptr()
                 .unwrap()
                 .as_ptr();
-            let mut align =
-                ash::util::Align::new(data_ptr, alignment as _, size_of_val(data) as _);
+            let mut align = ash::util::Align::new(data_ptr, alignment as _, size_of_val(data) as _);
             align.copy_from_slice(data);
         };
 
@@ -1920,11 +1928,10 @@ fn new_device(
     };
     // let mut atomics = vk::PhysicalDeviceShaderAtomicFloatFeaturesEXT::default()
     //     .shader_buffer_float64_atomic_add(true);
-    let mut ray_tracing_feature = vk::PhysicalDeviceRayTracingPipelineFeaturesKHR::default()
-        .ray_tracing_pipeline(true);
+    let mut ray_tracing_feature =
+        vk::PhysicalDeviceRayTracingPipelineFeaturesKHR::default().ray_tracing_pipeline(true);
     let mut acceleration_struct_feature =
-        vk::PhysicalDeviceAccelerationStructureFeaturesKHR::default()
-        .acceleration_structure(true);
+        vk::PhysicalDeviceAccelerationStructureFeaturesKHR::default().acceleration_structure(true);
     let mut vulkan_12_features = vk::PhysicalDeviceVulkan12Features::default()
         .runtime_descriptor_array(true)
         .buffer_device_address(true)
@@ -1935,7 +1942,9 @@ fn new_device(
         .maintenance4(true)
         .synchronization2(true);
 
-    let features = vk::PhysicalDeviceFeatures::default().shader_int64(true).fragment_stores_and_atomics(true);
+    let features = vk::PhysicalDeviceFeatures::default()
+        .shader_int64(true)
+        .fragment_stores_and_atomics(true);
 
     let mut features = vk::PhysicalDeviceFeatures2::default()
         .features(features)

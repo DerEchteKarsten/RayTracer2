@@ -1,5 +1,5 @@
 use anyhow::{Ok, Result};
-use ash::vk::{self, ImageLayout};
+use ash::vk::{self, ImageLayout, ShaderStageFlags};
 use glam::Vec2;
 use gpu_allocator::MemoryLocation;
 
@@ -9,7 +9,11 @@ use std::{array::from_ref, default::Default};
 
 use crate::shader_params::{GConst, RTXDI_ReservoirBufferParameters};
 use crate::{
-    allocate_descriptor_set, allocate_descriptor_sets, create_descriptor_pool, create_descriptor_set_layout, module_from_bytes, update_descriptor_sets, AccelerationStructure, Buffer, Image, ImageAndView, Model, RayTracingShaderGroupInfo, Renderer, ShaderBindingTable, WriteDescriptorSet, WriteDescriptorSetKind, FRAMES_IN_FLIGHT, NEIGHBOR_OFFSET_COUNT, RTXDI_RESERVOIR_BLOCK_SIZE
+    allocate_descriptor_set, allocate_descriptor_sets, create_descriptor_pool,
+    create_descriptor_set_layout, module_from_bytes, update_descriptor_sets, AccelerationStructure,
+    Buffer, Image, ImageAndView, Model, RayTracingShaderGroupInfo, Renderer, ShaderBindingTable,
+    WriteDescriptorSet, WriteDescriptorSetKind, FRAMES_IN_FLIGHT, NEIGHBOR_OFFSET_COUNT,
+    RTXDI_RESERVOIR_BLOCK_SIZE,
 };
 
 pub struct GBuffer {
@@ -149,7 +153,11 @@ fn create_post_proccesing_pipelien(
     let binding = [static_layout, dynamic_layout];
     let layout_info = vk::PipelineLayoutCreateInfo::default()
         .set_layouts(&binding)
-        .push_constant_ranges(&[]);
+        .push_constant_ranges(&[vk::PushConstantRange {
+            offset: 0,
+            size: 4,
+            stage_flags: ShaderStageFlags::FRAGMENT,
+        }]);
     let layout = unsafe { ctx.device.create_pipeline_layout(&layout_info, None) }?;
 
     let color_blend_attachments = [vk::PipelineColorBlendAttachmentState::default()
@@ -251,8 +259,7 @@ fn create_post_proccesing_pipelien(
     let dynamic_descriptors =
         allocate_descriptor_sets(&ctx.device, &descriptor_pool, &dynamic_layout, 2)?;
 
-    let static_descriptor =
-        allocate_descriptor_set(&ctx.device, &descriptor_pool, &static_layout)?;
+    let static_descriptor = allocate_descriptor_set(&ctx.device, &descriptor_pool, &static_layout)?;
 
     let writes = [
         WriteDescriptorSet {
@@ -626,20 +633,22 @@ fn create_ray_tracing_pipeline(
         },
         WriteDescriptorSet {
             binding: 8,
-            kind: WriteDescriptorSetKind::CombinedImageSampler { view: *skybox_view, sampler: *skybox_sampler, layout: ImageLayout::SHADER_READ_ONLY_OPTIMAL },
+            kind: WriteDescriptorSetKind::CombinedImageSampler {
+                view: *skybox_view,
+                sampler: *skybox_sampler,
+                layout: ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+            },
         },
     ];
 
     update_descriptor_sets(ctx, &static_set, &writes);
 
-    let write = [
-        WriteDescriptorSet {
-            binding: 1,
-            kind: WriteDescriptorSetKind::UniformBuffer {
-                buffer: uniform_buffer.inner,
-            },
+    let write = [WriteDescriptorSet {
+        binding: 1,
+        kind: WriteDescriptorSetKind::UniformBuffer {
+            buffer: uniform_buffer.inner,
         },
-    ];
+    }];
     update_descriptor_sets(ctx, &static_set, &write);
 
     for i in 0..2 {
@@ -687,7 +696,7 @@ fn create_ray_tracing_pipeline(
                 },
             },
         ];
-        update_descriptor_sets(ctx, &dynamic_sets[i], &writes);        
+        update_descriptor_sets(ctx, &dynamic_sets[i], &writes);
         update_descriptor_sets(ctx, &dynamic_sets2[i], &writes);
     }
 
@@ -732,8 +741,12 @@ fn fill_neighbor_offset_buffer(neighbor_offset_count: u32) -> Vec<u8> {
     while buffer.len() < (neighbor_offset_count * 2) as usize {
         u += phi2;
         v += phi2 * phi2;
-        if u >= 1.0 { u -= 1.0;}
-        if v >= 1.0 { v -= 1.0;}
+        if u >= 1.0 {
+            u -= 1.0;
+        }
+        if v >= 1.0 {
+            v -= 1.0;
+        }
 
         let rSq = (u - 0.5) * (u - 0.5) + (v - 0.5) * (v - 0.5);
         if rSq > 0.25 {
@@ -747,8 +760,12 @@ fn fill_neighbor_offset_buffer(neighbor_offset_count: u32) -> Vec<u8> {
     buffer
 }
 
-
-pub fn create_render_recources(ctx: &mut Renderer, model: &Model, top_as: &AccelerationStructure, skybox_view: vk::ImageView) -> Result<RendererResources> {
+pub fn create_render_recources(
+    ctx: &mut Renderer,
+    model: &Model,
+    top_as: &AccelerationStructure,
+    skybox_view: vk::ImageView,
+) -> Result<RendererResources> {
     let sampler_create_info: vk::SamplerCreateInfo = vk::SamplerCreateInfo {
         mag_filter: vk::Filter::NEAREST,
         min_filter: vk::Filter::NEAREST,
@@ -762,72 +779,123 @@ pub fn create_render_recources(ctx: &mut Renderer, model: &Model, top_as: &Accel
         ..Default::default()
     };
 
-    let skybox_sampler = unsafe { ctx.device.create_sampler(&sampler_create_info, None).unwrap() };
+    let skybox_sampler = unsafe {
+        ctx.device
+            .create_sampler(&sampler_create_info, None)
+            .unwrap()
+    };
 
     let width = 1920;
     let height = 1080;
 
     let mut g_buffer = vec![];
     for i in 0..2 {
-        let depth_image = ctx.create_image(
-            vk::ImageUsageFlags::STORAGE,
-            MemoryLocation::GpuOnly,
-            vk::Format::R32_SFLOAT,
-            width,
-            height,
-        ).unwrap();
-        Renderer::transition_image_layout_to_general(&ctx.device, &ctx.command_pool, &depth_image, &ctx.graphics_queue).unwrap();
+        let depth_image = ctx
+            .create_image(
+                vk::ImageUsageFlags::STORAGE,
+                MemoryLocation::GpuOnly,
+                vk::Format::R32_SFLOAT,
+                width,
+                height,
+            )
+            .unwrap();
+        Renderer::transition_image_layout_to_general(
+            &ctx.device,
+            &ctx.command_pool,
+            &depth_image,
+            &ctx.graphics_queue,
+        )
+        .unwrap();
         let depth_image_view = ctx.create_image_view(&depth_image).unwrap();
 
-        let normal_image = ctx.create_image(
-            vk::ImageUsageFlags::STORAGE,
-            MemoryLocation::GpuOnly,
-            vk::Format::R32_UINT,
-            width,
-            height,
-        ).unwrap();
-        Renderer::transition_image_layout_to_general(&ctx.device, &ctx.command_pool, &normal_image, &ctx.graphics_queue).unwrap();
+        let normal_image = ctx
+            .create_image(
+                vk::ImageUsageFlags::STORAGE,
+                MemoryLocation::GpuOnly,
+                vk::Format::R32_UINT,
+                width,
+                height,
+            )
+            .unwrap();
+        Renderer::transition_image_layout_to_general(
+            &ctx.device,
+            &ctx.command_pool,
+            &normal_image,
+            &ctx.graphics_queue,
+        )
+        .unwrap();
         let normal_image_view = ctx.create_image_view(&normal_image).unwrap();
 
-
-        let geo_normal_image = ctx.create_image(
-            vk::ImageUsageFlags::STORAGE,
-            MemoryLocation::GpuOnly,
-            vk::Format::R32_UINT,
-            width,
-            height,
-        ).unwrap();
-        Renderer::transition_image_layout_to_general(&ctx.device, &ctx.command_pool, &geo_normal_image, &ctx.graphics_queue).unwrap();
+        let geo_normal_image = ctx
+            .create_image(
+                vk::ImageUsageFlags::STORAGE,
+                MemoryLocation::GpuOnly,
+                vk::Format::R32_UINT,
+                width,
+                height,
+            )
+            .unwrap();
+        Renderer::transition_image_layout_to_general(
+            &ctx.device,
+            &ctx.command_pool,
+            &geo_normal_image,
+            &ctx.graphics_queue,
+        )
+        .unwrap();
         let geo_normal_image_view = ctx.create_image_view(&geo_normal_image).unwrap();
 
-        let diffuse_albedo_image = ctx.create_image(
-            vk::ImageUsageFlags::STORAGE,
-            MemoryLocation::GpuOnly,
-            vk::Format::R32_UINT,
-            width,
-            height,
-        ).unwrap();
-        Renderer::transition_image_layout_to_general(&ctx.device, &ctx.command_pool, &diffuse_albedo_image, &ctx.graphics_queue).unwrap();
+        let diffuse_albedo_image = ctx
+            .create_image(
+                vk::ImageUsageFlags::STORAGE,
+                MemoryLocation::GpuOnly,
+                vk::Format::R32_UINT,
+                width,
+                height,
+            )
+            .unwrap();
+        Renderer::transition_image_layout_to_general(
+            &ctx.device,
+            &ctx.command_pool,
+            &diffuse_albedo_image,
+            &ctx.graphics_queue,
+        )
+        .unwrap();
         let diffuse_albedo_image_view = ctx.create_image_view(&diffuse_albedo_image).unwrap();
 
-        let specular_rough_image = ctx.create_image(
-            vk::ImageUsageFlags::STORAGE,
-            MemoryLocation::GpuOnly,
-            vk::Format::R32_UINT,
-            width,
-            height,
-        ).unwrap();
-        Renderer::transition_image_layout_to_general(&ctx.device, &ctx.command_pool, &specular_rough_image, &ctx.graphics_queue).unwrap();
+        let specular_rough_image = ctx
+            .create_image(
+                vk::ImageUsageFlags::STORAGE,
+                MemoryLocation::GpuOnly,
+                vk::Format::R32_UINT,
+                width,
+                height,
+            )
+            .unwrap();
+        Renderer::transition_image_layout_to_general(
+            &ctx.device,
+            &ctx.command_pool,
+            &specular_rough_image,
+            &ctx.graphics_queue,
+        )
+        .unwrap();
         let specular_rough_image_view = ctx.create_image_view(&specular_rough_image)?;
 
-        let motion_vectors = ctx.create_image(
-            vk::ImageUsageFlags::STORAGE,
-            MemoryLocation::GpuOnly,
-            vk::Format::R32G32B32A32_SFLOAT,
-            width,
-            height,
-        ).unwrap();
-        Renderer::transition_image_layout_to_general(&ctx.device, &ctx.command_pool, &motion_vectors, &ctx.graphics_queue).unwrap();
+        let motion_vectors = ctx
+            .create_image(
+                vk::ImageUsageFlags::STORAGE,
+                MemoryLocation::GpuOnly,
+                vk::Format::R32G32B32A32_SFLOAT,
+                width,
+                height,
+            )
+            .unwrap();
+        Renderer::transition_image_layout_to_general(
+            &ctx.device,
+            &ctx.command_pool,
+            &motion_vectors,
+            &ctx.graphics_queue,
+        )
+        .unwrap();
         let motion_vectors_image_view = ctx.create_image_view(&motion_vectors).unwrap();
 
         let g_buffe = GBuffer {
@@ -859,20 +927,30 @@ pub fn create_render_recources(ctx: &mut Renderer, model: &Model, top_as: &Accel
         g_buffer.push(g_buffe);
     }
 
-    let uniform_buffer = ctx.create_buffer(
-        vk::BufferUsageFlags::UNIFORM_BUFFER,
-        MemoryLocation::CpuToGpu,
-        size_of::<GConst>() as u64,
-        None,
-    ).unwrap();
-    let reservoirs = ctx.create_buffer(
-        vk::BufferUsageFlags::STORAGE_BUFFER,
-        MemoryLocation::GpuOnly,
-        (200 * width * height) as u64,
-        None,
-    ).unwrap();
+    let uniform_buffer = ctx
+        .create_buffer(
+            vk::BufferUsageFlags::UNIFORM_BUFFER,
+            MemoryLocation::CpuToGpu,
+            size_of::<GConst>() as u64,
+            None,
+        )
+        .unwrap();
+    let reservoirs = ctx
+        .create_buffer(
+            vk::BufferUsageFlags::STORAGE_BUFFER,
+            MemoryLocation::GpuOnly,
+            (100 * width * height) as u64,
+            None,
+        )
+        .unwrap();
     let neighbor_offsets = fill_neighbor_offset_buffer(NEIGHBOR_OFFSET_COUNT);
-    let neighbors = ctx.create_gpu_only_buffer_from_data(vk::BufferUsageFlags::STORAGE_BUFFER, neighbor_offsets.as_slice(), None).unwrap();
+    let neighbors = ctx
+        .create_gpu_only_buffer_from_data(
+            vk::BufferUsageFlags::STORAGE_BUFFER,
+            neighbor_offsets.as_slice(),
+            None,
+        )
+        .unwrap();
 
     let post_proccesing_pipeline = create_post_proccesing_pipelien(
         ctx,
@@ -881,7 +959,8 @@ pub fn create_render_recources(ctx: &mut Renderer, model: &Model, top_as: &Accel
         &skybox_view,
         &uniform_buffer,
         &reservoirs,
-    ).unwrap();
+    )
+    .unwrap();
 
     let shaders_create_info = [
         RayTracingShaderCreateInfo {
@@ -925,9 +1004,15 @@ pub fn create_render_recources(ctx: &mut Renderer, model: &Model, top_as: &Accel
         &neighbors,
         &g_buffer,
         &shaders_create_info,
-    ).unwrap();
+    )
+    .unwrap();
 
-    let shader_binding_table = ctx.create_shader_binding_table(&raytracing_pipeline.handle, &raytracing_pipeline.shader_group_info).unwrap();
+    let shader_binding_table = ctx
+        .create_shader_binding_table(
+            &raytracing_pipeline.handle,
+            &raytracing_pipeline.shader_group_info,
+        )
+        .unwrap();
 
     Ok(RendererResources {
         g_buffer,
@@ -940,11 +1025,17 @@ pub fn create_render_recources(ctx: &mut Renderer, model: &Model, top_as: &Accel
     })
 }
 
-pub fn CalculateReservoirBufferParameters(renderWidth: u32, renderHeight: u32) -> RTXDI_ReservoirBufferParameters {
-    let renderWidthBlocks = (renderWidth + RTXDI_RESERVOIR_BLOCK_SIZE - 1) / RTXDI_RESERVOIR_BLOCK_SIZE;
-    let renderHeightBlocks = (renderHeight + RTXDI_RESERVOIR_BLOCK_SIZE - 1) / RTXDI_RESERVOIR_BLOCK_SIZE;
+pub fn CalculateReservoirBufferParameters(
+    renderWidth: u32,
+    renderHeight: u32,
+) -> RTXDI_ReservoirBufferParameters {
+    let renderWidthBlocks =
+        (renderWidth + RTXDI_RESERVOIR_BLOCK_SIZE - 1) / RTXDI_RESERVOIR_BLOCK_SIZE;
+    let renderHeightBlocks =
+        (renderHeight + RTXDI_RESERVOIR_BLOCK_SIZE - 1) / RTXDI_RESERVOIR_BLOCK_SIZE;
 
-    let reservoirBlockRowPitch = renderWidthBlocks * (RTXDI_RESERVOIR_BLOCK_SIZE * RTXDI_RESERVOIR_BLOCK_SIZE);
+    let reservoirBlockRowPitch =
+        renderWidthBlocks * (RTXDI_RESERVOIR_BLOCK_SIZE * RTXDI_RESERVOIR_BLOCK_SIZE);
     let reservoirArrayPitch = reservoirBlockRowPitch * renderHeightBlocks;
     return RTXDI_ReservoirBufferParameters {
         reservoirArrayPitch,

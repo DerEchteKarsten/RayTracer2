@@ -33,11 +33,11 @@ pub struct UIPipeline {
     pub instance_buffer: Buffer,
     pub font_texture: ImageAndView,
     pub sampler: vk::Sampler,
-    pub textures: Vec<ImageAndView>
+    pub textures: Vec<ImageAndView>,
 }
 
 // fn create_ui_pipeline(ui: UINode) -> Result<UIPipeline> {
-    
+
 //     // Ok(UIPipeline {
 //     //     descriptor,
 //     //     font_texture,

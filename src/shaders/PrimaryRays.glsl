@@ -57,6 +57,8 @@ RAB_Surface TraceRayToSurface(RayDesc ray)
         surface.roughness = p.roughness;
         surface.viewDir = -ray.Direction;
         surface.diffuseProbability = getSurfaceDiffuseProbability(surface);
+    }else {
+        surface.viewDepth = BACKGROUND_DEPTH;
     }
 
     return surface;

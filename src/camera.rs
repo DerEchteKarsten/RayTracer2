@@ -110,7 +110,7 @@ impl Camera {
     }
     pub fn planar_view_constants(&self) -> PlanarViewConstants {
         let window_size = glam::vec2(1920.0, 1080.0);
-        let clipToWindowScale = glam::vec2(0.5 * window_size.x, -0.5 *window_size.y);
+        let clipToWindowScale = glam::vec2(0.5 * window_size.x, -0.5 * window_size.y);
         let clipToWindowBias = window_size * 0.5;
         let windowToClipScale = 1.0 / clipToWindowScale;
 
@@ -124,14 +124,19 @@ impl Camera {
             viewportOrigin: glam::vec2(0.0, 0.0),
             viewportSize: window_size,
             viewportSizeInv: 1.0 / window_size,
-            
+
             clipToWindowScale,
             clipToWindowBias,
 
             windowToClipScale,
             windowToClipBias: -clipToWindowBias * windowToClipScale,
 
-            cameraDirectionOrPosition: glam::vec4(self.position.x, self.position.y, self.position.z, 1.0),
+            cameraDirectionOrPosition: glam::vec4(
+                self.position.x,
+                self.position.y,
+                self.position.z,
+                1.0,
+            ),
             pixelOffset: glam::vec2(0.0, 0.0),
         }
     }
@@ -218,25 +223,38 @@ impl Controls {
                         if event.physical_key == PhysicalKey::Code(KeyCode::ShiftLeft) {
                             new_state.go_down = event.state == ElementState::Pressed;
                         }
-                        if event.physical_key == PhysicalKey::Code(KeyCode::ArrowLeft) && event.state == ElementState::Pressed {
+                        if event.physical_key == PhysicalKey::Code(KeyCode::ArrowLeft)
+                            && event.state == ElementState::Pressed
+                        {
                             new_state.look_around = true;
                             new_state.cursor_delta = [-1.0, 0.0];
                         }
-                        if event.physical_key == PhysicalKey::Code(KeyCode::ArrowRight) && event.state == ElementState::Pressed {
+                        if event.physical_key == PhysicalKey::Code(KeyCode::ArrowRight)
+                            && event.state == ElementState::Pressed
+                        {
                             new_state.look_around = true;
                             new_state.cursor_delta = [1.0, 0.0];
                         }
 
-                        if event.physical_key == PhysicalKey::Code(KeyCode::ArrowUp) && event.state == ElementState::Pressed {
+                        if event.physical_key == PhysicalKey::Code(KeyCode::ArrowUp)
+                            && event.state == ElementState::Pressed
+                        {
                             new_state.look_around = true;
                             new_state.cursor_delta = [0.0, -1.0];
                         }
-                        if event.physical_key == PhysicalKey::Code(KeyCode::ArrowDown) && event.state == ElementState::Pressed {
+                        if event.physical_key == PhysicalKey::Code(KeyCode::ArrowDown)
+                            && event.state == ElementState::Pressed
+                        {
                             new_state.look_around = true;
                             new_state.cursor_delta = [0.0, 1.0];
                         }
 
-                        if (event.physical_key == PhysicalKey::Code(KeyCode::ArrowRight) || event.physical_key == PhysicalKey::Code(KeyCode::ArrowLeft) || event.physical_key == PhysicalKey::Code(KeyCode::ArrowDown) || event.physical_key == PhysicalKey::Code(KeyCode::ArrowUp)) && event.state == ElementState::Released {
+                        if (event.physical_key == PhysicalKey::Code(KeyCode::ArrowRight)
+                            || event.physical_key == PhysicalKey::Code(KeyCode::ArrowLeft)
+                            || event.physical_key == PhysicalKey::Code(KeyCode::ArrowDown)
+                            || event.physical_key == PhysicalKey::Code(KeyCode::ArrowUp))
+                            && event.state == ElementState::Released
+                        {
                             new_state.look_around = false;
                         }
                     }

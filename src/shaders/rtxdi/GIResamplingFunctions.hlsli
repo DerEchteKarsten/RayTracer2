@@ -774,9 +774,6 @@ RTXDI_GIReservoir RTXDI_GISpatioTemporalResampling(
         {
             selected = i;
             selectedTargetPdf = targetPdf;
-            // if(targetPdf > 1.0) {
-            //     debugPrintfEXT("%f", targetPdf);
-            // }
         }
     }
 

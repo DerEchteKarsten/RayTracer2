@@ -3,17 +3,13 @@ layout(location = 0) out vec4 outColor;
 #extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
 #extension GL_EXT_debug_printf: enable
 #define RTXDI_GLSL
+#define RTXDI_ENABLE_PRESAMPLING 0
+
 #include "rtxdi/ReSTIRGIParameters.h"
 #include "./ShaderParameters.glsl"
-#include "packing.glsl"
 
-#define square(x) x*x
 layout(binding = 0, set = 0) buffer TemporalReservoirBuffer {RTXDI_PackedGIReservoir reservoirs[];};
-#define RTXDI_GI_RESERVOIR_BUFFER reservoirs
-#include "rtxdi/GIReservoir.hlsli"
-
 layout(binding = 1, set = 0) uniform Uniform {ResamplingConstants g_Const;};
-layout(binding = 2, set = 0) uniform sampler2D skyBox;
 
 layout(binding = 0, set = 1, r32f) uniform  image2D u_GBufferDepth;
 layout(binding = 1, set = 1, r32ui) uniform  uimage2D u_GBufferNormals;
@@ -21,10 +17,25 @@ layout(binding = 2, set = 1, r32ui) uniform  uimage2D u_GBufferGeoNormals;
 layout(binding = 3, set = 1, r32ui) uniform  uimage2D u_GBufferDiffuseAlbedo;
 layout(binding = 4, set = 1, r32ui) uniform  uimage2D u_GBufferSpecularRough;
 layout(binding = 5, set = 1, rgba32f) uniform  image2D u_MotionVectors;
+layout(binding = 2, set = 0) uniform sampler2D skyBox;
+
+layout( push_constant ) uniform Frame {
+	uint frame;
+} f;
+
+#define square(x) x*x
+const float kMinRoughness = 0.05f;
+#define FINAL_SHADING
+#include "RtxdiApplicationBridge.glsl"
+
+
+#define RTXDI_GI_RESERVOIR_BUFFER reservoirs
+#include "rtxdi/GIReservoir.hlsli"
+
+
 #define PI 3.1415926
 
 #define AGX_LOOK 0
-#include "finalShadingHelpers.glsl"
 
 // Mean error^2: 3.6705141e-06
 vec3 agxDefaultContrastApprox(vec3 x) {
@@ -127,7 +138,6 @@ void main() {
     vec3 col = vec3(0.0);
     ivec2 pixelPosition = ivec2(gl_FragCoord.xy);
     const RAB_Surface primarySurface = GetGBufferSurface(pixelPosition, g_Const.view);
-    const float viewDepth = imageLoad(u_GBufferDepth, pixelPosition).r;
     const uvec2 reservoirPosition = RTXDI_PixelPosToReservoirPos(pixelPosition, g_Const.runtimeParams.activeCheckerboardField);
     const RTXDI_GIReservoir reservoir = RTXDI_LoadGIReservoir(g_Const.restirGI.reservoirBufferParams, reservoirPosition, g_Const.restirGI.bufferIndices.finalShadingInputBufferIndex);
     RTXDI_StoreGIReservoir(reservoir, g_Const.restirGI.reservoirBufferParams, pixelPosition, g_Const.restirGI.bufferIndices.temporalResamplingInputBufferIndex);
@@ -135,7 +145,7 @@ void main() {
     if (RTXDI_IsValidGIReservoir(reservoir))
     {
         vec3 radiance = reservoir.radiance * reservoir.weightSum;
-
+        
         const SplitBrdf brdf = EvaluateBrdf(primarySurface, reservoir.position);
 		vec3 diffuse, specular;
         if (g_Const.restirGI.finalShadingParams.enableFinalMIS == 1)
@@ -161,7 +171,7 @@ void main() {
                      + brdf0.specular * initialRadiance * initialWeight;
         }else {
             diffuse = brdf.demodulatedDiffuse * radiance;
-			specular = brdf.specular * radiance;
+			      specular = brdf.specular * radiance;
         }
 
         specular = DemodulateSpecular(brdf.specular * radiance, primarySurface.specularF0);
@@ -180,10 +190,10 @@ void main() {
 
         float u = (0.5 + atan2(direction.z, direction.x)/(2*PI));
         float v = (0.5 - asin(direction.y)/PI);
-        col = texture(skyBox, vec2(u,v)).rgb;
+		    col = texture(skyBox, vec2(u,v)).rgb;
     }
 
-    // col = Unpack_R11G11B10_UFLOAT(imageLoad(u_GBufferDiffuseAlbedo, pixelPosition).r);
+    // col = vec3(imageLoad(u_GBufferNormals, pixelPosition).r);
     col = agx(col);
     col = agxLook(col);
     col = agxEotf(col);

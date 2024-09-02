@@ -1,4 +1,6 @@
 #extension GL_AMD_gpu_shader_half_float : enable
+#define square(a) a*a
+const float kMinRoughness = 0.05f;
 
 struct Vertex {
   vec3 pos;
