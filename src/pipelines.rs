@@ -1,7 +1,10 @@
+
 use anyhow::{Ok, Result};
-use ash::vk::{self, ImageLayout, ShaderStageFlags};
+use ash::vk::{self, BufferUsageFlags, ImageLayout, PipelineCache, ShaderStageFlags};
 use glam::Vec2;
 use gpu_allocator::MemoryLocation;
+use rand::rngs::ThreadRng;
+use rand::{thread_rng, Rng};
 
 use std::ffi::CString;
 use std::mem::size_of;
@@ -13,7 +16,7 @@ use crate::{
     create_descriptor_set_layout, module_from_bytes, update_descriptor_sets, AccelerationStructure,
     Buffer, Image, ImageAndView, Model, RayTracingShaderGroupInfo, Renderer, ShaderBindingTable,
     WriteDescriptorSet, WriteDescriptorSetKind, FRAMES_IN_FLIGHT, NEIGHBOR_OFFSET_COUNT,
-    RTXDI_RESERVOIR_BLOCK_SIZE,
+    RTXDI_RESERVOIR_BLOCK_SIZE, WINDOW_SIZE,
 };
 
 pub struct GBuffer {
@@ -33,6 +36,10 @@ pub struct RendererResources {
     pub neighbors: Buffer,
     pub shader_binding_table: ShaderBindingTable,
     pub uniform_buffer: Buffer,
+    pub inference_pipeline: InferencePipeline,
+    pub input_buffers: Buffer,
+    pub output_buffers: Buffer,
+    pub weights_buffer: Buffer,
 }
 
 pub struct PostProccesingPipeline {
@@ -53,6 +60,91 @@ pub struct RayTracingPipeline {
     pub descriptor_set1: Vec<vk::DescriptorSet>,
     pub descriptor_set2: Vec<vk::DescriptorSet>,
 }
+
+pub struct InferencePipeline {
+    pub layout: vk::PipelineLayout,
+    pub handle: vk::Pipeline,
+    pub descriptor_set0: vk::DescriptorSet,
+}
+
+pub fn create_inference_pipeline(
+    ctx: &mut Renderer,
+    input_buffer: &Buffer,
+    output_buffer: &Buffer,
+    weights_buffer: &Buffer,
+) -> Result<InferencePipeline> {
+
+    let bindings = [
+        vk::DescriptorSetLayoutBinding::default()
+            .binding(0)
+            .descriptor_count(1)
+            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+            .stage_flags(vk::ShaderStageFlags::COMPUTE),
+        vk::DescriptorSetLayoutBinding::default()
+            .binding(1)
+            .descriptor_count(1)
+            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+            .stage_flags(vk::ShaderStageFlags::COMPUTE),
+        vk::DescriptorSetLayoutBinding::default()
+            .binding(2)
+            .descriptor_count(1)
+            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+            .stage_flags(vk::ShaderStageFlags::COMPUTE),
+    ];
+
+    let descriptor0_layout = ctx.create_descriptor_set_layout(&bindings, &[])?;
+
+    let descriptor_layouts = [descriptor0_layout];
+
+    let layout_info = vk::PipelineLayoutCreateInfo::default()
+        .push_constant_ranges(&[])
+        .set_layouts(&descriptor_layouts);
+
+    let layout = unsafe { ctx.device.create_pipeline_layout(&layout_info, None)? };
+    
+    let entry_point_name: CString = CString::new("main").unwrap();
+    let pipeline_info = vk::ComputePipelineCreateInfo::default()
+        .layout(layout)
+        .stage(vk::PipelineShaderStageCreateInfo::default()
+            .module(ctx.create_shader_module("./src/shaders/training.comp.spv".to_string()))
+            .stage(vk::ShaderStageFlags::COMPUTE)
+            .name(&entry_point_name)
+        );
+
+    let handle = unsafe { ctx.device.create_compute_pipelines(PipelineCache::null(), &[pipeline_info], None).unwrap()[0] };
+
+    let pool = ctx.create_descriptor_pool(1, &[
+        vk::DescriptorPoolSize::default()
+            .descriptor_count(3)
+            .ty(vk::DescriptorType::STORAGE_BUFFER),
+    ]).unwrap();
+
+    let descriptor_set0 = allocate_descriptor_set(&ctx.device, &pool, &descriptor0_layout).unwrap();
+
+    let writes = [
+        WriteDescriptorSet {
+            binding: 0,
+            kind: WriteDescriptorSetKind::StorageBuffer { buffer: input_buffer.inner },
+        },
+        WriteDescriptorSet {
+            binding: 1,
+            kind: WriteDescriptorSetKind::StorageBuffer { buffer: output_buffer.inner },
+        },
+        WriteDescriptorSet {
+            binding: 2,
+            kind: WriteDescriptorSetKind::StorageBuffer { buffer: weights_buffer.inner },
+        }
+    ];
+
+    update_descriptor_sets(ctx, &descriptor_set0, &writes);
+
+    Ok(InferencePipeline {
+        descriptor_set0,
+        handle,
+        layout,
+    })
+}
+
 
 fn create_post_proccesing_pipelien(
     ctx: &mut Renderer,
@@ -341,8 +433,8 @@ fn create_post_proccesing_pipelien(
         let frame_buffer_create_info = vk::FramebufferCreateInfo::default()
             .attachments(&attachments)
             .layers(1)
-            .width(1920)
-            .height(1080)
+            .width(WINDOW_SIZE.x as u32)
+            .height(WINDOW_SIZE.y as u32)
             .render_pass(render_pass)
             .attachment_count(1);
         let frame_buffer = unsafe {
@@ -785,8 +877,8 @@ pub fn create_render_recources(
             .unwrap()
     };
 
-    let width = 1920;
-    let height = 1080;
+    let width = WINDOW_SIZE.x as u32;
+    let height = WINDOW_SIZE.y as u32;
 
     let mut g_buffer = vec![];
     for i in 0..2 {
@@ -1014,6 +1106,22 @@ pub fn create_render_recources(
         )
         .unwrap();
 
+        
+    // let input_buffers = ctx.create_buffer(BufferUsageFlags::STORAGE_BUFFER, MemoryLocation::GpuOnly, 64*64*4, None).unwrap(); 
+    // let output_buffers = ctx.create_buffer(BufferUsageFlags::STORAGE_BUFFER, MemoryLocation::GpuOnly, 64*3*4, None).unwrap(); 
+    // let weights_buffer = ctx.create_buffer(BufferUsageFlags::STORAGE_BUFFER, MemoryLocation::GpuOnly, 64*64, None).unwrap();
+    let mut rng = thread_rng();
+    let inputs: [f16; 64*64] = gen_rand_arr(&mut rng);
+
+    
+    
+    let input_buffer = ctx.create_gpu_only_buffer_from_data(BufferUsageFlags::STORAGE_BUFFER, &inputs, None)?;
+    let output_buffer = ctx.create_gpu_only_buffer_from_data(BufferUsageFlags::STORAGE_BUFFER, &[0.0 as f16; 64*3], None)?;
+    let weights_buffer = ctx.create_gpu_only_buffer_from_data(BufferUsageFlags::STORAGE_BUFFER, &[1.0 as f16; 64*64], None)?;
+
+    let inference_pipeline = create_inference_pipeline(ctx, &input_buffer, &output_buffer, &weights_buffer).unwrap();
+
+
     Ok(RendererResources {
         g_buffer,
         neighbors,
@@ -1022,8 +1130,21 @@ pub fn create_render_recources(
         reservoirs,
         shader_binding_table,
         uniform_buffer,
+        inference_pipeline,
+        input_buffers: input_buffer,
+        output_buffers: output_buffer,
+        weights_buffer,
     })
 }
+
+fn gen_rand_arr<const SIZE: usize>(rng: &mut ThreadRng) -> [f16; SIZE] {
+    let mut arr = [0.0; SIZE];
+    for x in &mut arr {
+        *x = rng.gen::<f32>() as f16;
+    }
+    arr
+}
+
 
 pub fn CalculateReservoirBufferParameters(
     renderWidth: u32,

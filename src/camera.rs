@@ -6,9 +6,9 @@ use winit::{
     keyboard::{KeyCode, PhysicalKey},
 };
 
-use crate::shader_params::PlanarViewConstants;
+use crate::{shader_params::PlanarViewConstants, WINDOW_SIZE};
 
-const MOVE_SPEED: f32 = 5.0;
+const MOVE_SPEED: f32 = 20.0;
 const ANGLE_PER_POINT: f32 = 1.0;
 
 const UP: Vec3 = vec3(0.0, -1.0, 0.0);
@@ -109,7 +109,7 @@ impl Camera {
         )
     }
     pub fn planar_view_constants(&self) -> PlanarViewConstants {
-        let window_size = glam::vec2(1920.0, 1080.0);
+        let window_size = glam::vec2(WINDOW_SIZE.x as f32, WINDOW_SIZE.y as f32);
         let clipToWindowScale = glam::vec2(0.5 * window_size.x, -0.5 * window_size.y);
         let clipToWindowBias = window_size * 0.5;
         let windowToClipScale = 1.0 / clipToWindowScale;

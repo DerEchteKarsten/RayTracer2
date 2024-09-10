@@ -67,5 +67,5 @@ void main() {
         reservoir = RTXDI_GISpatioTemporalResampling(pixelPosition, primarySurface, reservoir, rng, g_Const.runtimeParams, g_Const.restirGI.reservoirBufferParams, stParams);
     }
     
-    RTXDI_StoreGIReservoir(reservoir, g_Const.restirGI.reservoirBufferParams, reservoirPosition, g_Const.restirGI.bufferIndices.spatialResamplingOutputBufferIndex);
+    RTXDI_StoreGIReservoir(reservoir, g_Const.restirGI.reservoirBufferParams, pixelPosition, g_Const.restirGI.bufferIndices.spatialResamplingOutputBufferIndex);
 }

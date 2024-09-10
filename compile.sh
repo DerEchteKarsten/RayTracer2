@@ -12,3 +12,4 @@ compile $base/src/shaders/rayhit.rchit
 compile $base/src/shaders/post_processing.vert
 compile $base/src/shaders/post_processing.frag
 compile $base/src/shaders/resampling.rgen
+compile $base/src/shaders/training.comp

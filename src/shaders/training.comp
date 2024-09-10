@@ -1,0 +1,113 @@
+#version 460
+
+#extension GL_EXT_debug_printf : enable
+#extension GL_GOOGLE_include_directive : enable
+#extension GL_EXT_buffer_reference2 : enable
+#extension GL_KHR_shader_subgroup_arithmetic : enable
+
+#define pfloat lowp float 
+
+
+//16 * warp = threadblock = local work group
+//64 * thread = warp = subgroup
+//thread = main funktion
+
+const uint input_width = 64;
+const uint output_width = 3;
+const uint width = 64;
+const uint num_layers = 7;
+const uint batch_size_per_threadblock = 64;
+const uint warps = 16;
+const uint subgroup_size = 64;
+const uint total_n_params = num_layers * width * width;
+
+layout(binding = 2, set = 0) buffer Weights {
+    pfloat weights[];
+};
+
+
+layout(binding = 0, set = 0) buffer Inputs {
+    pfloat inputs[][input_width];
+};
+
+layout(binding = 1, set = 0) buffer Outputs {
+    pfloat outputs[][output_width];
+};
+
+shared pfloat shmem[64][batch_size_per_threadblock];
+shared pfloat shmem[64][batch_size_per_threadblock];
+shared pfloat weighs[16][64];
+
+pfloat ReLU(pfloat x) {
+    return max(0.0, x);
+}
+
+// void mlp_fused_forward(in pfloat mpl_input[input_width * subgroup_batch_size]) {
+//     for(int layer = 0; layer < num_layers; layer++) {
+//         for(int batch_element = 0; batch_element < subgroup_batch_size; batch_element++) {
+//             pfloat intermidiate[width];
+//             for(int neuron = 0; neuron < width; neuron++) {
+//                 pfloat activation = 0;
+//                 for(int other_neuron = 0; other_neuron < width; other_neuron++) {
+//                     if(layer == 0) {
+//                         activation += local_weights[layer *width*width + neuron*width + other_neuron] * mpl_input[batch_element * subgroup_batch_size + neuron];
+//                     }else {
+//                         activation += local_weights[layer *width*width + neuron*width + other_neuron] * shmem[batch_element * subgroup_batch_size + neuron];
+//                     }
+//                 }
+//                 activation = ReLU(activation);
+//                 if(layer == num_layers-1) {
+//                     if(neuron > output_width) {
+//                         break;
+//                     }
+//                     outputs[batch_element*subgroup_batch_size + neuron] = activation;
+//                 }else {
+//                     intermidiate[batch_element*subgroup_batch_size + neuron] = activation;
+//                 }
+//             }
+//             for(int i = 0; i<width; i++) {
+//                 shmem[batch_element * subgroup_batch_size + i] = intermidiate[i];
+//             }
+//         }
+//     }
+// }
+layout(local_size_x = subgroup_size, local_size_y = warps, local_size_z = 1) in; //x*y*z < 1024.  x*y*z / 64 =  subgroups
+
+
+void main() 
+{	
+    for(int i = 0; i < num_layers; i++) {
+        if(subgroupElect()) {
+            if(i == 0){
+                for(int batch_element = 0; batch_element < batch_size_per_threadblock; batch_element++) {
+                    for(int input_row = 0; input_row < 16; input_row++) {
+                        shmem[input_row][batch_element] = inputs[gl_SubgroupInvocationID * batch_size_per_threadblock + batch_element][gl_SubgroupInvocationID * 16 + input_row];
+                    }
+                }
+                for(int x = 0; x < 16; x++) {
+                    for(int y = 0; y < 64; y++) {
+                        weights[x][y] = weights[gl_SubgroupInvocationID * 16 + x][y];
+                    }
+                }
+            }else {
+
+            }
+        }
+        subgroupMemoryBarrierShared();    
+
+
+        // mlp_fused_forward(local_inputs);
+
+        for(int x = 0; x < 16; x++) {
+            for(int y = 0; y < batch_size_per_threadblock; y++) {
+                shmem[x][y]
+            }
+        } 
+
+
+
+    }
+    barrier();
+
+    debugPrintfEXT("%f", inputs[(gl_LocalInvocationID.x * subgroup_size + gl_LocalInvocationID.y)]);
+}

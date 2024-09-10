@@ -43,10 +43,14 @@ impl<'a> RayTracingContext<'a> {
                 vk::PhysicalDeviceRayTracingPipelinePropertiesKHR::default();
             let mut acc_properties =
                 vk::PhysicalDeviceAccelerationStructurePropertiesKHR::default();
+            let mut subgroups = vk::PhysicalDeviceSubgroupProperties::default();
+
             let mut physical_device_properties2 = vk::PhysicalDeviceProperties2::default()
                 .push_next(&mut rt_pipeline_properties)
-                .push_next(&mut acc_properties);
+                .push_next(&mut acc_properties)
+                .push_next(&mut subgroups);
             instance.get_physical_device_properties2(*pdevice, &mut physical_device_properties2);
+            debug!("{:?}", subgroups);
             (rt_pipeline_properties, acc_properties)
         };
         let pipeline_fn = khr::ray_tracing_pipeline::Device::new(&instance, &device);
@@ -578,21 +582,23 @@ impl<'a> Renderer<'a> {
         let cmd = &self.cmd_buffs[image_index as usize];
         unsafe { self.device.end_command_buffer(*cmd) }.unwrap();
         let sms = [vk::SemaphoreSubmitInfo::default()
-            .stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT_KHR)
+            .stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
             .semaphore(frame.image_available)];
         let cmbs = [vk::CommandBufferSubmitInfo::default().command_buffer(*cmd)];
         let sss = [vk::SemaphoreSubmitInfo::default()
-            .stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS_KHR)
+            .stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
             .semaphore(frame.render_finished)];
         let submit_info = vk::SubmitInfo2::default()
             .wait_semaphore_infos(&sms)
             .command_buffer_infos(&cmbs)
             .signal_semaphore_infos(&sss);
+        frame.fence.reset(&self.device)?;
 
         unsafe {
             self.device
                 .queue_submit2(self.graphics_queue, &[submit_info], frame.fence.handel)?;
         };
+        // unsafe { self.device.queue_wait_idle(self.graphics_queue).unwrap() };
         // println!("{:?}", Instant::now().duration_since(last_time));
 
         let rf = &[frame.render_finished];
@@ -614,6 +620,7 @@ impl<'a> Renderer<'a> {
             }
             Ok(_) => {}
         };
+
         Ok(())
     }
 
@@ -1503,6 +1510,7 @@ impl PhysicalDevice {
             .runtime_descriptor_array(true)
             .buffer_device_address(true)
             .shader_buffer_int64_atomics(true);
+        
         let mut features13 = vk::PhysicalDeviceVulkan13Features::default();
         let mut features2 = vk::PhysicalDeviceFeatures2::default()
             .features(features)
@@ -1513,6 +1521,7 @@ impl PhysicalDevice {
             .push_next(&mut features13)
             .push_next(&mut atomics2);
         unsafe { instance.get_physical_device_features2(physical_device, &mut features2) };
+        
         let supported_device_features = DeviceFeatures {
             ray_tracing_pipeline: ray_tracing_feature.ray_tracing_pipeline == vk::TRUE,
             acceleration_structure: acceleration_struct_feature.acceleration_structure == vk::TRUE,
@@ -2065,7 +2074,10 @@ unsafe extern "system" fn vulkan_debug_callback(
         let message = CStr::from_ptr((*p_callback_data).p_message);
         match flag {
             Flag::VERBOSE => log::info!("{:?} - {:?}", typ, message),
-            Flag::INFO => log::info!("{:?} - {:?}", typ, message),
+            Flag::INFO => {
+                let message = message.to_str().unwrap();
+                let index = if message.contains("DEBUG-PRINTF") {170}else{0};
+                log::info!("{:?} - {:?}", typ, message[index..].to_owned())},
             Flag::WARNING => log::warn!("{:?} - {:?}", typ, message),
             _ => log::error!("{:?} - {:?}", typ, message),
         }
