@@ -1510,7 +1510,7 @@ impl PhysicalDevice {
             .runtime_descriptor_array(true)
             .buffer_device_address(true)
             .shader_buffer_int64_atomics(true);
-        
+
         let mut features13 = vk::PhysicalDeviceVulkan13Features::default();
         let mut features2 = vk::PhysicalDeviceFeatures2::default()
             .features(features)
@@ -1521,7 +1521,7 @@ impl PhysicalDevice {
             .push_next(&mut features13)
             .push_next(&mut atomics2);
         unsafe { instance.get_physical_device_features2(physical_device, &mut features2) };
-        
+
         let supported_device_features = DeviceFeatures {
             ray_tracing_pipeline: ray_tracing_feature.ray_tracing_pipeline == vk::TRUE,
             acceleration_structure: acceleration_struct_feature.acceleration_structure == vk::TRUE,
@@ -2076,8 +2076,13 @@ unsafe extern "system" fn vulkan_debug_callback(
             Flag::VERBOSE => log::info!("{:?} - {:?}", typ, message),
             Flag::INFO => {
                 let message = message.to_str().unwrap();
-                let index = if message.contains("DEBUG-PRINTF") {170}else{0};
-                log::info!("{:?} - {:?}", typ, message[index..].to_owned())},
+                let index = if message.contains("DEBUG-PRINTF") {
+                    170
+                } else {
+                    0
+                };
+                log::info!("{:?} - {:?}", typ, message[index..].to_owned())
+            }
             Flag::WARNING => log::warn!("{:?} - {:?}", typ, message),
             _ => log::error!("{:?} - {:?}", typ, message),
         }

@@ -5,7 +5,7 @@
 #extension GL_EXT_buffer_reference2 : enable
 #extension GL_KHR_shader_subgroup_arithmetic : enable
 
-#define pfloat lowp float 
+#define pfloat float 
 
 
 //16 * warp = threadblock = local work group
@@ -17,26 +17,25 @@ const uint output_width = 3;
 const uint width = 64;
 const uint num_layers = 7;
 const uint batch_size_per_threadblock = 64;
-const uint warps = 16;
+const uint warps = 4;
 const uint subgroup_size = 64;
 const uint total_n_params = num_layers * width * width;
 
 layout(binding = 2, set = 0) buffer Weights {
-    pfloat weights[];
+    pfloat weights[width][width][num_layers];
 };
 
 
-layout(binding = 0, set = 0) buffer Inputs {
+layout(binding = 0, set = 0, std430) buffer Inputs {
     pfloat inputs[][input_width];
 };
 
-layout(binding = 1, set = 0) buffer Outputs {
+layout(binding = 1, set = 0, std430) buffer Outputs {
     pfloat outputs[][output_width];
 };
 
-shared pfloat shmem[64][batch_size_per_threadblock];
-shared pfloat shmem[64][batch_size_per_threadblock];
-shared pfloat weighs[16][64];
+shared pfloat shmem[batch_size_per_threadblock][width * 2];
+shared pfloat local_weights[width][width];
 
 pfloat ReLU(pfloat x) {
     return max(0.0, x);
@@ -74,40 +73,62 @@ pfloat ReLU(pfloat x) {
 layout(local_size_x = subgroup_size, local_size_y = warps, local_size_z = 1) in; //x*y*z < 1024.  x*y*z / 64 =  subgroups
 
 
+const uint x_per_invocation = batch_size_per_threadblock / subgroup_size;
+
 void main() 
 {	
+    uint last_index = 0;
+    uint current_index = width;
     for(int i = 0; i < num_layers; i++) {
-        if(subgroupElect()) {
-            if(i == 0){
-                for(int batch_element = 0; batch_element < batch_size_per_threadblock; batch_element++) {
-                    for(int input_row = 0; input_row < 16; input_row++) {
-                        shmem[input_row][batch_element] = inputs[gl_SubgroupInvocationID * batch_size_per_threadblock + batch_element][gl_SubgroupInvocationID * 16 + input_row];
-                    }
-                }
-                for(int x = 0; x < 16; x++) {
-                    for(int y = 0; y < 64; y++) {
-                        weights[x][y] = weights[gl_SubgroupInvocationID * 16 + x][y];
-                    }
-                }
-            }else {
 
+        if(i == 0) {
+            for(int x = 0; x < x_per_invocation; x++) {
+                for(int y = 0; y < 16; y++) {
+                    shmem[gl_SubgroupInvocationID * x_per_invocation + x][gl_SubgroupID * 16 + y] = inputs[gl_SubgroupInvocationID * x_per_invocation + x][gl_SubgroupID * 16 + y];
+                }
+            }
+            for(int x = 0; x < width / subgroup_size; x++) {
+                for(int y = 0; y < 16; y++) {
+                    local_weights[gl_SubgroupInvocationID * width / subgroup_size + x][gl_SubgroupID * 16 + y] = weights[gl_SubgroupInvocationID * width / subgroup_size + x][gl_SubgroupID * 16 + y][i];
+                }
             }
         }
+        
+
         subgroupMemoryBarrierShared();    
+        barrier();
+        if(i < num_layers-1) {
+            for(int x = 0; x < x_per_invocation; x++) {
+                for(int y = 0; y < 16; y++) {
+                    pfloat dotp = 0.0;
+                    for(int other = 0; other < width; other++) {
+                        dotp += local_weights[other][gl_SubgroupID * 16 + y] * shmem[gl_SubgroupInvocationID * x_per_invocation + x][other + last_index];
+                    }
+                    shmem[gl_SubgroupInvocationID * x_per_invocation + x][ gl_SubgroupID * 16 + y + current_index] = dotp;
+                }
+            }
+        } else {
 
-
-        // mlp_fused_forward(local_inputs);
-
-        for(int x = 0; x < 16; x++) {
-            for(int y = 0; y < batch_size_per_threadblock; y++) {
-                shmem[x][y]
+            if(gl_SubgroupID == 0) {
+                for(int x = 0; x < x_per_invocation; x++) {
+                    for(int y = 0; y < 3; y++) {
+                        pfloat dotp = 0.0;
+                        for(int other = 0; other < width; other++) {
+                            dotp += local_weights[y][other] * shmem[gl_SubgroupInvocationID * x_per_invocation + x + last_index][other];
+                        }
+                        outputs[gl_SubgroupInvocationID * x_per_invocation + x][y] = dotp;
+                    }
+                }
             }
         } 
 
+        uint temp = last_index;
+        last_index = current_index;
+        current_index = temp;
 
-
+        subgroupMemoryBarrierShared();    
+        barrier();
     }
-    barrier();
 
-    debugPrintfEXT("%f", inputs[(gl_LocalInvocationID.x * subgroup_size + gl_LocalInvocationID.y)]);
+    // debugPrintfEXT("%f", inputs[(gl_LocalInvocationID.x * subgroup_size + gl_LocalInvocationID.y)]);
 }

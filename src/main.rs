@@ -18,19 +18,24 @@ use memoffset::offset_of;
 
 mod model;
 use gltf::Vertex;
-use log::debug;
+use log::{debug, info};
 use model::*;
 
 use anyhow::Result;
 use ash::vk::{
-    self, AabbPositionsKHR, AccelerationStructureTypeKHR, AccessFlags, AccessFlags2, BufferUsageFlags, DependencyFlags, GeometryTypeKHR, ImageAspectFlags, ImageLayout, Packed24_8, PipelineBindPoint, PipelineStageFlags, PipelineStageFlags2, TransformMatrixKHR, KHR_SPIRV_1_4_NAME
+    self, AabbPositionsKHR, AccelerationStructureTypeKHR, AccessFlags, AccessFlags2,
+    BufferUsageFlags, DependencyFlags, GeometryTypeKHR, ImageAspectFlags, ImageLayout, Packed24_8,
+    PipelineBindPoint, PipelineStageFlags, PipelineStageFlags2, TransformMatrixKHR,
+    KHR_SPIRV_1_4_NAME,
 };
 use gpu_allocator::MemoryLocation;
 
 use ash::Device;
 
 use glam::{vec3, IVec2, Mat4, Vec3, Vec4};
-use pipelines::{create_inference_pipeline, create_render_recources, CalculateReservoirBufferParameters};
+use pipelines::{
+    create_inference_pipeline, create_render_recources, CalculateReservoirBufferParameters,
+};
 use shader_params::{
     GConst, RTXDI_ReservoirBufferParameters, RTXDI_RuntimeParameters, ReSTIRGI_BufferIndices,
     ReSTIRGI_FinalShadingParameters, ReSTIRGI_Parameters, ReSTIRGI_SpatialResamplingParameters,
@@ -39,6 +44,7 @@ use shader_params::{
 use simple_logger::SimpleLogger;
 use std::default::{self, Default};
 use std::ffi::{CStr, CString};
+use std::os::raw::c_void;
 use std::os::unix::thread;
 use std::slice::from_ref;
 use std::time::{Duration, Instant};
@@ -213,11 +219,14 @@ fn main() {
                 pad1: 0,
                 pad2: 0,
             },
-            reservoirBufferParams: CalculateReservoirBufferParameters(WINDOW_SIZE.x as u32, WINDOW_SIZE.y as u32),
+            reservoirBufferParams: CalculateReservoirBufferParameters(
+                WINDOW_SIZE.x as u32,
+                WINDOW_SIZE.y as u32,
+            ),
             spatialResamplingParams: ReSTIRGI_SpatialResamplingParameters {
-                spatialDepthThreshold: 0.0,// unused
+                spatialDepthThreshold: 0.0,  // unused
                 spatialNormalThreshold: 0.0, // unused
-                
+
                 numSpatialSamples: 0,
                 spatialBiasCorrectionMode: 3,
                 spatialSamplingRadius: 0.0,
@@ -275,6 +284,15 @@ fn main() {
             .unwrap()
     };
 
+    let read_back_buffer = ctx
+        .create_buffer(
+            BufferUsageFlags::TRANSFER_DST,
+            MemoryLocation::GpuToCpu,
+            renderer.output_buffers.size,
+            None,
+        )
+        .unwrap();
+
     #[allow(clippy::collapsible_match, clippy::single_match)]
     event_loop
         .run(move |event, control_flow| {
@@ -299,6 +317,35 @@ fn main() {
                         }
                     }
                     WindowEvent::RedrawRequested => {
+                        if frame > 2 {
+                            let data_ptr = read_back_buffer
+                                .allocation
+                                .as_ref()
+                                .unwrap()
+                                .mapped_ptr()
+                                .unwrap()
+                                .as_ptr();
+                            let mut dst =
+                                Vec::<f32>::with_capacity(read_back_buffer.size as usize / 4);
+                            unsafe {
+                                std::ptr::copy(
+                                    data_ptr,
+                                    dst.as_mut_ptr() as *mut c_void,
+                                    read_back_buffer.size as usize,
+                                );
+                                dst.set_len(read_back_buffer.size as usize);
+                            };
+                            for x in 0..64 {
+                                println!("Batchelement: {} -----------------------------------------------", x);
+                                for y in 0..3 {
+                                    print!("{}, ", dst[x * 3 + y] as f32);
+                                    assert_eq!(dst[x * 3 + y], renderer.exspected_outputs[[x,y]]);
+                                }
+                                println!("");
+                                println!("----------------------------------------------------------------");
+                            }
+                            panic!();
+                        }
 
                         frame += 1;
                         let new_cam = camera.update(&controles, frame_time);
@@ -307,14 +354,32 @@ fn main() {
 
                         g_const.prevView = g_const.view;
                         g_const.view = camera.planar_view_constants();
-                        
-                        let old_index = g_const.restirGI.bufferIndices.spatialResamplingOutputBufferIndex;
 
-                        g_const.restirGI.bufferIndices.spatialResamplingOutputBufferIndex = g_const.restirGI.bufferIndices.temporalResamplingInputBufferIndex;
-                        g_const.restirGI.bufferIndices.spatialResamplingOutputBufferIndex = g_const.restirGI.bufferIndices.temporalResamplingInputBufferIndex;
+                        let old_index = g_const
+                            .restirGI
+                            .bufferIndices
+                            .spatialResamplingOutputBufferIndex;
 
-                        g_const.restirGI.bufferIndices.temporalResamplingInputBufferIndex = old_index;
-                        
+                        g_const
+                            .restirGI
+                            .bufferIndices
+                            .spatialResamplingOutputBufferIndex = g_const
+                            .restirGI
+                            .bufferIndices
+                            .temporalResamplingInputBufferIndex;
+                        g_const
+                            .restirGI
+                            .bufferIndices
+                            .spatialResamplingOutputBufferIndex = g_const
+                            .restirGI
+                            .bufferIndices
+                            .temporalResamplingInputBufferIndex;
+
+                        g_const
+                            .restirGI
+                            .bufferIndices
+                            .temporalResamplingInputBufferIndex = old_index;
+
                         renderer
                             .uniform_buffer
                             .copy_data_to_buffer(std::slice::from_ref(&g_const))
@@ -327,6 +392,7 @@ fn main() {
                             .src_queue_family_index(ctx.graphics_queue_family.index)
                             .dst_queue_family_index(ctx.graphics_queue_family.index)
                             .size(renderer.reservoirs.size)
+                            .buffer(renderer.reservoirs.inner)
                             .offset(0)];
 
                         let mut image_barriers = [vk::ImageMemoryBarrier::default()
@@ -361,19 +427,60 @@ fn main() {
                         }
                         ctx.render(|ctx, i| {
                             let cmd = &ctx.cmd_buffs[i as usize];
-                            
+
                             unsafe {
-                                ctx.device.cmd_bind_descriptor_sets(*cmd, PipelineBindPoint::COMPUTE, renderer.inference_pipeline.layout, 0, &[renderer.inference_pipeline.descriptor_set0], &[]);
-                                ctx.device.cmd_bind_pipeline(*cmd, PipelineBindPoint::COMPUTE, renderer.inference_pipeline.handle);
+                                ctx.device.cmd_bind_descriptor_sets(
+                                    *cmd,
+                                    PipelineBindPoint::COMPUTE,
+                                    renderer.inference_pipeline.layout,
+                                    0,
+                                    &[renderer.inference_pipeline.descriptor_set0],
+                                    &[],
+                                );
+                                ctx.device.cmd_bind_pipeline(
+                                    *cmd,
+                                    PipelineBindPoint::COMPUTE,
+                                    renderer.inference_pipeline.handle,
+                                );
                                 ctx.device.cmd_dispatch(*cmd, 1, 1, 1);
+
+                                let buffer_barrier = vk::BufferMemoryBarrier::default()
+                                    .size(renderer.output_buffers.size)
+                                    .offset(0)
+                                    .buffer(renderer.output_buffers.inner)
+                                    .src_access_mask(
+                                        AccessFlags::SHADER_WRITE | AccessFlags::SHADER_READ,
+                                    )
+                                    .dst_access_mask(AccessFlags::HOST_READ)
+                                    .src_queue_family_index(ctx.graphics_queue_family.index)
+                                    .dst_queue_family_index(ctx.graphics_queue_family.index);
+
+                                ctx.device.cmd_pipeline_barrier(
+                                    *cmd,
+                                    vk::PipelineStageFlags::ALL_COMMANDS,
+                                    vk::PipelineStageFlags::ALL_COMMANDS,
+                                    DependencyFlags::BY_REGION,
+                                    &[],
+                                    &[buffer_barrier],
+                                    &[],
+                                );
+
+                                ctx.device.cmd_copy_buffer(
+                                    *cmd,
+                                    renderer.output_buffers.inner,
+                                    read_back_buffer.inner,
+                                    &[vk::BufferCopy::default()
+                                        .dst_offset(0)
+                                        .src_offset(0)
+                                        .size(renderer.output_buffers.size)],
+                                );
                                 let frame_c = std::slice::from_raw_parts(
                                     &frame as *const u32 as *const u8,
                                     size_of::<u32>(),
                                 );
                                 let moved_c =
                                     &[if moved == true { 1 as u8 } else { 0 as u8 }, 0, 0, 0];
-                                    
-                                
+
                                 ctx.device.cmd_push_constants(
                                     *cmd,
                                     renderer.raytracing_pipeline.layout,
@@ -547,7 +654,7 @@ fn main() {
                                 );
                                 ctx.device.cmd_draw(*cmd, 6, 1, 0, 0);
                                 ctx.device.cmd_end_render_pass(*cmd);
-                            
+
                                 ctx.device.cmd_set_event(
                                     *cmd,
                                     event3,
@@ -567,7 +674,6 @@ fn main() {
                                 ctx.device.reset_event(event1).unwrap();
                                 ctx.device.reset_event(event2).unwrap();
                                 ctx.device.reset_event(event3).unwrap();
-
                             }
                         })
                         .unwrap();

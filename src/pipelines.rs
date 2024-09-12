@@ -1,10 +1,10 @@
-
 use anyhow::{Ok, Result};
 use ash::vk::{self, BufferUsageFlags, ImageLayout, PipelineCache, ShaderStageFlags};
 use glam::Vec2;
 use gpu_allocator::MemoryLocation;
 use rand::rngs::ThreadRng;
 use rand::{thread_rng, Rng};
+use ndarray::{arr3, prelude::*};
 
 use std::ffi::CString;
 use std::mem::size_of;
@@ -40,6 +40,7 @@ pub struct RendererResources {
     pub input_buffers: Buffer,
     pub output_buffers: Buffer,
     pub weights_buffer: Buffer,
+    pub exspected_outputs: Array2<f32>,
 }
 
 pub struct PostProccesingPipeline {
@@ -73,7 +74,6 @@ pub fn create_inference_pipeline(
     output_buffer: &Buffer,
     weights_buffer: &Buffer,
 ) -> Result<InferencePipeline> {
-
     let bindings = [
         vk::DescriptorSetLayoutBinding::default()
             .binding(0)
@@ -101,39 +101,53 @@ pub fn create_inference_pipeline(
         .set_layouts(&descriptor_layouts);
 
     let layout = unsafe { ctx.device.create_pipeline_layout(&layout_info, None)? };
-    
+
     let entry_point_name: CString = CString::new("main").unwrap();
     let pipeline_info = vk::ComputePipelineCreateInfo::default()
         .layout(layout)
-        .stage(vk::PipelineShaderStageCreateInfo::default()
-            .module(ctx.create_shader_module("./src/shaders/training.comp.spv".to_string()))
-            .stage(vk::ShaderStageFlags::COMPUTE)
-            .name(&entry_point_name)
+        .stage(
+            vk::PipelineShaderStageCreateInfo::default()
+                .module(ctx.create_shader_module("./src/shaders/training.comp.spv".to_string()))
+                .stage(vk::ShaderStageFlags::COMPUTE)
+                .name(&entry_point_name),
         );
 
-    let handle = unsafe { ctx.device.create_compute_pipelines(PipelineCache::null(), &[pipeline_info], None).unwrap()[0] };
+    let handle = unsafe {
+        ctx.device
+            .create_compute_pipelines(PipelineCache::null(), &[pipeline_info], None)
+            .unwrap()[0]
+    };
 
-    let pool = ctx.create_descriptor_pool(1, &[
-        vk::DescriptorPoolSize::default()
-            .descriptor_count(3)
-            .ty(vk::DescriptorType::STORAGE_BUFFER),
-    ]).unwrap();
+    let pool = ctx
+        .create_descriptor_pool(
+            1,
+            &[vk::DescriptorPoolSize::default()
+                .descriptor_count(3)
+                .ty(vk::DescriptorType::STORAGE_BUFFER)],
+        )
+        .unwrap();
 
     let descriptor_set0 = allocate_descriptor_set(&ctx.device, &pool, &descriptor0_layout).unwrap();
 
     let writes = [
         WriteDescriptorSet {
             binding: 0,
-            kind: WriteDescriptorSetKind::StorageBuffer { buffer: input_buffer.inner },
+            kind: WriteDescriptorSetKind::StorageBuffer {
+                buffer: input_buffer.inner,
+            },
         },
         WriteDescriptorSet {
             binding: 1,
-            kind: WriteDescriptorSetKind::StorageBuffer { buffer: output_buffer.inner },
+            kind: WriteDescriptorSetKind::StorageBuffer {
+                buffer: output_buffer.inner,
+            },
         },
         WriteDescriptorSet {
             binding: 2,
-            kind: WriteDescriptorSetKind::StorageBuffer { buffer: weights_buffer.inner },
-        }
+            kind: WriteDescriptorSetKind::StorageBuffer {
+                buffer: weights_buffer.inner,
+            },
+        },
     ];
 
     update_descriptor_sets(ctx, &descriptor_set0, &writes);
@@ -144,7 +158,6 @@ pub fn create_inference_pipeline(
         layout,
     })
 }
-
 
 fn create_post_proccesing_pipelien(
     ctx: &mut Renderer,
@@ -1106,21 +1119,54 @@ pub fn create_render_recources(
         )
         .unwrap();
 
-        
-    // let input_buffers = ctx.create_buffer(BufferUsageFlags::STORAGE_BUFFER, MemoryLocation::GpuOnly, 64*64*4, None).unwrap(); 
-    // let output_buffers = ctx.create_buffer(BufferUsageFlags::STORAGE_BUFFER, MemoryLocation::GpuOnly, 64*3*4, None).unwrap(); 
+    // let input_buffers = ctx.create_buffer(BufferUsageFlags::STORAGE_BUFFER, MemoryLocation::GpuOnly, 64*64*4, None).unwrap();
+    // let output_buffers = ctx.create_buffer(BufferUsageFlags::STORAGE_BUFFER, MemoryLocation::GpuOnly, 64*3*4, None).unwrap();
     // let weights_buffer = ctx.create_buffer(BufferUsageFlags::STORAGE_BUFFER, MemoryLocation::GpuOnly, 64*64, None).unwrap();
     let mut rng = thread_rng();
-    let inputs: [f16; 64*64] = gen_rand_arr(&mut rng);
+    // let inputs: [f16; 64 * 64] = gen_rand_arr(&mut rng);
 
-    
-    
-    let input_buffer = ctx.create_gpu_only_buffer_from_data(BufferUsageFlags::STORAGE_BUFFER, &inputs, None)?;
-    let output_buffer = ctx.create_gpu_only_buffer_from_data(BufferUsageFlags::STORAGE_BUFFER, &[0.0 as f16; 64*3], None)?;
-    let weights_buffer = ctx.create_gpu_only_buffer_from_data(BufferUsageFlags::STORAGE_BUFFER, &[1.0 as f16; 64*64], None)?;
+    let inputs = arr2(&[[1.0 as f32; 64]; 64]);
+    let weights = arr3(&[[[1.0 as f32; 64]; 64]; 7]);
 
-    let inference_pipeline = create_inference_pipeline(ctx, &input_buffer, &output_buffer, &weights_buffer).unwrap();
+    let mut outputs = Array2::<f32>::zeros(Dim([64, 64]));
+    let mut final_outputs = Array2::<f32>::zeros(Dim([64, 3]));
+    let mut last_outputs = inputs.clone();
+    for i in 0..7 as usize {
+        if i == 6 {
+            let current_weights = weights.index_axis(Axis(0), i);
+            let current_weights = current_weights.slice(s![0..3, ..]);
+            for x in 0..64 as usize {
+                for y in 0..3 as usize {
+                    let mut dotp = 0.0;
+                    for other in 0..64 as usize {
+                        dotp += current_weights[[y,other]] * last_outputs[[x, other]];
+                    }
+                    final_outputs[[x,y]] = dotp;
+                }
+            }
+        }else {
+            let current_weights = weights.index_axis(Axis(0), i);
+            outputs = current_weights.dot(&last_outputs);
+            last_outputs = outputs;
+        }
+    }
+    println!("{:?}", final_outputs);
 
+    let input_buffer =
+        ctx.create_gpu_only_buffer_from_data(BufferUsageFlags::STORAGE_BUFFER, inputs.flatten().as_slice().unwrap(), None)?;
+    let output_buffer = ctx.create_gpu_only_buffer_from_data(
+        BufferUsageFlags::STORAGE_BUFFER | BufferUsageFlags::TRANSFER_SRC,
+        &[0.0 as f32; 64 * 3],
+        None,
+    )?;
+    let weights_buffer = ctx.create_gpu_only_buffer_from_data(
+        BufferUsageFlags::STORAGE_BUFFER,
+        weights.flatten().as_slice().unwrap(),
+        None,
+    )?;
+
+    let inference_pipeline =
+        create_inference_pipeline(ctx, &input_buffer, &output_buffer, &weights_buffer).unwrap();
 
     Ok(RendererResources {
         g_buffer,
@@ -1134,6 +1180,7 @@ pub fn create_render_recources(
         input_buffers: input_buffer,
         output_buffers: output_buffer,
         weights_buffer,
+        exspected_outputs: final_outputs,
     })
 }
 
@@ -1144,7 +1191,6 @@ fn gen_rand_arr<const SIZE: usize>(rng: &mut ThreadRng) -> [f16; SIZE] {
     }
     arr
 }
-
 
 pub fn CalculateReservoirBufferParameters(
     renderWidth: u32,
