@@ -1,3 +1,5 @@
+use std::default;
+
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct PlanarViewConstants {
@@ -90,7 +92,7 @@ pub struct ReSTIRGI_BufferIndices {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct RTXDI_ReservoirBufferParameters {
     pub reservoirBlockRowPitch: u32,
     pub reservoirArrayPitch: u32,

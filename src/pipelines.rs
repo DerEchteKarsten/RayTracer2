@@ -870,6 +870,7 @@ pub fn create_render_recources(
     model: &Model,
     top_as: &AccelerationStructure,
     skybox_view: vk::ImageView,
+    reservoir_buffer_size: u64,
 ) -> Result<RendererResources> {
     let sampler_create_info: vk::SamplerCreateInfo = vk::SamplerCreateInfo {
         mag_filter: vk::Filter::NEAREST,
@@ -1044,7 +1045,7 @@ pub fn create_render_recources(
         .create_buffer(
             vk::BufferUsageFlags::STORAGE_BUFFER,
             MemoryLocation::GpuOnly,
-            (100 * width * height) as u64,
+            reservoir_buffer_size,
             None,
         )
         .unwrap();
@@ -1077,7 +1078,14 @@ pub fn create_render_recources(
         },
         RayTracingShaderCreateInfo {
             source: &[(
-                &include_bytes!("./shaders/resampling.rgen.spv")[..],
+                &include_bytes!("./shaders/spatial_resampling.rgen.spv")[..],
+                vk::ShaderStageFlags::RAYGEN_KHR,
+            )],
+            group: RayTracingShaderGroup::RayGen,
+        },
+        RayTracingShaderCreateInfo {
+            source: &[(
+                &include_bytes!("./shaders/temporal_resampling.rgen.spv")[..],
                 vk::ShaderStageFlags::RAYGEN_KHR,
             )],
             group: RayTracingShaderGroup::RayGen,
@@ -1122,18 +1130,22 @@ pub fn create_render_recources(
     // let input_buffers = ctx.create_buffer(BufferUsageFlags::STORAGE_BUFFER, MemoryLocation::GpuOnly, 64*64*4, None).unwrap();
     // let output_buffers = ctx.create_buffer(BufferUsageFlags::STORAGE_BUFFER, MemoryLocation::GpuOnly, 64*3*4, None).unwrap();
     // let weights_buffer = ctx.create_buffer(BufferUsageFlags::STORAGE_BUFFER, MemoryLocation::GpuOnly, 64*64, None).unwrap();
-    let mut rng = thread_rng();
-    // let inputs: [f16; 64 * 64] = gen_rand_arr(&mut rng);
 
-    let inputs = arr2(&[[1.0 as f32; 64]; 64]);
-    let weights = arr3(&[[[1.0 as f32; 64]; 64]; 7]);
+    let inputs = Array2::from_shape_fn((64, 64), |(x, y)| {
+        rand::random()
+    });
+
+    // let ran = rand::random();
+    let weights = Array3::from_shape_fn((7, 64, 64), |(_, _, _)| {
+        1.0
+    });
 
     let mut outputs = Array2::<f32>::zeros(Dim([64, 64]));
     let mut final_outputs = Array2::<f32>::zeros(Dim([64, 3]));
     let mut last_outputs = inputs.clone();
     for i in 0..7 as usize {
         if i == 6 {
-            let current_weights = weights.index_axis(Axis(0), i);
+            let current_weights = weights.index_axis(Axis(2), i);
             let current_weights = current_weights.slice(s![0..3, ..]);
             for x in 0..64 as usize {
                 for y in 0..3 as usize {
@@ -1141,13 +1153,13 @@ pub fn create_render_recources(
                     for other in 0..64 as usize {
                         dotp += current_weights[[y,other]] * last_outputs[[x, other]];
                     }
-                    final_outputs[[x,y]] = dotp;
+                    final_outputs[[x,y]] = dotp;//f32::max(dotp, 0.0);
                 }
             }
         }else {
             let current_weights = weights.index_axis(Axis(0), i);
             outputs = current_weights.dot(&last_outputs);
-            last_outputs = outputs;
+            last_outputs = outputs;//.map(|e| {f32::max(*e, 0.0)});
         }
     }
     println!("{:?}", final_outputs);
@@ -1196,18 +1208,10 @@ pub fn CalculateReservoirBufferParameters(
     renderWidth: u32,
     renderHeight: u32,
 ) -> RTXDI_ReservoirBufferParameters {
-    let renderWidthBlocks =
-        (renderWidth + RTXDI_RESERVOIR_BLOCK_SIZE - 1) / RTXDI_RESERVOIR_BLOCK_SIZE;
-    let renderHeightBlocks =
-        (renderHeight + RTXDI_RESERVOIR_BLOCK_SIZE - 1) / RTXDI_RESERVOIR_BLOCK_SIZE;
-
-    let reservoirBlockRowPitch =
-        renderWidthBlocks * (RTXDI_RESERVOIR_BLOCK_SIZE * RTXDI_RESERVOIR_BLOCK_SIZE);
-    let reservoirArrayPitch = reservoirBlockRowPitch * renderHeightBlocks;
-    return RTXDI_ReservoirBufferParameters {
-        reservoirArrayPitch,
-        reservoirBlockRowPitch,
-        pad1: 0,
-        pad2: 0,
-    };
+    let renderWidthBlocks = (renderWidth + RTXDI_RESERVOIR_BLOCK_SIZE - 1) / RTXDI_RESERVOIR_BLOCK_SIZE;
+    let renderHeightBlocks = (renderHeight + RTXDI_RESERVOIR_BLOCK_SIZE - 1) / RTXDI_RESERVOIR_BLOCK_SIZE;
+    let mut params = RTXDI_ReservoirBufferParameters::default();
+    params.reservoirBlockRowPitch = renderWidthBlocks * (RTXDI_RESERVOIR_BLOCK_SIZE * RTXDI_RESERVOIR_BLOCK_SIZE);
+    params.reservoirArrayPitch = params.reservoirBlockRowPitch * renderHeightBlocks;
+    return params;
 }

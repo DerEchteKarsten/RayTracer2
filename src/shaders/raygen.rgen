@@ -33,7 +33,7 @@ layout(location = 0) rayPayloadEXT Payload p;
 
 
 const float EMISSION_STREANGTH = 12.0;
-const float SKYBOX = 10.0;
+const float SKYBOX = 1.0;
 
 void main() 
 {	

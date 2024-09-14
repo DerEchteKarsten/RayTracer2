@@ -195,7 +195,6 @@ fn main() {
         .unwrap()
     };
 
-    let renderer = create_render_recources(&mut ctx, &model, &tlas, sky_box.view).unwrap();
 
     let view = camera.planar_view_constants();
 
@@ -208,8 +207,8 @@ fn main() {
                 temporalResamplingInputBufferIndex: 1,        //Resampeling input buffer
                 temporalResamplingOutputBufferIndex: 0,
                 spatialResamplingInputBufferIndex: 0,
-                spatialResamplingOutputBufferIndex: 2, //Resampeld reservoir output
-                finalShadingInputBufferIndex: 2,       //Final Shade input
+                spatialResamplingOutputBufferIndex: 1, //Resampeld reservoir output
+                finalShadingInputBufferIndex: 1,       //Final Shade input
                 pad1: 0,
                 pad2: 0,
             },
@@ -224,12 +223,12 @@ fn main() {
                 WINDOW_SIZE.y as u32,
             ),
             spatialResamplingParams: ReSTIRGI_SpatialResamplingParameters {
-                spatialDepthThreshold: 0.0,  // unused
-                spatialNormalThreshold: 0.0, // unused
+                spatialDepthThreshold: 0.1,
+                spatialNormalThreshold: 0.6,
 
-                numSpatialSamples: 0,
-                spatialBiasCorrectionMode: 3,
-                spatialSamplingRadius: 0.0,
+                numSpatialSamples: 8,
+                spatialBiasCorrectionMode: 2,
+                spatialSamplingRadius: 32.0,
 
                 pad1: 0,
                 pad2: 0,
@@ -237,14 +236,14 @@ fn main() {
             },
             temporalResamplingParams: ReSTIRGI_TemporalResamplingParameters {
                 boilingFilterStrength: 0.0,
-                depthThreshold: 1.0,
-                normalThreshold: 0.6,
+                depthThreshold: 0.1,
+                normalThreshold: 0.3,
                 enableBoilingFilter: 0,
                 enableFallbackSampling: 1,
                 enablePermutationSampling: 0,
                 maxHistoryLength: 20,
                 maxReservoirAge: 50,
-                temporalBiasCorrectionMode: 3,
+                temporalBiasCorrectionMode: 2,
                 uniformRandomNumber: rand::random(),
                 pad2: 0,
                 pad3: 0,
@@ -257,6 +256,8 @@ fn main() {
             pad2: 0,
         },
     };
+    let renderer = create_render_recources(&mut ctx, &model, &tlas, sky_box.view, g_const.restirGI.reservoirBufferParams.reservoirArrayPitch as u64 * 2 * 32).unwrap();
+
     renderer
         .uniform_buffer
         .copy_data_to_aligned_buffer(std::slice::from_ref(&g_const), 16)
@@ -267,22 +268,6 @@ fn main() {
     let mut now = Instant::now();
     let mut last_time = Instant::now();
     let mut frame_time = Duration::new(0, 0);
-
-    let event1 = unsafe {
-        ctx.device
-            .create_event(&vk::EventCreateInfo::default(), None)
-            .unwrap()
-    };
-    let event2 = unsafe {
-        ctx.device
-            .create_event(&vk::EventCreateInfo::default(), None)
-            .unwrap()
-    };
-    let event3 = unsafe {
-        ctx.device
-            .create_event(&vk::EventCreateInfo::default(), None)
-            .unwrap()
-    };
 
     let read_back_buffer = ctx
         .create_buffer(
@@ -354,31 +339,6 @@ fn main() {
 
                         g_const.prevView = g_const.view;
                         g_const.view = camera.planar_view_constants();
-
-                        let old_index = g_const
-                            .restirGI
-                            .bufferIndices
-                            .spatialResamplingOutputBufferIndex;
-
-                        g_const
-                            .restirGI
-                            .bufferIndices
-                            .spatialResamplingOutputBufferIndex = g_const
-                            .restirGI
-                            .bufferIndices
-                            .temporalResamplingInputBufferIndex;
-                        g_const
-                            .restirGI
-                            .bufferIndices
-                            .spatialResamplingOutputBufferIndex = g_const
-                            .restirGI
-                            .bufferIndices
-                            .temporalResamplingInputBufferIndex;
-
-                        g_const
-                            .restirGI
-                            .bufferIndices
-                            .temporalResamplingInputBufferIndex = old_index;
 
                         renderer
                             .uniform_buffer
@@ -474,6 +434,16 @@ fn main() {
                                         .src_offset(0)
                                         .size(renderer.output_buffers.size)],
                                 );
+                                
+                                ctx.device.cmd_pipeline_barrier(
+                                    *cmd,
+                                    PipelineStageFlags::ALL_COMMANDS,
+                                    PipelineStageFlags::ALL_COMMANDS,
+                                    DependencyFlags::BY_REGION,
+                                    &[],
+                                    &buffer_memory_barriers,
+                                    &image_barriers,
+                                );
                                 let frame_c = std::slice::from_raw_parts(
                                     &frame as *const u32 as *const u8,
                                     size_of::<u32>(),
@@ -529,11 +499,6 @@ fn main() {
                                     window_size.height,
                                     1,
                                 );
-                                ctx.device.cmd_set_event(
-                                    *cmd,
-                                    event1,
-                                    PipelineStageFlags::RAY_TRACING_SHADER_KHR,
-                                );
 
                                 let handle_size =
                                     ctx.ray_tracing.pipeline_properties.shader_group_handle_size;
@@ -546,13 +511,13 @@ fn main() {
 
                                 let mut raygen_region2 =
                                     renderer.shader_binding_table.raygen_region;
-                                raygen_region2.device_address += aligned_handle_size as u64;
+                                raygen_region2.device_address += aligned_handle_size as u64 * 2;
 
-                                ctx.device.cmd_wait_events(
+                                ctx.device.cmd_pipeline_barrier(
                                     *cmd,
-                                    &[event1],
                                     PipelineStageFlags::RAY_TRACING_SHADER_KHR,
                                     PipelineStageFlags::RAY_TRACING_SHADER_KHR,
+                                    DependencyFlags::BY_REGION,
                                     &[],
                                     &buffer_memory_barriers,
                                     &image_barriers,
@@ -569,17 +534,45 @@ fn main() {
                                     1,
                                 );
 
-                                ctx.device.cmd_set_event(
+                                let handle_size =
+                                    ctx.ray_tracing.pipeline_properties.shader_group_handle_size;
+                                let handle_alignment = ctx
+                                    .ray_tracing
+                                    .pipeline_properties
+                                    .shader_group_handle_alignment;
+                                let aligned_handle_size =
+                                    alinged_size(handle_size, handle_alignment);
+
+                                let mut raygen_region2 =
+                                    renderer.shader_binding_table.raygen_region;
+                                raygen_region2.device_address += aligned_handle_size as u64;
+
+                                ctx.device.cmd_pipeline_barrier(
                                     *cmd,
-                                    event2,
                                     PipelineStageFlags::RAY_TRACING_SHADER_KHR,
+                                    PipelineStageFlags::RAY_TRACING_SHADER_KHR,
+                                    DependencyFlags::BY_REGION,
+                                    &[],
+                                    &buffer_memory_barriers,
+                                    &image_barriers,
                                 );
 
-                                ctx.device.cmd_wait_events(
+                                ctx.ray_tracing.pipeline_fn.cmd_trace_rays(
                                     *cmd,
-                                    &[event2],
+                                    &raygen_region2,
+                                    &renderer.shader_binding_table.miss_region,
+                                    &renderer.shader_binding_table.hit_region,
+                                    &call_region,
+                                    window_size.width,
+                                    window_size.height,
+                                    1,
+                                );
+
+                                ctx.device.cmd_pipeline_barrier(
+                                    *cmd,
                                     PipelineStageFlags::RAY_TRACING_SHADER_KHR,
                                     PipelineStageFlags::FRAGMENT_SHADER,
+                                    DependencyFlags::BY_REGION,
                                     &[],
                                     &buffer_memory_barriers,
                                     &image_barriers,
@@ -654,26 +647,6 @@ fn main() {
                                 );
                                 ctx.device.cmd_draw(*cmd, 6, 1, 0, 0);
                                 ctx.device.cmd_end_render_pass(*cmd);
-
-                                ctx.device.cmd_set_event(
-                                    *cmd,
-                                    event3,
-                                    PipelineStageFlags::ALL_COMMANDS,
-                                );
-
-                                ctx.device.cmd_wait_events(
-                                    *cmd,
-                                    &[event3],
-                                    PipelineStageFlags::ALL_COMMANDS,
-                                    PipelineStageFlags::ALL_COMMANDS,
-                                    &[],
-                                    &buffer_memory_barriers,
-                                    &image_barriers,
-                                );
-
-                                ctx.device.reset_event(event1).unwrap();
-                                ctx.device.reset_event(event2).unwrap();
-                                ctx.device.reset_event(event3).unwrap();
                             }
                         })
                         .unwrap();

@@ -1,0 +1,57 @@
+#extension GL_EXT_ray_tracing : require
+#extension GL_EXT_nonuniform_qualifier : enable
+#extension GL_EXT_scalar_block_layout : enable
+#extension GL_GOOGLE_include_directive : enable
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+#extension GL_EXT_buffer_reference2 : require
+#extension GL_EXT_debug_printf : enable
+#extension GL_EXT_shader_explicit_arithmetic_types : enable
+#extension GL_GOOGLE_include_directive : enable
+
+#include "common.glsl"
+layout(location = 0) rayPayloadEXT Payload p;
+layout( push_constant ) uniform Frame {
+	uint frame;
+	uint moved;
+} f;
+
+
+layout(binding = 0, set = 1, r32f) uniform image2D u_GBufferDepth;
+layout(binding = 1, set = 1, r32ui) uniform uimage2D u_GBufferNormals;
+layout(binding = 2, set = 1, r32ui) uniform uimage2D u_GBufferGeoNormals;
+layout(binding = 3, set = 1, r32ui) uniform uimage2D u_GBufferDiffuseAlbedo;
+layout(binding = 4, set = 1, r32ui) uniform uimage2D u_GBufferSpecularRough;
+layout(binding = 5, set = 1, rgba32f) uniform image2D u_MotionVectors;
+layout(binding = 8, set = 0) uniform sampler2D skyBox;
+
+#define RTXDI_ENABLE_PRESAMPLING 0
+#define RTXDI_GLSL
+#include "RtxdiApplicationBridge.glsl"
+#include "rtxdi/GIResamplingFunctions.hlsli"
+
+void main() {
+    uvec2 pixelPosition = RTXDI_ReservoirPosToPixelPos(gl_LaunchIDEXT.xy, g_Const.runtimeParams.activeCheckerboardField);
+
+    RAB_RandomSamplerState rng = RAB_InitRandomSampler(gl_LaunchIDEXT.xy, 8);
+    
+    const RAB_Surface primarySurface = RAB_GetGBufferSurface(ivec2(pixelPosition), false);
+    
+    const uint2 reservoirPosition = RTXDI_PixelPosToReservoirPos(pixelPosition, g_Const.runtimeParams.activeCheckerboardField);
+    RTXDI_GIReservoir reservoir = RTXDI_LoadGIReservoir(g_Const.restirGI.reservoirBufferParams, reservoirPosition, g_Const.restirGI.bufferIndices.spatialResamplingInputBufferIndex);
+
+    if (RAB_IsSurfaceValid(primarySurface)) {
+        RTXDI_GISpatialResamplingParameters sparams;
+
+        sparams.sourceBufferIndex = g_Const.restirGI.bufferIndices.spatialResamplingInputBufferIndex;
+        sparams.biasCorrectionMode = g_Const.restirGI.spatialResamplingParams.spatialBiasCorrectionMode;
+        sparams.depthThreshold = g_Const.restirGI.spatialResamplingParams.spatialDepthThreshold;
+        sparams.normalThreshold = g_Const.restirGI.spatialResamplingParams.spatialNormalThreshold;
+        sparams.numSamples = g_Const.restirGI.spatialResamplingParams.numSpatialSamples;
+        sparams.samplingRadius = g_Const.restirGI.spatialResamplingParams.spatialSamplingRadius;
+
+        // Execute resampling.
+        reservoir = RTXDI_GISpatialResampling(pixelPosition, primarySurface, reservoir, rng, g_Const.runtimeParams, g_Const.restirGI.reservoirBufferParams, sparams);
+    }
+
+    RTXDI_StoreGIReservoir(reservoir, g_Const.restirGI.reservoirBufferParams, reservoirPosition, g_Const.restirGI.bufferIndices.spatialResamplingOutputBufferIndex);
+}

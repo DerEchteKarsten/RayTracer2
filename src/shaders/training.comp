@@ -22,7 +22,7 @@ const uint subgroup_size = 64;
 const uint total_n_params = num_layers * width * width;
 
 layout(binding = 2, set = 0) buffer Weights {
-    pfloat weights[width][width][num_layers];
+    pfloat weights[num_layers][width][width];
 };
 
 
@@ -41,37 +41,7 @@ pfloat ReLU(pfloat x) {
     return max(0.0, x);
 }
 
-// void mlp_fused_forward(in pfloat mpl_input[input_width * subgroup_batch_size]) {
-//     for(int layer = 0; layer < num_layers; layer++) {
-//         for(int batch_element = 0; batch_element < subgroup_batch_size; batch_element++) {
-//             pfloat intermidiate[width];
-//             for(int neuron = 0; neuron < width; neuron++) {
-//                 pfloat activation = 0;
-//                 for(int other_neuron = 0; other_neuron < width; other_neuron++) {
-//                     if(layer == 0) {
-//                         activation += local_weights[layer *width*width + neuron*width + other_neuron] * mpl_input[batch_element * subgroup_batch_size + neuron];
-//                     }else {
-//                         activation += local_weights[layer *width*width + neuron*width + other_neuron] * shmem[batch_element * subgroup_batch_size + neuron];
-//                     }
-//                 }
-//                 activation = ReLU(activation);
-//                 if(layer == num_layers-1) {
-//                     if(neuron > output_width) {
-//                         break;
-//                     }
-//                     outputs[batch_element*subgroup_batch_size + neuron] = activation;
-//                 }else {
-//                     intermidiate[batch_element*subgroup_batch_size + neuron] = activation;
-//                 }
-//             }
-//             for(int i = 0; i<width; i++) {
-//                 shmem[batch_element * subgroup_batch_size + i] = intermidiate[i];
-//             }
-//         }
-//     }
-// }
 layout(local_size_x = subgroup_size, local_size_y = warps, local_size_z = 1) in; //x*y*z < 1024.  x*y*z / 64 =  subgroups
-
 
 const uint x_per_invocation = batch_size_per_threadblock / subgroup_size;
 
@@ -84,25 +54,24 @@ void main()
         if(i == 0) {
             for(int x = 0; x < x_per_invocation; x++) {
                 for(int y = 0; y < 16; y++) {
-                    shmem[gl_SubgroupInvocationID * x_per_invocation + x][gl_SubgroupID * 16 + y] = inputs[gl_SubgroupInvocationID * x_per_invocation + x][gl_SubgroupID * 16 + y];
+                    shmem[gl_SubgroupInvocationID * x_per_invocation + x][gl_SubgroupID * 16 + y + last_index] = inputs[gl_SubgroupInvocationID * x_per_invocation + x][gl_SubgroupID * 16 + y];
                 }
             }
             for(int x = 0; x < width / subgroup_size; x++) {
                 for(int y = 0; y < 16; y++) {
-                    local_weights[gl_SubgroupInvocationID * width / subgroup_size + x][gl_SubgroupID * 16 + y] = weights[gl_SubgroupInvocationID * width / subgroup_size + x][gl_SubgroupID * 16 + y][i];
+                    local_weights[gl_SubgroupInvocationID * width / subgroup_size + x][gl_SubgroupID * 16 + y] = weights[i][gl_SubgroupInvocationID * width / subgroup_size + x][gl_SubgroupID * 16 + y];
                 }
             }
         }
         
 
-        subgroupMemoryBarrierShared();    
         barrier();
         if(i < num_layers-1) {
             for(int x = 0; x < x_per_invocation; x++) {
                 for(int y = 0; y < 16; y++) {
                     pfloat dotp = 0.0;
                     for(int other = 0; other < width; other++) {
-                        dotp += local_weights[other][gl_SubgroupID * 16 + y] * shmem[gl_SubgroupInvocationID * x_per_invocation + x][other + last_index];
+                        dotp += local_weights[gl_SubgroupID * 16 + y][other] * shmem[gl_SubgroupInvocationID * x_per_invocation + x][other + last_index];
                     }
                     shmem[gl_SubgroupInvocationID * x_per_invocation + x][ gl_SubgroupID * 16 + y + current_index] = dotp;
                 }
@@ -114,7 +83,7 @@ void main()
                     for(int y = 0; y < 3; y++) {
                         pfloat dotp = 0.0;
                         for(int other = 0; other < width; other++) {
-                            dotp += local_weights[y][other] * shmem[gl_SubgroupInvocationID * x_per_invocation + x + last_index][other];
+                            dotp += local_weights[y][other] * shmem[gl_SubgroupInvocationID * x_per_invocation + x][other + last_index];
                         }
                         outputs[gl_SubgroupInvocationID * x_per_invocation + x][y] = dotp;
                     }
@@ -126,7 +95,6 @@ void main()
         last_index = current_index;
         current_index = temp;
 
-        subgroupMemoryBarrierShared();    
         barrier();
     }
 
