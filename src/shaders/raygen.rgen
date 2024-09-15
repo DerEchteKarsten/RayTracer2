@@ -22,6 +22,21 @@ layout(binding = 4, set = 1, r32ui) uniform uimage2D u_GBufferSpecularRough;
 layout(binding = 5, set = 1, rgba32f) uniform image2D u_MotionVectors;
 layout(binding = 8, set = 0) uniform sampler2D skyBox;
 
+layout(std430, set = 0, binding = 9) buffer Indirect{
+    uint    x;
+    uint    y;
+    uint    z;
+    uint num_workgroups;
+} indirect;
+
+layout(binding = 10, set = 0, std430) buffer Inputs {
+    float inputs[][64];
+};
+layout(binding = 11, set = 0, std430) buffer Outputs {
+    float outputs[][3];
+};
+
+
 #include "common.glsl"
 layout(location = 0) rayPayloadEXT Payload p;
 #define RTXDI_ENABLE_PRESAMPLING 0
@@ -37,6 +52,9 @@ const float SKYBOX = 1.0;
 
 void main() 
 {	
+    indirect.num_workgroups = 0;
+    memoryBarrier();
+
 	ivec2 size = ivec2(gl_LaunchSizeEXT.xy);
 	ivec2 pixelCord = ivec2(gl_LaunchIDEXT.xy);
 
@@ -139,36 +157,50 @@ void main()
         if(RAB_IsSurfaceValid(secondarySurface)) {
             vec3 s_emission = p.emission *EMISSION_STREANGTH;
 
-            RayDesc ray;
-            ray.TMin = tmin;
-            ray.TMax = BACKGROUND_DEPTH;
-            ray.Origin = secondarySurface.worldPos;
-            vec3 dir;
-            RAB_GetSurfaceBrdfSample(secondarySurface, rng, dir);
-            ray.Direction = dir;
-            trace(ray);
+            // RayDesc ray;
+            // ray.TMin = tmin;
+            // ray.TMax = BACKGROUND_DEPTH;
+            // ray.Origin = secondarySurface.worldPos;
+            // vec3 dir;
+            // RAB_GetSurfaceBrdfSample(secondarySurface, rng, dir);
+            // ray.Direction = dir;
+            // trace(ray);
 
-            SplitBrdf brdf;
-            vec3 radiance;
-            if(!p.missed) {
-                brdf = EvaluateBrdf(secondarySurface, p.hitPoint);
-                radiance = p.emission * EMISSION_STREANGTH;
+            // SplitBrdf brdf;
+            // vec3 radiance;
+            // if(!p.missed) {
+            //     brdf = EvaluateBrdf(secondarySurface, p.hitPoint);
+            //     radiance = p.emission * EMISSION_STREANGTH;
+            // }else {
+            //     brdf = EvaluateBrdf(secondarySurface, ray.Origin + ray.Direction * BACKGROUND_DEPTH);
+            //     radiance = p.color.rgb * SKYBOX;
+            // }
+
+            // vec3 diffuse = brdf.demodulatedDiffuse * radiance;
+			// vec3 specular = brdf.specular * radiance;
+
+            // specular = DemodulateSpecular(specular, secondarySurface.specularF0);
+
+            // diffuse.rgb *= secondarySurface.diffuseAlbedo;
+            // specular.rgb *= max(vec3(0.01), secondarySurface.specularF0);
+            if(s_emission != vec3(0.0) || p_emission != vec3(0.0)) {
+                reservoir = RTXDI_MakeGIReservoir(secondarySurface.worldPos,
+                    secondarySurface.geoNormal, (p_emission + s_emission), overall_PDF);
             }else {
-                brdf = EvaluateBrdf(secondarySurface, ray.Origin + ray.Direction * BACKGROUND_DEPTH);
-                radiance = p.color.rgb * SKYBOX;
+                uint index = atomicAdd(indirect.num_workgroups, 1);
+                // uint index = gl_LaunchIDEXT.x * gl_LaunchSizeEXT.y + gl_LaunchIDEXT.y;
+                debugPrintfEXT("%i", index);
+                inputs[index][0] = secondarySurface.worldPos[0];
+                inputs[index][1] = secondarySurface.worldPos[1];
+                inputs[index][2] = secondarySurface.worldPos[2];
+                inputs[index][3] = secondarySurface.geoNormal[0];
+                inputs[index][4] = secondarySurface.geoNormal[1];
+                inputs[index][5] = secondarySurface.geoNormal[2];
+
+                reservoir = RTXDI_MakeGIReservoir(secondarySurface.worldPos,
+                    secondarySurface.geoNormal, vec3(0.0, 0.0, 0.0), overall_PDF);//(diffuse + specular + p_emission + s_emission), overall_PDF);
+                reservoir.M = index;
             }
-
-            vec3 diffuse = brdf.demodulatedDiffuse * radiance;
-			vec3 specular = brdf.specular * radiance;
-
-            specular = DemodulateSpecular(specular, secondarySurface.specularF0);
-
-            diffuse.rgb *= secondarySurface.diffuseAlbedo;
-            specular.rgb *= max(vec3(0.01), secondarySurface.specularF0);
-
-            reservoir = RTXDI_MakeGIReservoir(secondarySurface.worldPos,
-                secondarySurface.geoNormal, (diffuse + specular + p_emission + s_emission), overall_PDF);
-
         }else {
             reservoir = RTXDI_MakeGIReservoir(ray.Origin + ray.Direction * BACKGROUND_DEPTH,
                 -ray.Direction, (p.color.rgb * SKYBOX + p_emission), overall_PDF);
@@ -179,4 +211,10 @@ void main()
         reservoir = RTXDI_EmptyGIReservoir();
     }
     RTXDI_StoreGIReservoir(reservoir, g_Const.restirGI.reservoirBufferParams, pixelCord, g_Const.restirGI.bufferIndices.secondarySurfaceReSTIRDIOutputBufferIndex);
+    memoryBarrier();
+    indirect.x = uint(ceil(float(indirect.num_workgroups) / 64.0));
+    debugPrintfEXT("%i", indirect.num_workgroups);
+
+    indirect.y = 1;
+    indirect.z = 1;
 }

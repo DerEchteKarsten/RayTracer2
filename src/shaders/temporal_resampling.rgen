@@ -29,6 +29,11 @@ layout(binding = 8, set = 0) uniform sampler2D skyBox;
 #include "RtxdiApplicationBridge.glsl"
 #include "rtxdi/GIResamplingFunctions.hlsli"
 
+layout(binding = 11, set = 0, std430) buffer Inputs {
+    float outputs[][3];
+};
+
+
 void main() {
     uint2 pixelPosition = RTXDI_ReservoirPosToPixelPos(gl_LaunchIDEXT.xy, g_Const.runtimeParams.activeCheckerboardField);
 
@@ -43,6 +48,11 @@ void main() {
     motionVector = convertMotionVectorToPixelSpace(g_Const.view, g_Const.prevView, ivec2(pixelPosition), motionVector);
 
     if (RAB_IsSurfaceValid(primarySurface)) {
+        if(reservoir.M != 1 && reservoir.radiance == vec3(0.0)) {
+            reservoir.M = 1;
+            reservoir.radiance = vec3(outputs[reservoir.M][0], outputs[reservoir.M][1], outputs[reservoir.M][2]);
+        }
+
         RTXDI_GITemporalResamplingParameters tParams;
 
         tParams.screenSpaceMotion = motionVector;

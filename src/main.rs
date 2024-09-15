@@ -195,7 +195,6 @@ fn main() {
         .unwrap()
     };
 
-
     let view = camera.planar_view_constants();
 
     let mut g_const = GConst {
@@ -256,7 +255,14 @@ fn main() {
             pad2: 0,
         },
     };
-    let renderer = create_render_recources(&mut ctx, &model, &tlas, sky_box.view, g_const.restirGI.reservoirBufferParams.reservoirArrayPitch as u64 * 2 * 32).unwrap();
+    let renderer = create_render_recources(
+        &mut ctx,
+        &model,
+        &tlas,
+        sky_box.view,
+        g_const.restirGI.reservoirBufferParams.reservoirArrayPitch as u64 * 2 * 32,
+    )
+    .unwrap();
 
     renderer
         .uniform_buffer
@@ -268,15 +274,6 @@ fn main() {
     let mut now = Instant::now();
     let mut last_time = Instant::now();
     let mut frame_time = Duration::new(0, 0);
-
-    let read_back_buffer = ctx
-        .create_buffer(
-            BufferUsageFlags::TRANSFER_DST,
-            MemoryLocation::GpuToCpu,
-            renderer.output_buffers.size,
-            None,
-        )
-        .unwrap();
 
     #[allow(clippy::collapsible_match, clippy::single_match)]
     event_loop
@@ -302,36 +299,6 @@ fn main() {
                         }
                     }
                     WindowEvent::RedrawRequested => {
-                        if frame > 2 {
-                            let data_ptr = read_back_buffer
-                                .allocation
-                                .as_ref()
-                                .unwrap()
-                                .mapped_ptr()
-                                .unwrap()
-                                .as_ptr();
-                            let mut dst =
-                                Vec::<f32>::with_capacity(read_back_buffer.size as usize / 4);
-                            unsafe {
-                                std::ptr::copy(
-                                    data_ptr,
-                                    dst.as_mut_ptr() as *mut c_void,
-                                    read_back_buffer.size as usize,
-                                );
-                                dst.set_len(read_back_buffer.size as usize);
-                            };
-                            for x in 0..64 {
-                                println!("Batchelement: {} -----------------------------------------------", x);
-                                for y in 0..3 {
-                                    print!("{}, ", dst[x * 3 + y] as f32);
-                                    assert_eq!(dst[x * 3 + y].round(), renderer.exspected_outputs[[x,y]].round());
-                                }
-                                println!("");
-                                println!("----------------------------------------------------------------");
-                            }
-                            panic!();
-                        }
-
                         frame += 1;
                         let new_cam = camera.update(&controles, frame_time);
                         moved = new_cam != camera;
@@ -342,7 +309,7 @@ fn main() {
 
                         renderer
                             .uniform_buffer
-                            .copy_data_to_buffer(std::slice::from_ref(&g_const))
+                            .copy_data_to_aligned_buffer(std::slice::from_ref(&g_const), 16)
                             .unwrap();
 
                         let buffer_memory_barriers = [vk::BufferMemoryBarrier::default()
@@ -389,20 +356,90 @@ fn main() {
                             let cmd = &ctx.cmd_buffs[i as usize];
 
                             unsafe {
-                                ctx.device.cmd_bind_descriptor_sets(
+                                let frame_c = std::slice::from_raw_parts(
+                                    &frame as *const u32 as *const u8,
+                                    size_of::<u32>(),
+                                );
+                                let moved_c =
+                                    &[if moved == true { 1 as u8 } else { 0 as u8 }, 0, 0, 0];
+
+                                {
+                                    ctx.device.cmd_push_constants(
+                                        *cmd,
+                                        renderer.raytracing_pipeline.layout,
+                                        vk::ShaderStageFlags::RAYGEN_KHR,
+                                        0,
+                                        &frame_c,
+                                    );
+                                    ctx.device.cmd_push_constants(
+                                        *cmd,
+                                        renderer.raytracing_pipeline.layout,
+                                        vk::ShaderStageFlags::RAYGEN_KHR,
+                                        size_of::<u32>() as u32,
+                                        moved_c,
+                                    );
+
+                                    ctx.device.cmd_bind_descriptor_sets(
+                                        *cmd,
+                                        vk::PipelineBindPoint::RAY_TRACING_KHR,
+                                        renderer.raytracing_pipeline.layout,
+                                        0,
+                                        &[
+                                            renderer.raytracing_pipeline.descriptor_set0,
+                                            renderer.raytracing_pipeline.descriptor_set1
+                                                [(frame % 2) as usize],
+                                            renderer.raytracing_pipeline.descriptor_set2
+                                                [1 - (frame % 2) as usize],
+                                        ],
+                                        &[],
+                                    );
+
+                                    ctx.device.cmd_bind_pipeline(
+                                        *cmd,
+                                        vk::PipelineBindPoint::RAY_TRACING_KHR,
+                                        renderer.raytracing_pipeline.handle,
+                                    );
+
+                                    let call_region = vk::StridedDeviceAddressRegionKHR::default();
+
+                                    ctx.ray_tracing.pipeline_fn.cmd_trace_rays(
+                                        *cmd,
+                                        &renderer.shader_binding_table.raygen_region,
+                                        &renderer.shader_binding_table.miss_region,
+                                        &renderer.shader_binding_table.hit_region,
+                                        &call_region,
+                                        window_size.width,
+                                        window_size.height,
+                                        1,
+                                    );
+                                }
+
+                                ctx.device.cmd_pipeline_barrier(
                                     *cmd,
-                                    PipelineBindPoint::COMPUTE,
-                                    renderer.inference_pipeline.layout,
-                                    0,
-                                    &[renderer.inference_pipeline.descriptor_set0],
+                                    PipelineStageFlags::RAY_TRACING_SHADER_KHR,
+                                    PipelineStageFlags::COMPUTE_SHADER,
+                                    DependencyFlags::BY_REGION,
                                     &[],
+                                    &buffer_memory_barriers,
+                                    &image_barriers,
                                 );
-                                ctx.device.cmd_bind_pipeline(
-                                    *cmd,
-                                    PipelineBindPoint::COMPUTE,
-                                    renderer.inference_pipeline.handle,
-                                );
-                                ctx.device.cmd_dispatch(*cmd, 1, 1, 1);
+
+                                {
+                                    ctx.device.cmd_bind_descriptor_sets(
+                                        *cmd,
+                                        PipelineBindPoint::COMPUTE,
+                                        renderer.inference_pipeline.layout,
+                                        0,
+                                        &[renderer.inference_pipeline.descriptor_set0],
+                                        &[],
+                                    );
+                                    ctx.device.cmd_bind_pipeline(
+                                        *cmd,
+                                        PipelineBindPoint::COMPUTE,
+                                        renderer.inference_pipeline.handle,
+                                    );
+                                    ctx.device.cmd_dispatch_indirect(*cmd, renderer.dispatch_buffer.inner, 0);
+                                }
 
                                 let buffer_barrier = vk::BufferMemoryBarrier::default()
                                     .size(renderer.output_buffers.size)
@@ -414,10 +451,9 @@ fn main() {
                                     .dst_access_mask(AccessFlags::HOST_READ)
                                     .src_queue_family_index(ctx.graphics_queue_family.index)
                                     .dst_queue_family_index(ctx.graphics_queue_family.index);
-
                                 ctx.device.cmd_pipeline_barrier(
                                     *cmd,
-                                    vk::PipelineStageFlags::ALL_COMMANDS,
+                                    vk::PipelineStageFlags::COMPUTE_SHADER,
                                     vk::PipelineStageFlags::ALL_COMMANDS,
                                     DependencyFlags::BY_REGION,
                                     &[],
@@ -425,94 +461,55 @@ fn main() {
                                     &[],
                                 );
 
-                                ctx.device.cmd_copy_buffer(
-                                    *cmd,
-                                    renderer.output_buffers.inner,
-                                    read_back_buffer.inner,
-                                    &[vk::BufferCopy::default()
-                                        .dst_offset(0)
-                                        .src_offset(0)
-                                        .size(renderer.output_buffers.size)],
-                                );
-                                
-                                ctx.device.cmd_pipeline_barrier(
-                                    *cmd,
-                                    PipelineStageFlags::ALL_COMMANDS,
-                                    PipelineStageFlags::ALL_COMMANDS,
-                                    DependencyFlags::BY_REGION,
-                                    &[],
-                                    &buffer_memory_barriers,
-                                    &image_barriers,
-                                );
-                                let frame_c = std::slice::from_raw_parts(
-                                    &frame as *const u32 as *const u8,
-                                    size_of::<u32>(),
-                                );
-                                let moved_c =
-                                    &[if moved == true { 1 as u8 } else { 0 as u8 }, 0, 0, 0];
+                                {
+                                    ctx.device.cmd_bind_descriptor_sets(
+                                        *cmd,
+                                        vk::PipelineBindPoint::RAY_TRACING_KHR,
+                                        renderer.raytracing_pipeline.layout,
+                                        0,
+                                        &[
+                                            renderer.raytracing_pipeline.descriptor_set0,
+                                            renderer.raytracing_pipeline.descriptor_set1
+                                                [(frame % 2) as usize],
+                                            renderer.raytracing_pipeline.descriptor_set2
+                                                [1 - (frame % 2) as usize],
+                                        ],
+                                        &[],
+                                    );
 
-                                ctx.device.cmd_push_constants(
-                                    *cmd,
-                                    renderer.raytracing_pipeline.layout,
-                                    vk::ShaderStageFlags::RAYGEN_KHR,
-                                    0,
-                                    &frame_c,
-                                );
-                                ctx.device.cmd_push_constants(
-                                    *cmd,
-                                    renderer.raytracing_pipeline.layout,
-                                    vk::ShaderStageFlags::RAYGEN_KHR,
-                                    size_of::<u32>() as u32,
-                                    moved_c,
-                                );
+                                    ctx.device.cmd_bind_pipeline(
+                                        *cmd,
+                                        vk::PipelineBindPoint::RAY_TRACING_KHR,
+                                        renderer.raytracing_pipeline.handle,
+                                    );
 
-                                ctx.device.cmd_bind_descriptor_sets(
-                                    *cmd,
-                                    vk::PipelineBindPoint::RAY_TRACING_KHR,
-                                    renderer.raytracing_pipeline.layout,
-                                    0,
-                                    &[
-                                        renderer.raytracing_pipeline.descriptor_set0,
-                                        renderer.raytracing_pipeline.descriptor_set1
-                                            [(frame % 2) as usize],
-                                        renderer.raytracing_pipeline.descriptor_set2
-                                            [1 - (frame % 2) as usize],
-                                    ],
-                                    &[],
-                                );
+                                    let handle_size = ctx
+                                        .ray_tracing
+                                        .pipeline_properties
+                                        .shader_group_handle_size;
+                                    let handle_alignment = ctx
+                                        .ray_tracing
+                                        .pipeline_properties
+                                        .shader_group_handle_alignment;
+                                    let aligned_handle_size =
+                                        alinged_size(handle_size, handle_alignment);
 
-                                ctx.device.cmd_bind_pipeline(
-                                    *cmd,
-                                    vk::PipelineBindPoint::RAY_TRACING_KHR,
-                                    renderer.raytracing_pipeline.handle,
-                                );
+                                    let mut raygen_region2 =
+                                        renderer.shader_binding_table.raygen_region;
+                                    raygen_region2.device_address += aligned_handle_size as u64 * 2;
+                                    let call_region = vk::StridedDeviceAddressRegionKHR::default();
 
-                                let call_region = vk::StridedDeviceAddressRegionKHR::default();
-
-                                ctx.ray_tracing.pipeline_fn.cmd_trace_rays(
-                                    *cmd,
-                                    &renderer.shader_binding_table.raygen_region,
-                                    &renderer.shader_binding_table.miss_region,
-                                    &renderer.shader_binding_table.hit_region,
-                                    &call_region,
-                                    window_size.width,
-                                    window_size.height,
-                                    1,
-                                );
-
-                                let handle_size =
-                                    ctx.ray_tracing.pipeline_properties.shader_group_handle_size;
-                                let handle_alignment = ctx
-                                    .ray_tracing
-                                    .pipeline_properties
-                                    .shader_group_handle_alignment;
-                                let aligned_handle_size =
-                                    alinged_size(handle_size, handle_alignment);
-
-                                let mut raygen_region2 =
-                                    renderer.shader_binding_table.raygen_region;
-                                raygen_region2.device_address += aligned_handle_size as u64 * 2;
-
+                                    ctx.ray_tracing.pipeline_fn.cmd_trace_rays(
+                                        *cmd,
+                                        &raygen_region2,
+                                        &renderer.shader_binding_table.miss_region,
+                                        &renderer.shader_binding_table.hit_region,
+                                        &call_region,
+                                        window_size.width,
+                                        window_size.height,
+                                        1,
+                                    );
+                                }
                                 ctx.device.cmd_pipeline_barrier(
                                     *cmd,
                                     PipelineStageFlags::RAY_TRACING_SHADER_KHR,
@@ -523,50 +520,34 @@ fn main() {
                                     &image_barriers,
                                 );
 
-                                ctx.ray_tracing.pipeline_fn.cmd_trace_rays(
-                                    *cmd,
-                                    &raygen_region2,
-                                    &renderer.shader_binding_table.miss_region,
-                                    &renderer.shader_binding_table.hit_region,
-                                    &call_region,
-                                    window_size.width,
-                                    window_size.height,
-                                    1,
-                                );
+                                {
+                                    let handle_size = ctx
+                                        .ray_tracing
+                                        .pipeline_properties
+                                        .shader_group_handle_size;
+                                    let handle_alignment = ctx
+                                        .ray_tracing
+                                        .pipeline_properties
+                                        .shader_group_handle_alignment;
+                                    let aligned_handle_size =
+                                        alinged_size(handle_size, handle_alignment);
 
-                                let handle_size =
-                                    ctx.ray_tracing.pipeline_properties.shader_group_handle_size;
-                                let handle_alignment = ctx
-                                    .ray_tracing
-                                    .pipeline_properties
-                                    .shader_group_handle_alignment;
-                                let aligned_handle_size =
-                                    alinged_size(handle_size, handle_alignment);
+                                    let mut raygen_region2 =
+                                        renderer.shader_binding_table.raygen_region;
+                                    raygen_region2.device_address += aligned_handle_size as u64;
+                                    let call_region = vk::StridedDeviceAddressRegionKHR::default();
 
-                                let mut raygen_region2 =
-                                    renderer.shader_binding_table.raygen_region;
-                                raygen_region2.device_address += aligned_handle_size as u64;
-
-                                ctx.device.cmd_pipeline_barrier(
-                                    *cmd,
-                                    PipelineStageFlags::RAY_TRACING_SHADER_KHR,
-                                    PipelineStageFlags::RAY_TRACING_SHADER_KHR,
-                                    DependencyFlags::BY_REGION,
-                                    &[],
-                                    &buffer_memory_barriers,
-                                    &image_barriers,
-                                );
-
-                                ctx.ray_tracing.pipeline_fn.cmd_trace_rays(
-                                    *cmd,
-                                    &raygen_region2,
-                                    &renderer.shader_binding_table.miss_region,
-                                    &renderer.shader_binding_table.hit_region,
-                                    &call_region,
-                                    window_size.width,
-                                    window_size.height,
-                                    1,
-                                );
+                                    ctx.ray_tracing.pipeline_fn.cmd_trace_rays(
+                                        *cmd,
+                                        &raygen_region2,
+                                        &renderer.shader_binding_table.miss_region,
+                                        &renderer.shader_binding_table.hit_region,
+                                        &call_region,
+                                        window_size.width,
+                                        window_size.height,
+                                        1,
+                                    );
+                                }
 
                                 ctx.device.cmd_pipeline_barrier(
                                     *cmd,
@@ -578,75 +559,78 @@ fn main() {
                                     &image_barriers,
                                 );
 
-                                let begin_info = vk::RenderPassBeginInfo::default()
-                                    .render_pass(renderer.post_proccesing_pipeline.render_pass)
-                                    .framebuffer(
-                                        renderer.post_proccesing_pipeline.frame_buffers[i as usize],
-                                    )
-                                    .render_area(vk::Rect2D {
-                                        extent: vk::Extent2D {
-                                            width: window_size.width,
+                                {
+                                    let begin_info = vk::RenderPassBeginInfo::default()
+                                        .render_pass(renderer.post_proccesing_pipeline.render_pass)
+                                        .framebuffer(
+                                            renderer.post_proccesing_pipeline.frame_buffers
+                                                [i as usize],
+                                        )
+                                        .render_area(vk::Rect2D {
+                                            extent: vk::Extent2D {
+                                                width: window_size.width,
+                                                height: window_size.height,
+                                            },
+                                            offset: vk::Offset2D { x: 0, y: 0 },
+                                        })
+                                        .clear_values(&[vk::ClearValue {
+                                            color: vk::ClearColorValue {
+                                                float32: [0.0, 0.0, 0.0, 1.0],
+                                            },
+                                        }]);
+
+                                    let view_port = vk::Viewport::default()
+                                        .height(window_size.height as f32)
+                                        .width(window_size.width as f32)
+                                        .max_depth(1.0)
+                                        .min_depth(0.0)
+                                        .x(0 as f32)
+                                        .y(0 as f32);
+                                    ctx.device.cmd_set_viewport(*cmd, 0, &[view_port]);
+
+                                    let scissor = vk::Rect2D::default()
+                                        .extent(vk::Extent2D {
                                             height: window_size.height,
-                                        },
-                                        offset: vk::Offset2D { x: 0, y: 0 },
-                                    })
-                                    .clear_values(&[vk::ClearValue {
-                                        color: vk::ClearColorValue {
-                                            float32: [0.0, 0.0, 0.0, 1.0],
-                                        },
-                                    }]);
+                                            width: window_size.width,
+                                        })
+                                        .offset(vk::Offset2D { x: 0, y: 0 });
+                                    ctx.device.cmd_set_scissor(*cmd, 0, &[scissor]);
 
-                                let view_port = vk::Viewport::default()
-                                    .height(window_size.height as f32)
-                                    .width(window_size.width as f32)
-                                    .max_depth(1.0)
-                                    .min_depth(0.0)
-                                    .x(0 as f32)
-                                    .y(0 as f32);
-                                ctx.device.cmd_set_viewport(*cmd, 0, &[view_port]);
+                                    ctx.device.cmd_begin_render_pass(
+                                        *cmd,
+                                        &begin_info,
+                                        vk::SubpassContents::INLINE,
+                                    );
 
-                                let scissor = vk::Rect2D::default()
-                                    .extent(vk::Extent2D {
-                                        height: window_size.height,
-                                        width: window_size.width,
-                                    })
-                                    .offset(vk::Offset2D { x: 0, y: 0 });
-                                ctx.device.cmd_set_scissor(*cmd, 0, &[scissor]);
+                                    ctx.device.cmd_bind_pipeline(
+                                        *cmd,
+                                        vk::PipelineBindPoint::GRAPHICS,
+                                        renderer.post_proccesing_pipeline.pipeline,
+                                    );
 
-                                ctx.device.cmd_begin_render_pass(
-                                    *cmd,
-                                    &begin_info,
-                                    vk::SubpassContents::INLINE,
-                                );
+                                    ctx.device.cmd_push_constants(
+                                        *cmd,
+                                        renderer.post_proccesing_pipeline.layout,
+                                        vk::ShaderStageFlags::FRAGMENT,
+                                        0,
+                                        &frame_c,
+                                    );
 
-                                ctx.device.cmd_bind_pipeline(
-                                    *cmd,
-                                    vk::PipelineBindPoint::GRAPHICS,
-                                    renderer.post_proccesing_pipeline.pipeline,
-                                );
-
-                                ctx.device.cmd_push_constants(
-                                    *cmd,
-                                    renderer.post_proccesing_pipeline.layout,
-                                    vk::ShaderStageFlags::FRAGMENT,
-                                    0,
-                                    &frame_c,
-                                );
-
-                                ctx.device.cmd_bind_descriptor_sets(
-                                    *cmd,
-                                    vk::PipelineBindPoint::GRAPHICS,
-                                    renderer.post_proccesing_pipeline.layout,
-                                    0,
-                                    &[
-                                        renderer.post_proccesing_pipeline.static_descriptor,
-                                        renderer.post_proccesing_pipeline.dynamic_descriptors
-                                            [(frame % 2) as usize],
-                                    ],
-                                    &[],
-                                );
-                                ctx.device.cmd_draw(*cmd, 6, 1, 0, 0);
-                                ctx.device.cmd_end_render_pass(*cmd);
+                                    ctx.device.cmd_bind_descriptor_sets(
+                                        *cmd,
+                                        vk::PipelineBindPoint::GRAPHICS,
+                                        renderer.post_proccesing_pipeline.layout,
+                                        0,
+                                        &[
+                                            renderer.post_proccesing_pipeline.static_descriptor,
+                                            renderer.post_proccesing_pipeline.dynamic_descriptors
+                                                [(frame % 2) as usize],
+                                        ],
+                                        &[],
+                                    );
+                                    ctx.device.cmd_draw(*cmd, 6, 1, 0, 0);
+                                    ctx.device.cmd_end_render_pass(*cmd);
+                                }
                             }
                         })
                         .unwrap();

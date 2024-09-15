@@ -54,7 +54,7 @@ void main()
         if(i == 0) {
             for(int x = 0; x < x_per_invocation; x++) {
                 for(int y = 0; y < 16; y++) {
-                    shmem[gl_SubgroupInvocationID * x_per_invocation + x][gl_SubgroupID * 16 + y + last_index] = inputs[gl_SubgroupInvocationID * x_per_invocation + x][gl_SubgroupID * 16 + y];
+                    shmem[gl_SubgroupInvocationID * x_per_invocation + x][gl_SubgroupID * 16 + y + last_index] = inputs[gl_WorkGroupID.x * batch_size_per_threadblock + gl_SubgroupInvocationID * x_per_invocation + x][gl_SubgroupID * 16 + y];
                 }
             }
         }
@@ -97,6 +97,5 @@ void main()
 
         barrier();
     }
-
-    // debugPrintfEXT("%f", inputs[(gl_LocalInvocationID.x * subgroup_size + gl_LocalInvocationID.y)]);
+    debugPrintfEXT("%i", gl_WorkGroupID.x);
 }

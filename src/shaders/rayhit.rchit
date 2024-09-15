@@ -53,8 +53,8 @@ void main()
   vec3 origin = gl_WorldRayOriginEXT + gl_WorldRayDirectionEXT * gl_HitTEXT;
 
   p.missed = false;
-  p.metallicFactor = 0.0;//geometryInfo.metallicFactor;
-  p.roughness = 1.0;//geometryInfo.roughness;
+  p.metallicFactor = geometryInfo.metallicFactor;
+  p.roughness = geometryInfo.roughness;
   p.hitPoint = origin;
   p.hitNormal = normal;
   p.emission = geometryInfo.emission.xyz;

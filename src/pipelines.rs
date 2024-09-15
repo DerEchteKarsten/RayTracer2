@@ -2,9 +2,9 @@ use anyhow::{Ok, Result};
 use ash::vk::{self, BufferUsageFlags, ImageLayout, PipelineCache, ShaderStageFlags};
 use glam::Vec2;
 use gpu_allocator::MemoryLocation;
+use ndarray::{arr3, prelude::*};
 use rand::rngs::ThreadRng;
 use rand::{thread_rng, Rng};
-use ndarray::{arr3, prelude::*};
 
 use std::ffi::CString;
 use std::mem::size_of;
@@ -40,7 +40,7 @@ pub struct RendererResources {
     pub input_buffers: Buffer,
     pub output_buffers: Buffer,
     pub weights_buffer: Buffer,
-    pub exspected_outputs: Array2<f32>,
+    pub dispatch_buffer: Buffer,
 }
 
 pub struct PostProccesingPipeline {
@@ -107,7 +107,7 @@ pub fn create_inference_pipeline(
         .layout(layout)
         .stage(
             vk::PipelineShaderStageCreateInfo::default()
-                .module(ctx.create_shader_module("./src/shaders/training.comp.spv".to_string()))
+                .module(ctx.create_shader_module("./src/shaders/inferance.comp.spv".to_string()))
                 .stage(vk::ShaderStageFlags::COMPUTE)
                 .name(&entry_point_name),
         );
@@ -491,6 +491,9 @@ fn create_ray_tracing_pipeline(
     neighbors: &Buffer,
     g_buffer: &Vec<GBuffer>,
     shaders_create_info: &[RayTracingShaderCreateInfo],
+    inputbuffer: &Buffer,
+    outputbuffer: &Buffer,
+    dispatch_buffer: &Buffer,
 ) -> Result<RayTracingPipeline> {
     let static_layout_bindings = [
         vk::DescriptorSetLayoutBinding::default()
@@ -538,6 +541,21 @@ fn create_ray_tracing_pipeline(
             .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
             .descriptor_count(1)
             .stage_flags(vk::ShaderStageFlags::MISS_KHR),
+        vk::DescriptorSetLayoutBinding::default()
+            .binding(9)
+            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+            .descriptor_count(1)
+            .stage_flags(vk::ShaderStageFlags::RAYGEN_KHR),
+        vk::DescriptorSetLayoutBinding::default()
+            .binding(10)
+            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+            .descriptor_count(1)
+            .stage_flags(vk::ShaderStageFlags::RAYGEN_KHR),
+        vk::DescriptorSetLayoutBinding::default()
+            .binding(11)
+            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+            .descriptor_count(1)
+            .stage_flags(vk::ShaderStageFlags::RAYGEN_KHR),
     ];
 
     let dynamic_layout_bindings = [
@@ -687,7 +705,7 @@ fn create_ray_tracing_pipeline(
             .descriptor_count(1),
         vk::DescriptorPoolSize::default()
             .ty(vk::DescriptorType::STORAGE_BUFFER)
-            .descriptor_count(5),
+            .descriptor_count(8),
         vk::DescriptorPoolSize::default()
             .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
             .descriptor_count((model.images.len() as u32) + 1),
@@ -742,6 +760,24 @@ fn create_ray_tracing_pipeline(
                 view: *skybox_view,
                 sampler: *skybox_sampler,
                 layout: ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+            },
+        },
+        WriteDescriptorSet {
+            binding: 9,
+            kind: WriteDescriptorSetKind::StorageBuffer {
+                buffer: dispatch_buffer.inner,
+            },
+        },
+        WriteDescriptorSet {
+            binding: 10,
+            kind: WriteDescriptorSetKind::StorageBuffer {
+                buffer: inputbuffer.inner,
+            },
+        },
+        WriteDescriptorSet {
+            binding: 11,
+            kind: WriteDescriptorSetKind::StorageBuffer {
+                buffer: outputbuffer.inner,
             },
         },
     ];
@@ -1106,6 +1142,34 @@ pub fn create_render_recources(
         },
     ];
 
+    let input_buffer = ctx.create_buffer(
+        BufferUsageFlags::STORAGE_BUFFER,
+        MemoryLocation::GpuOnly,
+        WINDOW_SIZE.x as u64 * WINDOW_SIZE.y as u64 * 64 * 4,
+        None,
+    )?;
+
+    let output_buffer = ctx.create_gpu_only_buffer_from_data(
+        BufferUsageFlags::STORAGE_BUFFER | BufferUsageFlags::TRANSFER_SRC,
+        &[0.0 as f32; 64 * 3],
+        None,
+    )?;
+    let weights_buffer = ctx.create_gpu_only_buffer_from_data(
+        BufferUsageFlags::STORAGE_BUFFER,
+        &[1.0 as f32; 64 * 64 *7],
+        None,
+    )?;
+
+    let inference_pipeline =
+        create_inference_pipeline(ctx, &input_buffer, &output_buffer, &weights_buffer).unwrap();
+
+    let dispatch_buffer = ctx.create_buffer(
+        BufferUsageFlags::STORAGE_BUFFER | BufferUsageFlags::INDIRECT_BUFFER,
+        MemoryLocation::GpuOnly,
+        4 * 4,
+        None,
+    ).unwrap();
+
     let raytracing_pipeline = create_ray_tracing_pipeline(
         ctx,
         model,
@@ -1117,6 +1181,9 @@ pub fn create_render_recources(
         &neighbors,
         &g_buffer,
         &shaders_create_info,
+        &input_buffer,
+        &output_buffer,
+        &dispatch_buffer,
     )
     .unwrap();
 
@@ -1126,66 +1193,6 @@ pub fn create_render_recources(
             &raytracing_pipeline.shader_group_info,
         )
         .unwrap();
-
-    // let input_buffers = ctx.create_buffer(BufferUsageFlags::STORAGE_BUFFER, MemoryLocation::GpuOnly, 64*64*4, None).unwrap();
-    // let output_buffers = ctx.create_buffer(BufferUsageFlags::STORAGE_BUFFER, MemoryLocation::GpuOnly, 64*3*4, None).unwrap();
-    // let weights_buffer = ctx.create_buffer(BufferUsageFlags::STORAGE_BUFFER, MemoryLocation::GpuOnly, 64*64, None).unwrap();
-
-    let inputs = Array2::from_shape_fn((64, 64), |(x, y)| {
-        (0.5 - rand::random::<f32>()) * 2.0  
-    });
-
-    let weights = Array3::from_shape_fn((7, 64, 64), |(i, x, y)| {
-        (0.5 - rand::random::<f32>()) * 2.0  
-    });
-
-    let mut outputs = Array2::<f32>::zeros(Dim([64, 64]));
-    let mut final_outputs = Array2::<f32>::zeros(Dim([64, 3]));
-    let mut last_outputs = inputs.to_owned().clone();
-    for i in 0..7 as usize {
-        if i == 6 {
-            let current_weights = weights.index_axis(Axis(0), i);
-            let current_weights = current_weights.slice(s![0..3, ..]);
-            for x in 0..64 as usize {
-                for y in 0..3 as usize {
-                    let mut dotp = 0.0;
-                    for other in 0..64 as usize {
-                        dotp += current_weights[[y,other]] * last_outputs[[x, other]];
-                    }
-                    final_outputs[[x,y]] = f32::max(dotp, 0.0);
-                }
-            }
-        }else {
-            let current_weights = weights.index_axis(Axis(0), i);
-            for x in 0..64 as usize {
-                for y in 0..64 as usize {
-                    let mut dopt = 0.0;
-                    for other in 0..64 as usize {
-                        dopt += current_weights[[y, other]] * last_outputs[[x, other]];
-                    }
-                    outputs[[x,y]] = f32::max(dopt, 0.0);
-                }
-            }
-            last_outputs = outputs.clone();
-        }
-    }
-    println!("{:?}", final_outputs);
-
-    let input_buffer =
-        ctx.create_gpu_only_buffer_from_data(BufferUsageFlags::STORAGE_BUFFER, inputs.flatten().as_slice().unwrap(), None)?;
-    let output_buffer = ctx.create_gpu_only_buffer_from_data(
-        BufferUsageFlags::STORAGE_BUFFER | BufferUsageFlags::TRANSFER_SRC,
-        &[0.0 as f32; 64 * 3],
-        None,
-    )?;
-    let weights_buffer = ctx.create_gpu_only_buffer_from_data(
-        BufferUsageFlags::STORAGE_BUFFER,
-        weights.flatten().as_slice().unwrap(),
-        None,
-    )?;
-
-    let inference_pipeline =
-        create_inference_pipeline(ctx, &input_buffer, &output_buffer, &weights_buffer).unwrap();
 
     Ok(RendererResources {
         g_buffer,
@@ -1199,7 +1206,7 @@ pub fn create_render_recources(
         input_buffers: input_buffer,
         output_buffers: output_buffer,
         weights_buffer,
-        exspected_outputs: final_outputs,
+        dispatch_buffer,
     })
 }
 
@@ -1215,10 +1222,13 @@ pub fn CalculateReservoirBufferParameters(
     renderWidth: u32,
     renderHeight: u32,
 ) -> RTXDI_ReservoirBufferParameters {
-    let renderWidthBlocks = (renderWidth + RTXDI_RESERVOIR_BLOCK_SIZE - 1) / RTXDI_RESERVOIR_BLOCK_SIZE;
-    let renderHeightBlocks = (renderHeight + RTXDI_RESERVOIR_BLOCK_SIZE - 1) / RTXDI_RESERVOIR_BLOCK_SIZE;
+    let renderWidthBlocks =
+        (renderWidth + RTXDI_RESERVOIR_BLOCK_SIZE - 1) / RTXDI_RESERVOIR_BLOCK_SIZE;
+    let renderHeightBlocks =
+        (renderHeight + RTXDI_RESERVOIR_BLOCK_SIZE - 1) / RTXDI_RESERVOIR_BLOCK_SIZE;
     let mut params = RTXDI_ReservoirBufferParameters::default();
-    params.reservoirBlockRowPitch = renderWidthBlocks * (RTXDI_RESERVOIR_BLOCK_SIZE * RTXDI_RESERVOIR_BLOCK_SIZE);
+    params.reservoirBlockRowPitch =
+        renderWidthBlocks * (RTXDI_RESERVOIR_BLOCK_SIZE * RTXDI_RESERVOIR_BLOCK_SIZE);
     params.reservoirArrayPitch = params.reservoirBlockRowPitch * renderHeightBlocks;
     return params;
 }

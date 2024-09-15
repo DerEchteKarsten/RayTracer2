@@ -13,4 +13,4 @@ compile $base/src/shaders/post_processing.vert
 compile $base/src/shaders/post_processing.frag
 compile $base/src/shaders/spatial_resampling.rgen
 compile $base/src/shaders/temporal_resampling.rgen
-compile $base/src/shaders/training.comp
+compile $base/src/shaders/inferance.comp
