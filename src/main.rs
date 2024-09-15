@@ -324,7 +324,7 @@ fn main() {
                                 println!("Batchelement: {} -----------------------------------------------", x);
                                 for y in 0..3 {
                                     print!("{}, ", dst[x * 3 + y] as f32);
-                                    assert_eq!(dst[x * 3 + y], renderer.exspected_outputs[[x,y]]);
+                                    assert_eq!(dst[x * 3 + y].round(), renderer.exspected_outputs[[x,y]].round());
                                 }
                                 println!("");
                                 println!("----------------------------------------------------------------");

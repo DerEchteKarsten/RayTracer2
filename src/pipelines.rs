@@ -1132,20 +1132,19 @@ pub fn create_render_recources(
     // let weights_buffer = ctx.create_buffer(BufferUsageFlags::STORAGE_BUFFER, MemoryLocation::GpuOnly, 64*64, None).unwrap();
 
     let inputs = Array2::from_shape_fn((64, 64), |(x, y)| {
-        rand::random()
+        (0.5 - rand::random::<f32>()) * 2.0  
     });
 
-    // let ran = rand::random();
-    let weights = Array3::from_shape_fn((7, 64, 64), |(_, _, _)| {
-        1.0
+    let weights = Array3::from_shape_fn((7, 64, 64), |(i, x, y)| {
+        (0.5 - rand::random::<f32>()) * 2.0  
     });
 
     let mut outputs = Array2::<f32>::zeros(Dim([64, 64]));
     let mut final_outputs = Array2::<f32>::zeros(Dim([64, 3]));
-    let mut last_outputs = inputs.clone();
+    let mut last_outputs = inputs.to_owned().clone();
     for i in 0..7 as usize {
         if i == 6 {
-            let current_weights = weights.index_axis(Axis(2), i);
+            let current_weights = weights.index_axis(Axis(0), i);
             let current_weights = current_weights.slice(s![0..3, ..]);
             for x in 0..64 as usize {
                 for y in 0..3 as usize {
@@ -1153,13 +1152,21 @@ pub fn create_render_recources(
                     for other in 0..64 as usize {
                         dotp += current_weights[[y,other]] * last_outputs[[x, other]];
                     }
-                    final_outputs[[x,y]] = dotp;//f32::max(dotp, 0.0);
+                    final_outputs[[x,y]] = f32::max(dotp, 0.0);
                 }
             }
         }else {
             let current_weights = weights.index_axis(Axis(0), i);
-            outputs = current_weights.dot(&last_outputs);
-            last_outputs = outputs;//.map(|e| {f32::max(*e, 0.0)});
+            for x in 0..64 as usize {
+                for y in 0..64 as usize {
+                    let mut dopt = 0.0;
+                    for other in 0..64 as usize {
+                        dopt += current_weights[[y, other]] * last_outputs[[x, other]];
+                    }
+                    outputs[[x,y]] = f32::max(dopt, 0.0);
+                }
+            }
+            last_outputs = outputs.clone();
         }
     }
     println!("{:?}", final_outputs);

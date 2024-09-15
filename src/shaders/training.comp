@@ -57,13 +57,13 @@ void main()
                     shmem[gl_SubgroupInvocationID * x_per_invocation + x][gl_SubgroupID * 16 + y + last_index] = inputs[gl_SubgroupInvocationID * x_per_invocation + x][gl_SubgroupID * 16 + y];
                 }
             }
-            for(int x = 0; x < width / subgroup_size; x++) {
-                for(int y = 0; y < 16; y++) {
-                    local_weights[gl_SubgroupInvocationID * width / subgroup_size + x][gl_SubgroupID * 16 + y] = weights[i][gl_SubgroupInvocationID * width / subgroup_size + x][gl_SubgroupID * 16 + y];
-                }
-            }
         }
         
+        for(int x = 0; x < width / subgroup_size; x++) {
+            for(int y = 0; y < 16; y++) {
+                local_weights[gl_SubgroupInvocationID * width / subgroup_size + x][gl_SubgroupID * 16 + y] = weights[i][gl_SubgroupInvocationID * width / subgroup_size + x][gl_SubgroupID * 16 + y];
+            }
+        }
 
         barrier();
         if(i < num_layers-1) {
@@ -73,7 +73,7 @@ void main()
                     for(int other = 0; other < width; other++) {
                         dotp += local_weights[gl_SubgroupID * 16 + y][other] * shmem[gl_SubgroupInvocationID * x_per_invocation + x][other + last_index];
                     }
-                    shmem[gl_SubgroupInvocationID * x_per_invocation + x][ gl_SubgroupID * 16 + y + current_index] = dotp;
+                    shmem[gl_SubgroupInvocationID * x_per_invocation + x][ gl_SubgroupID * 16 + y + current_index] = ReLU(dotp);
                 }
             }
         } else {
@@ -85,7 +85,7 @@ void main()
                         for(int other = 0; other < width; other++) {
                             dotp += local_weights[y][other] * shmem[gl_SubgroupInvocationID * x_per_invocation + x][other + last_index];
                         }
-                        outputs[gl_SubgroupInvocationID * x_per_invocation + x][y] = dotp;
+                        outputs[gl_SubgroupInvocationID * x_per_invocation + x][y] = ReLU(dotp);
                     }
                 }
             }
