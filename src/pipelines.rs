@@ -1145,7 +1145,7 @@ pub fn create_render_recources(
     let input_buffer = ctx.create_buffer(
         BufferUsageFlags::STORAGE_BUFFER,
         MemoryLocation::GpuOnly,
-        WINDOW_SIZE.x as u64 * WINDOW_SIZE.y as u64 * 64 * 4,
+        WINDOW_SIZE.x as u64 * WINDOW_SIZE.y as u64 * 4,
         None,
     )?;
 
@@ -1164,7 +1164,7 @@ pub fn create_render_recources(
         create_inference_pipeline(ctx, &input_buffer, &output_buffer, &weights_buffer).unwrap();
 
     let dispatch_buffer = ctx.create_buffer(
-        BufferUsageFlags::STORAGE_BUFFER | BufferUsageFlags::INDIRECT_BUFFER,
+        BufferUsageFlags::STORAGE_BUFFER | BufferUsageFlags::INDIRECT_BUFFER | BufferUsageFlags::TRANSFER_DST,
         MemoryLocation::GpuOnly,
         4 * 4,
         None,

@@ -414,13 +414,24 @@ fn main() {
                                     );
                                 }
 
+                                ctx.device.cmd_fill_buffer(*cmd, renderer.dispatch_buffer.inner, 0, 16, 0);
+
+                                let dispatch_barrier = vk::BufferMemoryBarrier::default()
+                                    .buffer(renderer.dispatch_buffer.inner)
+                                    .src_access_mask(vk::AccessFlags::NONE)
+                                    .dst_access_mask(vk::AccessFlags::NONE)
+                                    .offset(0)
+                                    .size(16)
+                                    .src_queue_family_index(ctx.graphics_queue_family.index)
+                                    .dst_queue_family_index(ctx.graphics_queue_family.index);
+
                                 ctx.device.cmd_pipeline_barrier(
                                     *cmd,
                                     PipelineStageFlags::RAY_TRACING_SHADER_KHR,
                                     PipelineStageFlags::COMPUTE_SHADER,
                                     DependencyFlags::BY_REGION,
                                     &[],
-                                    &buffer_memory_barriers,
+                                    &[buffer_memory_barriers[0], dispatch_barrier],
                                     &image_barriers,
                                 );
 
@@ -438,7 +449,8 @@ fn main() {
                                         PipelineBindPoint::COMPUTE,
                                         renderer.inference_pipeline.handle,
                                     );
-                                    ctx.device.cmd_dispatch_indirect(*cmd, renderer.dispatch_buffer.inner, 0);
+                                    // ctx.device.cmd_dispatch_indirect(*cmd, renderer.dispatch_buffer.inner, 0);
+                                    ctx.device.cmd_dispatch(*cmd, 1020 * 1980 / 128, 1, 1);
                                 }
 
                                 let buffer_barrier = vk::BufferMemoryBarrier::default()

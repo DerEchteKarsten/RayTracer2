@@ -17,7 +17,7 @@ const uint output_width = 3;
 const uint width = 64;
 const uint num_layers = 7;
 const uint batch_size_per_threadblock = 64;
-const uint warps = 4;
+const uint warps = 1;
 const uint subgroup_size = 64;
 const uint total_n_params = num_layers * width * width;
 
@@ -47,10 +47,10 @@ const uint x_per_invocation = batch_size_per_threadblock / subgroup_size;
 
 void main() 
 {	
+    float test;
     uint last_index = 0;
     uint current_index = width;
     for(int i = 0; i < num_layers; i++) {
-
         if(i == 0) {
             for(int x = 0; x < x_per_invocation; x++) {
                 for(int y = 0; y < 16; y++) {
@@ -70,7 +70,7 @@ void main()
             for(int x = 0; x < x_per_invocation; x++) {
                 for(int y = 0; y < 16; y++) {
                     pfloat dotp = 0.0;
-                    for(int other = 0; other < width; other++) {
+                    for(int other = 0; other < 16; other++) {
                         dotp += local_weights[gl_SubgroupID * 16 + y][other] * shmem[gl_SubgroupInvocationID * x_per_invocation + x][other + last_index];
                     }
                     shmem[gl_SubgroupInvocationID * x_per_invocation + x][ gl_SubgroupID * 16 + y + current_index] = ReLU(dotp);
@@ -82,7 +82,7 @@ void main()
                 for(int x = 0; x < x_per_invocation; x++) {
                     for(int y = 0; y < 3; y++) {
                         pfloat dotp = 0.0;
-                        for(int other = 0; other < width; other++) {
+                        for(int other = 0; other < 16; other++) {
                             dotp += local_weights[y][other] * shmem[gl_SubgroupInvocationID * x_per_invocation + x][other + last_index];
                         }
                         outputs[gl_SubgroupInvocationID * x_per_invocation + x][y] = ReLU(dotp);
@@ -97,5 +97,4 @@ void main()
 
         barrier();
     }
-    debugPrintfEXT("%i", gl_WorkGroupID.x);
 }

@@ -52,9 +52,6 @@ const float SKYBOX = 1.0;
 
 void main() 
 {	
-    indirect.num_workgroups = 0;
-    memoryBarrier();
-
 	ivec2 size = ivec2(gl_LaunchSizeEXT.xy);
 	ivec2 pixelCord = ivec2(gl_LaunchIDEXT.xy);
 
@@ -189,7 +186,7 @@ void main()
             }else {
                 uint index = atomicAdd(indirect.num_workgroups, 1);
                 // uint index = gl_LaunchIDEXT.x * gl_LaunchSizeEXT.y + gl_LaunchIDEXT.y;
-                debugPrintfEXT("%i", index);
+                // debugPrintfEXT("%i", index);
                 inputs[index][0] = secondarySurface.worldPos[0];
                 inputs[index][1] = secondarySurface.worldPos[1];
                 inputs[index][2] = secondarySurface.worldPos[2];
@@ -213,8 +210,6 @@ void main()
     RTXDI_StoreGIReservoir(reservoir, g_Const.restirGI.reservoirBufferParams, pixelCord, g_Const.restirGI.bufferIndices.secondarySurfaceReSTIRDIOutputBufferIndex);
     memoryBarrier();
     indirect.x = uint(ceil(float(indirect.num_workgroups) / 64.0));
-    debugPrintfEXT("%i", indirect.num_workgroups);
-
     indirect.y = 1;
     indirect.z = 1;
 }
