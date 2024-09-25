@@ -2,7 +2,7 @@ use anyhow::Result;
 use ash::{
     ext::debug_utils,
     khr::{self, acceleration_structure, ray_tracing_pipeline},
-    vk::{self, ImageAspectFlags, ImageView},
+    vk::{self, ImageAspectFlags, ImageUsageFlags, ImageView},
     Device, Entry, Instance,
 };
 
@@ -28,6 +28,26 @@ use simple_logger::SimpleLogger;
 use std::slice::from_ref;
 
 pub const FRAMES_IN_FLIGHT: u32 = 1;
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct RayTracingShaderGroupInfo {
+    pub group_count: u32,
+    pub raygen_shader_count: u32,
+    pub miss_shader_count: u32,
+    pub hit_shader_count: u32,
+}
+#[derive(Debug, Clone)]
+pub struct RayTracingShaderCreateInfo<'a> {
+    pub source: &'a [(&'a [u8], vk::ShaderStageFlags)],
+    pub group: RayTracingShaderGroup,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum RayTracingShaderGroup {
+    RayGen,
+    Miss,
+    Hit,
+}
 
 pub struct RayTracingContext<'a> {
     pub pipeline_properties: vk::PhysicalDeviceRayTracingPipelinePropertiesKHR<'a>,
@@ -329,7 +349,7 @@ impl<'a> Renderer<'a> {
             .subresource_range(vk::ImageSubresourceRange {
                 aspect_mask: aspect,
                 base_mip_level: 0,
-                level_count: 1,
+                level_count: image.mip_levels,
                 base_array_layer: 0,
                 layer_count: 1,
             });
@@ -483,6 +503,28 @@ impl<'a> Renderer<'a> {
             format,
             width,
             height,
+            1,
+        )
+    }
+
+    pub fn create_mipimage(
+        &mut self,
+        usage: vk::ImageUsageFlags,
+        memory_location: MemoryLocation,
+        format: vk::Format,
+        width: u32,
+        height: u32,
+        mips: u32,
+    ) -> Result<Image> {
+        Image::new_2d(
+            &self.device,
+            &mut self.allocator,
+            usage,
+            memory_location,
+            format,
+            width,
+            height,
+            mips,
         )
     }
 
@@ -494,7 +536,7 @@ impl<'a> Renderer<'a> {
             .subresource_range(vk::ImageSubresourceRange {
                 aspect_mask: vk::ImageAspectFlags::COLOR,
                 base_mip_level: 0,
-                level_count: 1,
+                level_count: image.mip_levels,
                 base_array_layer: 0,
                 layer_count: 1,
             });
@@ -502,6 +544,28 @@ impl<'a> Renderer<'a> {
         let res = unsafe { self.device.create_image_view(&view_info, None)? };
 
         Ok(res)
+    }
+
+    pub fn create_image_views(&self, image: &Image) -> Result<Vec<vk::ImageView>> {
+        let mut image_views = vec![];
+        for i in 0..image.mip_levels {
+            let view_info = vk::ImageViewCreateInfo::default()
+                .image(image.inner)
+                .view_type(vk::ImageViewType::TYPE_2D)
+                .format(image.format)
+                .subresource_range(vk::ImageSubresourceRange {
+                    aspect_mask: vk::ImageAspectFlags::COLOR,
+                    base_mip_level: i,
+                    level_count: 1,
+                    base_array_layer: 0,
+                    layer_count: 1,
+                });
+
+            let res = unsafe { self.device.create_image_view(&view_info, None)? };
+            image_views.push(res);
+        }
+
+        Ok(image_views)
     }
 
     pub fn create_descriptor_set_layout(
@@ -520,7 +584,7 @@ impl<'a> Renderer<'a> {
         create_descriptor_pool(&self.device, max_sets, pool_sizes)
     }
 
-    pub fn create_shader_module(&self, code_path: String) -> vk::ShaderModule {
+    pub fn create_shader_module(&self, code_path: &str) -> vk::ShaderModule {
         let mut code = std::fs::File::open(code_path).unwrap();
         let decoded_code = ash::util::read_spv(&mut code).unwrap();
         let create_info = vk::ShaderModuleCreateInfo::default().code(&decoded_code);
@@ -531,7 +595,7 @@ impl<'a> Renderer<'a> {
     pub fn create_shader_stage(
         &self,
         stage: vk::ShaderStageFlags,
-        path: String,
+        path: &str,
     ) -> (vk::PipelineShaderStageCreateInfo, vk::ShaderModule) {
         let module = self.create_shader_module(path);
         (
@@ -639,7 +703,7 @@ impl<'a> Renderer<'a> {
                     .subresource_range(vk::ImageSubresourceRange {
                         aspect_mask: vk::ImageAspectFlags::COLOR,
                         base_mip_level: 0,
-                        level_count: b.image.mip_levls,
+                        level_count: b.image.mip_levels,
                         base_array_layer: 0,
                         layer_count: 1,
                     })
@@ -855,14 +919,97 @@ impl<'a> Renderer<'a> {
             ImageAspectFlags::COLOR,
         )
     }
-}
 
-#[derive(Debug, Clone, Copy, Default)]
-pub struct RayTracingShaderGroupInfo {
-    pub group_count: u32,
-    pub raygen_shader_count: u32,
-    pub miss_shader_count: u32,
-    pub hit_shader_count: u32,
+    pub fn create_raytracing_pipeline(
+        &self,
+        pipeline_layout: vk::PipelineLayout,
+        shaders_create_info: &[RayTracingShaderCreateInfo],
+    ) -> Result<(vk::Pipeline, RayTracingShaderGroupInfo)> {
+        let mut shader_group_info = RayTracingShaderGroupInfo {
+            group_count: shaders_create_info.len() as u32,
+            ..Default::default()
+        };
+
+        let mut modules = vec![];
+        let mut stages = vec![];
+        let mut groups = vec![];
+
+        let entry_point_name: CString = CString::new("main").unwrap();
+
+        for shader in shaders_create_info.iter() {
+            let mut this_modules = vec![];
+            let mut this_stages = vec![];
+
+            shader.source.into_iter().for_each(|s| {
+                let module = module_from_bytes(&self.device, s.0).unwrap();
+                let stage = vk::PipelineShaderStageCreateInfo::default()
+                    .stage(s.1)
+                    .module(module)
+                    .name(&entry_point_name);
+                this_modules.push(module);
+                this_stages.push(stage);
+            });
+
+            match shader.group {
+                RayTracingShaderGroup::RayGen => shader_group_info.raygen_shader_count += 1,
+                RayTracingShaderGroup::Miss => shader_group_info.miss_shader_count += 1,
+                RayTracingShaderGroup::Hit => shader_group_info.hit_shader_count += 1,
+            };
+
+            let shader_index = stages.len();
+
+            let mut group = vk::RayTracingShaderGroupCreateInfoKHR::default()
+                .ty(vk::RayTracingShaderGroupTypeKHR::GENERAL)
+                .general_shader(vk::SHADER_UNUSED_KHR)
+                .closest_hit_shader(vk::SHADER_UNUSED_KHR)
+                .any_hit_shader(vk::SHADER_UNUSED_KHR)
+                .intersection_shader(vk::SHADER_UNUSED_KHR);
+            group = match shader.group {
+                RayTracingShaderGroup::RayGen | RayTracingShaderGroup::Miss => {
+                    group.general_shader(shader_index as _)
+                }
+                RayTracingShaderGroup::Hit => {
+                    group = group
+                        .ty(vk::RayTracingShaderGroupTypeKHR::TRIANGLES_HIT_GROUP)
+                        .closest_hit_shader(shader_index as _);
+                    if shader.source.len() >= 2 {
+                        group = group
+                            .ty(vk::RayTracingShaderGroupTypeKHR::TRIANGLES_HIT_GROUP)
+                            .any_hit_shader((shader_index as u32) + 1);
+                    }
+                    if shader.source.len() >= 3 {
+                        group = group
+                            .ty(vk::RayTracingShaderGroupTypeKHR::PROCEDURAL_HIT_GROUP)
+                            .any_hit_shader((shader_index as u32) + 1)
+                            .intersection_shader((shader_index as u32) + 2);
+                    }
+
+                    group
+                }
+            };
+
+            modules.append(&mut this_modules);
+            stages.append(&mut this_stages);
+            groups.push(group);
+        }
+
+        let pipe_info = vk::RayTracingPipelineCreateInfoKHR::default()
+            .layout(pipeline_layout)
+            .stages(&stages)
+            .groups(&groups)
+            .max_pipeline_ray_recursion_depth(1);
+
+        let pipeline = unsafe {
+            self.ray_tracing.pipeline_fn.create_ray_tracing_pipelines(
+                vk::DeferredOperationKHR::null(),
+                vk::PipelineCache::null(),
+                std::slice::from_ref(&pipe_info),
+                None,
+            )
+        }
+        .unwrap();
+        Ok((pipeline[0], shader_group_info))
+    }
 }
 
 pub struct ShaderBindingTable {
@@ -1181,7 +1328,7 @@ pub struct Image {
     pub allocation: Option<Allocation>,
     pub format: vk::Format,
     pub extent: vk::Extent3D,
-    pub mip_levls: u32,
+    pub mip_levels: u32,
 }
 
 impl Image {
@@ -1201,7 +1348,7 @@ impl Image {
             allocation: None,
             format,
             extent,
-            mip_levls: 1,
+            mip_levels: 1,
         }
     }
 
@@ -1213,6 +1360,7 @@ impl Image {
         format: vk::Format,
         width: u32,
         height: u32,
+        mips: u32,
     ) -> Result<Self> {
         let extent = vk::Extent3D {
             width,
@@ -1224,7 +1372,7 @@ impl Image {
             .image_type(vk::ImageType::TYPE_2D)
             .format(format)
             .extent(extent)
-            .mip_levels(1)
+            .mip_levels(mips)
             .array_layers(1)
             .samples(vk::SampleCountFlags::TYPE_1)
             .tiling(vk::ImageTiling::OPTIMAL)
@@ -1249,7 +1397,7 @@ impl Image {
             allocation: Some(allocation),
             format,
             extent,
-            mip_levls: 1,
+            mip_levels: mips,
         })
     }
 
@@ -1295,6 +1443,7 @@ impl Image {
             format,
             width,
             height,
+            1,
         )?;
 
         renderer.execute_one_time_commands(|cmd| {
@@ -1339,7 +1488,7 @@ impl Image {
                 },
                 format: format,
                 inner: texture_image.inner,
-                mip_levls: 1,
+                mip_levels: 1,
             },
             view: image_view,
         })
@@ -1739,7 +1888,7 @@ pub fn create_image_view_aspekt(
             vk::ImageSubresourceRange::default()
                 .aspect_mask(aspect)
                 .base_mip_level(0)
-                .level_count(image.mip_levls)
+                .level_count(image.mip_levels)
                 .base_array_layer(0)
                 .layer_count(1),
         );

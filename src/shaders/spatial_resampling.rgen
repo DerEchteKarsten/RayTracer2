@@ -8,23 +8,14 @@
 #extension GL_EXT_shader_explicit_arithmetic_types : enable
 #extension GL_GOOGLE_include_directive : enable
 
-#include "common.glsl"
-layout(location = 0) rayPayloadEXT Payload p;
-layout( push_constant ) uniform Frame {
-	uint frame;
-	uint moved;
-} f;
+#define PREPROSSES 0
+#define PREPROSSES 0
+#define REUSE
+#include "./common.glsl"
+layout(location = 0) rayPayloadEXT Payload {
+    bool missed;
+} p;
 
-
-layout(binding = 0, set = 1, r32f) uniform image2D u_GBufferDepth;
-layout(binding = 1, set = 1, r32ui) uniform uimage2D u_GBufferNormals;
-layout(binding = 2, set = 1, r32ui) uniform uimage2D u_GBufferGeoNormals;
-layout(binding = 3, set = 1, r32ui) uniform uimage2D u_GBufferDiffuseAlbedo;
-layout(binding = 4, set = 1, r32ui) uniform uimage2D u_GBufferSpecularRough;
-layout(binding = 5, set = 1, rgba32f) uniform image2D u_MotionVectors;
-layout(binding = 8, set = 0) uniform sampler2D skyBox;
-
-#define RTXDI_ENABLE_PRESAMPLING 0
 #define RTXDI_GLSL
 #include "RtxdiApplicationBridge.glsl"
 #include "rtxdi/GIResamplingFunctions.hlsli"

@@ -9,46 +9,84 @@
 #extension GL_EXT_shader_explicit_arithmetic_types : enable
 #extension GL_GOOGLE_include_directive : enable
 
-layout( push_constant ) uniform Frame {
-	uint frame;
-	uint moved;
-} f;
-
-layout(binding = 0, set = 1, r32f) uniform image2D u_GBufferDepth;
-layout(binding = 1, set = 1, r32ui) uniform uimage2D u_GBufferNormals;
-layout(binding = 2, set = 1, r32ui) uniform uimage2D u_GBufferGeoNormals;
-layout(binding = 3, set = 1, r32ui) uniform uimage2D u_GBufferDiffuseAlbedo;
-layout(binding = 4, set = 1, r32ui) uniform uimage2D u_GBufferSpecularRough;
-layout(binding = 5, set = 1, rgba32f) uniform image2D u_MotionVectors;
-layout(binding = 8, set = 0) uniform sampler2D skyBox;
-
-layout(std430, set = 0, binding = 9) buffer Indirect{
-    uint    x;
-    uint    y;
-    uint    z;
-    uint num_workgroups;
-} indirect;
-
-layout(binding = 10, set = 0, std430) buffer Inputs {
-    float inputs[][64];
-};
-layout(binding = 11, set = 0, std430) buffer Outputs {
-    float outputs[][3];
-};
-
+#define FINAL_SHADING 0
+#define PREPROSSES 0
 
 #include "common.glsl"
 layout(location = 0) rayPayloadEXT Payload p;
-#define RTXDI_ENABLE_PRESAMPLING 0
 #define RTXDI_GLSL
 #include "RtxdiApplicationBridge.glsl"
 #include "PrimaryRays.glsl"
 #include "rtxdi/InitialSamplingFunctions.hlsli"
+#include "rtxdi/DIResamplingFunctions.hlsli"
 #include "rtxdi/GIResamplingFunctions.hlsli"
 
+const uint numPrimaryLocalLightSamples = 1;
+const uint numPrimaryInfiniteLightSamples = 1;
+const uint numPrimaryEnvironmentSamples = 1;
 
 const float EMISSION_STREANGTH = 12.0;
 const float SKYBOX = 1.0;
+const float c_MaxIndirectRadiance = 100.0;
+
+bool ShadeSurfaceWithLightSample(
+    inout RTXDI_DIReservoir reservoir,
+    RAB_Surface surface,
+    RAB_LightSample lightSample,
+    bool previousFrameTLAS,
+    bool enableVisibilityReuse,
+    out float3 diffuse,
+    out float3 specular,
+    out float lightDistance)
+{
+    diffuse = vec3(0);
+    specular = vec3(0);
+    lightDistance = 0;
+
+    if (lightSample.solidAnglePdf <= 0)
+        return false;
+
+    bool needToStore = false;
+    if (g_Const.restirDI.shadingParams.enableFinalVisibility == 1)
+    {
+        float3 visibility = vec3(0);
+        bool visibilityReused = false;
+
+        if (g_Const.restirDI.shadingParams.reuseFinalVisibility == 1 && enableVisibilityReuse)
+        {
+            RTXDI_VisibilityReuseParameters rparams;
+            rparams.maxAge = g_Const.restirDI.shadingParams.finalVisibilityMaxAge;
+            rparams.maxDistance = g_Const.restirDI.shadingParams.finalVisibilityMaxDistance;
+
+            visibilityReused = RTXDI_GetDIReservoirVisibility(reservoir, rparams, visibility);
+        }
+
+        if (!visibilityReused)
+        {
+            RayDesc ray = setupVisibilityRay(surface, lightSample.position, 0.01);
+            trace(ray);
+            visibility = vec3(p.missed);
+            RTXDI_StoreVisibilityInDIReservoir(reservoir, visibility, g_Const.restirDI.temporalResamplingParams.discardInvisibleSamples == 1);
+            needToStore = true;
+        }
+
+        lightSample.radiance *= visibility;
+    }
+
+    lightSample.radiance *= RTXDI_GetDIReservoirInvPdf(reservoir) / lightSample.solidAnglePdf;
+
+    if (lightSample.radiance.x > 0.0 || lightSample.radiance.y > 0.0 || lightSample.radiance.z > 0.0)
+    {
+        SplitBrdf brdf = EvaluateBrdf(surface, lightSample.position);
+
+        diffuse = brdf.demodulatedDiffuse * lightSample.radiance;
+        specular = brdf.specular * lightSample.radiance;
+
+        lightDistance = length(lightSample.position - surface.worldPos);
+    }
+
+    return needToStore;
+}
 
 void main() 
 {	
@@ -150,54 +188,77 @@ void main()
         ray.Origin = primary.surface.worldPos;
 
         RAB_Surface secondarySurface = TraceRayToSurface(ray);
+        float3 radiance = p.emission;
 
         if(RAB_IsSurfaceValid(secondarySurface)) {
-            vec3 s_emission = p.emission *EMISSION_STREANGTH;
 
-            // RayDesc ray;
-            // ray.TMin = tmin;
-            // ray.TMax = BACKGROUND_DEPTH;
-            // ray.Origin = secondarySurface.worldPos;
-            // vec3 dir;
-            // RAB_GetSurfaceBrdfSample(secondarySurface, rng, dir);
-            // ray.Direction = dir;
-            // trace(ray);
+            RTXDI_SampleParameters sampleParams = RTXDI_InitSampleParameters(
+                numPrimaryLocalLightSamples,
+                numPrimaryInfiniteLightSamples,
+                numPrimaryEnvironmentSamples,
+                0,      // numBrdfSamples
+                0.f,    // brdfCutoff 
+                0.f     // brdfMinRayT
+            );   
 
-            // SplitBrdf brdf;
-            // vec3 radiance;
-            // if(!p.missed) {
-            //     brdf = EvaluateBrdf(secondarySurface, p.hitPoint);
-            //     radiance = p.emission * EMISSION_STREANGTH;
-            // }else {
-            //     brdf = EvaluateBrdf(secondarySurface, ray.Origin + ray.Direction * BACKGROUND_DEPTH);
-            //     radiance = p.color.rgb * SKYBOX;
+            RAB_RandomSamplerState tileRng = RAB_InitRandomSampler(pixelCord / RTXDI_TILE_SIZE_IN_PIXELS, 1);
+
+            RAB_LightSample lightSample;
+            RTXDI_DIReservoir DIreservoir = RTXDI_SampleLightsForSurface(rng, tileRng, secondarySurface,
+                sampleParams, g_Const.lightBufferParams, g_Const.restirDI.initialSamplingParams.localLightSamplingMode,
+                    g_Const.localLightsRISBufferSegmentParams, g_Const.environmentLightRISBufferSegmentParams,
+            lightSample);
+
+            // Try to find this secondary surface in the G-buffer. If found, resample the lights
+            // from that G-buffer surface into the reservoir using the spatial resampling function.
+
+            float4 secondaryClipPos = mul(float4(secondarySurface.worldPos, 1.0), g_Const.view.matWorldToClip);
+            secondaryClipPos.xyz /= secondaryClipPos.w;
+
+            if ((abs(secondaryClipPos.x) < 1.0 && abs(secondaryClipPos.y) < 1.0) && secondaryClipPos.w > 0)
+            {
+                int2 secondaryPixelPos = int2(secondaryClipPos.xy * g_Const.view.clipToWindowScale + g_Const.view.clipToWindowBias);
+                secondarySurface.viewDepth = secondaryClipPos.w;
+
+                RTXDI_DISpatialResamplingParameters sparams;
+                sparams.sourceBufferIndex = g_Const.restirDI.bufferIndices.shadingInputBufferIndex;
+                sparams.numSamples = g_Const.restirDI.spatialResamplingParams.numSpatialSamples;
+                sparams.numDisocclusionBoostSamples = 0;
+                sparams.targetHistoryLength = 0;
+                sparams.biasCorrectionMode = g_Const.restirDI.spatialResamplingParams.spatialBiasCorrection;
+                sparams.samplingRadius = g_Const.restirDI.spatialResamplingParams.spatialSamplingRadius;
+                sparams.depthThreshold = g_Const.restirDI.spatialResamplingParams.spatialDepthThreshold;
+                sparams.normalThreshold = g_Const.restirDI.spatialResamplingParams.spatialNormalThreshold;
+                sparams.enableMaterialSimilarityTest = false;
+                sparams.discountNaiveSamples = false;
+
+                DIreservoir = RTXDI_DISpatialResampling(secondaryPixelPos, secondarySurface, DIreservoir,
+                    rng, g_Const.runtimeParams, g_Const.restirDI.reservoirBufferParams, sparams, lightSample);
+            }
+
+            float3 indirectDiffuse = vec3(0);
+            float3 indirectSpecular = vec3(0);
+            float lightDistance = 0;
+            ShadeSurfaceWithLightSample(DIreservoir, secondarySurface, lightSample, /* previousFrameTLAS = */ false,
+                /* enableVisibilityReuse = */ false, indirectDiffuse, indirectSpecular, lightDistance);
+
+            radiance += indirectDiffuse * secondarySurface.diffuseAlbedo + indirectSpecular;
+
+            // Firefly suppression
+            float indirectLuminance = calcLuminance(radiance);
+            if (indirectLuminance > c_MaxIndirectRadiance)
+                radiance *= c_MaxIndirectRadiance / indirectLuminance;
+
+            // outputShadingResult = isSpecularRay && isDeltaSurface;
+
+            // if (isValidSecondarySurface && !outputShadingResult)
+            // {
+            //     // This pixel has a valid indirect sample so it stores information as an initial GI reservoir.
             // }
 
-            // vec3 diffuse = brdf.demodulatedDiffuse * radiance;
-			// vec3 specular = brdf.specular * radiance;
+            reservoir = RTXDI_MakeGIReservoir(secondarySurface.worldPos,
+                secondarySurface.normal, textureLod(t_LocalLightPdfTexture, vec2(pixelCord) / vec2(size), 0.0).rrr, overall_PDF);
 
-            // specular = DemodulateSpecular(specular, secondarySurface.specularF0);
-
-            // diffuse.rgb *= secondarySurface.diffuseAlbedo;
-            // specular.rgb *= max(vec3(0.01), secondarySurface.specularF0);
-            if(s_emission != vec3(0.0) || p_emission != vec3(0.0)) {
-                reservoir = RTXDI_MakeGIReservoir(secondarySurface.worldPos,
-                    secondarySurface.geoNormal, (p_emission + s_emission), overall_PDF);
-            }else {
-                uint index = atomicAdd(indirect.num_workgroups, 1);
-                // uint index = gl_LaunchIDEXT.x * gl_LaunchSizeEXT.y + gl_LaunchIDEXT.y;
-                // debugPrintfEXT("%i", index);
-                inputs[index][0] = secondarySurface.worldPos[0];
-                inputs[index][1] = secondarySurface.worldPos[1];
-                inputs[index][2] = secondarySurface.worldPos[2];
-                inputs[index][3] = secondarySurface.geoNormal[0];
-                inputs[index][4] = secondarySurface.geoNormal[1];
-                inputs[index][5] = secondarySurface.geoNormal[2];
-
-                reservoir = RTXDI_MakeGIReservoir(secondarySurface.worldPos,
-                    secondarySurface.geoNormal, vec3(0.0, 0.0, 0.0), overall_PDF);//(diffuse + specular + p_emission + s_emission), overall_PDF);
-                reservoir.M = index;
-            }
         }else {
             reservoir = RTXDI_MakeGIReservoir(ray.Origin + ray.Direction * BACKGROUND_DEPTH,
                 -ray.Direction, (p.color.rgb * SKYBOX + p_emission), overall_PDF);
@@ -208,8 +269,4 @@ void main()
         reservoir = RTXDI_EmptyGIReservoir();
     }
     RTXDI_StoreGIReservoir(reservoir, g_Const.restirGI.reservoirBufferParams, pixelCord, g_Const.restirGI.bufferIndices.secondarySurfaceReSTIRDIOutputBufferIndex);
-    memoryBarrier();
-    indirect.x = uint(ceil(float(indirect.num_workgroups) / 64.0));
-    indirect.y = 1;
-    indirect.z = 1;
 }

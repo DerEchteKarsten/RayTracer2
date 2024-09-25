@@ -20,6 +20,7 @@ struct GeometryInfo {
   float roughness;
 };
 
+#ifndef REUSE
 struct Payload {
 	bool missed;
 	float metallicFactor;
@@ -29,7 +30,9 @@ struct Payload {
 	vec3 hitPoint;
 	vec3 hitNormal;
 	float depth;
+	vec2 uv;
 };
+#endif
 
 const float tmin = 0.1;
 const float tmax = 10000.0;

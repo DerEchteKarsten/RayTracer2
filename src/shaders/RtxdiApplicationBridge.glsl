@@ -8,30 +8,76 @@ const bool kSpecularOnly = false;
 #include "packing.glsl"
 #include "rtxdi/ReSTIRGIParameters.h"
 
-#ifndef FINAL_SHADING
-layout(binding = 1, set = 0) uniform Uniform {ResamplingConstants g_Const;};
-layout(binding = 3, set = 0) buffer TemporalReservoirBuffer {RTXDI_PackedGIReservoir reservoirs[];};
-layout(binding = 0, set = 0) uniform accelerationStructureEXT SceneBVH;
-layout(binding = 2, set = 0) buffer NeighborsBuffer {vec2 neighbors[];};
-
 layout(binding = 0, set = 2, r32f) uniform readonly image2D t_PrevGBufferDepth;
 layout(binding = 1, set = 2, r32ui) uniform readonly uimage2D t_PrevGBufferNormals;
 layout(binding = 2, set = 2, r32ui) uniform readonly uimage2D t_PrevGBufferGeoNormals;
 layout(binding = 3, set = 2, r32ui) uniform readonly uimage2D t_PrevGBufferDiffuseAlbedo;
 layout(binding = 4, set = 2, r32ui) uniform readonly uimage2D t_PrevGBufferSpecularRough;
+
+layout(binding = 0, set = 1, r32f) uniform  image2D u_GBufferDepth;
+layout(binding = 1, set = 1, r32ui) uniform  uimage2D u_GBufferNormals;
+layout(binding = 2, set = 1, r32ui) uniform  uimage2D u_GBufferGeoNormals;
+layout(binding = 3, set = 1, r32ui) uniform  uimage2D u_GBufferDiffuseAlbedo;
+layout(binding = 4, set = 1, r32ui) uniform  uimage2D u_GBufferSpecularRough;
+layout(binding = 5, set = 1, rgba32f) uniform  image2D u_MotionVectors;
+
+#ifndef EXCLUDE_PUSH_CONSTANT
+layout( push_constant ) uniform Frame {
+	uint frame;
+} f;
+#else
+struct {
+    uint frame;
+} f = {0};
+#endif
+
+#if !FINAL_SHADING
+    layout(binding = 8, set = 0) uniform sampler2D skyBox;
+#else
+    layout(binding = 2, set = 0) uniform sampler2D skyBox;
+#endif
+
+#include "PolymorphicLight.glsl"
+
+#if !FINAL_SHADING && !PREPROSSES
+    layout(binding = 0, set = 0) uniform accelerationStructureEXT SceneBVH;
+    layout(binding = 1, set = 0) uniform Uniform {ResamplingConstants g_Const;};
+    layout(binding = 2, set = 0) buffer NeighborsBuffer {vec2 neighbors[];};
+    layout(binding = 3, set = 0) buffer ReservoirBuffer {RTXDI_PackedGIReservoir reservoirs[];};
+
+    layout(binding = 9, set = 0) uniform sampler2D t_EnvironmentPdfTexture;
+    layout(binding = 10, set = 0) uniform sampler2D t_LocalLightPdfTexture;
+    layout(binding = 11, set = 0) buffer DIReservoirBuffer {RTXDI_PackedDIReservoir light_reservoirs[];};
+    layout(binding = 12, set = 0) buffer LightInfoBuffer {RAB_LightInfo t_LightDataBuffer[];};
+    layout(binding = 13, set = 0) buffer RisLightDataBuffer {uvec4 u_RisLightDataBuffer[];};
+    layout(binding = 14, set = 0) buffer RisBuffer {uvec2 u_RisBuffer[];};
+#endif
+
+#if PREPROSSES
+    RTXDI_PackedGIReservoir reservoirs[1];
+    layout(binding = 0, set = 0) buffer DIReservoirBuffer {RTXDI_PackedDIReservoir light_reservoirs[];};
+    layout(binding = 1, set = 0) buffer LightInfoBuffer {RAB_LightInfo t_LightDataBuffer[];};
+    layout(binding = 2, set = 0) buffer RisLightDataBuffer {uvec4 u_RisLightDataBuffer[];};
+    layout(binding = 3, set = 0) buffer RisBuffer {uvec2 u_RisBuffer[];};
+    layout(binding = 4, set = 0) uniform sampler2D t_EnvironmentPdfTexture;
+    layout(binding = 5, set = 0) uniform sampler2D t_LocalLightPdfTexture;
+    layout(binding = 6, set = 0) uniform Uniform {ResamplingConstants g_Const;};
+#endif
+
+#if FINAL_SHADING
+    RTXDI_PackedDIReservoir light_reservoirs[1];
+    RAB_LightInfo t_LightDataBuffer[1];
+    uvec4 u_RisLightDataBuffer[1];
+    uvec2 u_RisBuffer[1];
+    layout(binding = 0, set = 0) buffer TemporalReservoirBuffer {RTXDI_PackedGIReservoir reservoirs[];};
+    layout(binding = 1, set = 0) uniform Uniform {ResamplingConstants g_Const;};
 #endif
 
 
+#define RTXDI_RIS_BUFFER u_RisBuffer 
+
 #define RTXDI_GI_RESERVOIR_BUFFER reservoirs
 #include "rtxdi/GIReservoir.hlsli"
-
-struct RAB_LightInfo
-{
-    float _;
-};
-
-RTXDI_PackedDIReservoir light_reservoirs[1];
-RAB_LightInfo t_LightDataBuffer[1];
 
 #define RTXDI_NEIGHBOR_OFFSETS_BUFFER neighbors
 #define RTXDI_LIGHT_RESERVOIR_BUFFER light_reservoirs
@@ -39,11 +85,16 @@ RAB_LightInfo t_LightDataBuffer[1];
 #include "Helpers.glsl"
 
 // A surface with enough information to evaluate BRDFs
-#ifndef FINAL_SHADING
 void trace(RayDesc ray) {
+    #if !PREPROSSES
+    #if !FINAL_SHADING
     traceRayEXT(SceneBVH, gl_RayFlagsOpaqueEXT, 0xff, 0, 0, 0, ray.Origin, ray.TMin, ray.Direction, ray.TMax, 0);
+    #endif
+    #endif
 }
-#endif
+
+
+const bool environmentMapImportanceSampling = true;
 
 struct RAB_Surface
 {
@@ -64,6 +115,7 @@ struct RAB_LightSample
     float3 normal;
     float3 radiance;
     float solidAnglePdf;
+    PolymorphicLightType lightType;
 };
 
 #define PolymorphicLightInfo RAB_LightInfo;
@@ -181,13 +233,17 @@ RayDesc setupVisibilityRay(RAB_Surface surface, float3 samplePosition, float off
 
     return ray;
 }
-#ifndef FINAL_SHADING
+#if !FINAL_SHADING
 bool GetConservativeVisibility(RAB_Surface surface, float3 samplePosition)
 {
     RayDesc ray = setupVisibilityRay(surface, samplePosition);
     trace(ray);
 
+    #if !PREPROSSES
     return p.missed;
+    #else
+    return false;
+    #endif
 }
 // Traces a cheap visibility ray that returns approximate, conservative visibility
 // between the surface and the light sample. Conservative means if unsure, assume the light is visible.
@@ -227,7 +283,7 @@ int2 RAB_ClampSamplePositionIntoView(int2 pixelPosition, bool previousFrame)
 
     return pixelPosition;
 }
-#ifndef FINAL_SHADING
+#if !FINAL_SHADING
 RAB_Surface GetPrevGBufferSurface(
     ivec2 pixelPosition, 
     PlanarViewConstants view
@@ -293,7 +349,7 @@ RAB_Surface GetGBufferSurface(
 // should indicate that it's invalid when RAB_IsSurfaceValid is called on it.
 RAB_Surface RAB_GetGBufferSurface(int2 pixelPosition, bool previousFrame)
 {
-    #ifndef FINAL_SHADING
+    #if !FINAL_SHADING
     if(previousFrame)
     {
         return GetPrevGBufferSurface(
@@ -343,7 +399,7 @@ float RAB_GetSurfaceLinearDepth(RAB_Surface surface)
 // for different resampling passes, which is important for image quality.
 // In general, a high quality RNG is critical to get good results from ReSTIR.
 // A table-based blue noise RNG dose not provide enough entropy, for example.
-#ifndef FINAL_SHADING
+#if !FINAL_SHADING
 RAB_RandomSamplerState RAB_InitRandomSampler(uint2 index, uint pass)
 {
     return initRandomSampler(index, f.frame + pass * 13);
@@ -364,47 +420,48 @@ float2 RAB_GetEnvironmentMapRandXYFromDir(float3 worldDir)
 
 // Computes the probability of a particular direction being sampled from the environment map
 // relative to all the other possible directions, based on the environment map pdf texture.
+#ifndef REUSE
+#if !FINAL_SHADING
 float RAB_EvaluateEnvironmentMapSamplingPdf(float3 L)
 {
-    // if (!g_Const.restirDI.initialSamplingParams.environmentMapImportanceSampling)
-    //     return 1.0;
+    if (!environmentMapImportanceSampling)
+        return 1.0;
 
-    // float2 uv = RAB_GetEnvironmentMapRandXYFromDir(L);
+    float2 uv = RAB_GetEnvironmentMapRandXYFromDir(L);
 
-    // uint2 pdfTextureSize = g_Const.environmentPdfTextureSize.xy;
-    // uint2 texelPosition = uint2(pdfTextureSize * uv);
-    // float texelValue = t_EnvironmentPdfTexture[texelPosition].r;
+    uint2 pdfTextureSize = g_Const.environmentPdfTextureSize.xy;
+    uint2 texelPosition = uint2(pdfTextureSize * uv);
+    float texelValue = texture(t_EnvironmentPdfTexture, ivec2(texelPosition)).r;
     
-    // int lastMipLevel = max(0, int(floor(log2(max(pdfTextureSize.x, pdfTextureSize.y)))));
-    // float averageValue = t_EnvironmentPdfTexture.mips[lastMipLevel][uint2(0, 0)].x;
-    
-    // // The single texel in the last mip level is effectively the average of all texels in mip 0,
-    // // padded to a square shape with zeros. So, in case the PDF texture has a 2:1 aspect ratio,
-    // // that texel's value is only half of the true average of the rectangular input texture.
-    // // Compensate for that by assuming that the input texture is square.
-    // float sum = averageValue * square(1u << lastMipLevel);
+    int lastMipLevel = max(0, int(floor(log2(max(pdfTextureSize.x, pdfTextureSize.y)))));
+    float averageValue = textureLod(t_EnvironmentPdfTexture, ivec2(0, 0), lastMipLevel).x;
 
-    // return texelValue / sum;
-    return 1.0;
+    // The single texel in the last mip level is effectively the average of all texels in mip 0,
+    // padded to a square shape with zeros. So, in case the PDF texture has a 2:1 aspect ratio,
+    // that texel's value is only half of the true average of the rectangular input texture.
+    // Compensate for that by assuming that the input texture is square.
+    float sum = averageValue * float(square(1u << uint(lastMipLevel)));
+
+    return texelValue / sum;
 }
-
 // Evaluates pdf for a particular light
 float RAB_EvaluateLocalLightSourcePdf(uint lightIndex)
 {
-    // uint2 pdfTextureSize = g_Const.localLightPdfTextureSize.xy;
-    // uint2 texelPosition = RTXDI_LinearIndexToZCurve(lightIndex);
-    // float texelValue = t_LocalLightPdfTexture[texelPosition].r;
+    uint2 pdfTextureSize = g_Const.localLightPdfTextureSize.xy;
+    uint2 texelPosition = RTXDI_LinearIndexToZCurve(lightIndex);
+    float texelValue = texture(t_LocalLightPdfTexture, ivec2(texelPosition)).r;
 
-    // int lastMipLevel = max(0, int(floor(log2(max(pdfTextureSize.x, pdfTextureSize.y)))));
-    // float averageValue = t_LocalLightPdfTexture.mips[lastMipLevel][uint2(0, 0)].x;
+    int lastMipLevel = max(0, int(floor(log2(max(pdfTextureSize.x, pdfTextureSize.y)))));
+    float averageValue = textureLod(t_LocalLightPdfTexture, ivec2(0, 0), lastMipLevel).x;
 
-    // // See the comment at 'sum' in RAB_EvaluateEnvironmentMapSamplingPdf.
-    // // The same texture shape considerations apply to local lights.
-    // float sum = averageValue * square(1u << lastMipLevel);
+    // See the comment at 'sum' in RAB_EvaluateEnvironmentMapSamplingPdf.
+    // The same texture shape considerations apply to local lights.
+    float sum = averageValue * float(square(1u << uint(lastMipLevel)));
 
-    // return texelValue / sum;
-    return 1.0;
+    return texelValue / sum;
 }
+#endif
+#endif
 
 
 bool RAB_GetSurfaceBrdfSample(RAB_Surface surface, inout RAB_RandomSamplerState rng, out float3 dir)
@@ -476,7 +533,7 @@ float RAB_GetLightSampleTargetPdfForSurface(RAB_LightSample lightSample, RAB_Sur
 // the specified volume. Used for world-space light grid construction.
 float RAB_GetLightTargetPdfForVolume(RAB_LightInfo light, float3 volumeCenter, float volumeRadius)
 {
-    return 1.0;// return PolymorphicLight::getWeightForVolume(light, volumeCenter, volumeRadius);
+    return getWeightForVolume(light, volumeCenter, volumeRadius);
 }
 
 // Samples a polymorphic light relative to the given receiver surface.
@@ -486,14 +543,14 @@ float RAB_GetLightTargetPdfForVolume(RAB_LightInfo light, float3 volumeCenter, f
 // in the PDF texture, normalized to the (0..1) range.
 RAB_LightSample RAB_SamplePolymorphicLight(RAB_LightInfo lightInfo, RAB_Surface surface, float2 uv)
 {
-    // PolymorphicLightSample pls = PolymorphicLight::calcSample(lightInfo, uv, surface.worldPos);
+    PolymorphicLightSample pls = calcSample(lightInfo, uv, surface.worldPos);
 
-    // RAB_LightSample lightSample;
-    // lightSample.position = pls.position;
-    // lightSample.normal = pls.normal;
-    // lightSample.radiance = pls.radiance;
-    // lightSample.solidAnglePdf = pls.solidAnglePdf;
-    // lightSample.lightType = getLightType(lightInfo);
+    RAB_LightSample lightSample;
+    lightSample.position = pls.position;
+    lightSample.normal = pls.normal;
+    lightSample.radiance = pls.radiance;
+    lightSample.solidAnglePdf = pls.solidAnglePdf;
+    lightSample.lightType = getLightType(lightInfo);
     return RAB_EmptyLightSample();
 }
 
@@ -501,12 +558,12 @@ void RAB_GetLightDirDistance(RAB_Surface surface, RAB_LightSample lightSample,
     out float3 o_lightDir,
     out float o_lightDistance)
 {
-    // if (lightSample.lightType == PolymorphicLightType::kEnvironment)
-    // {
-    //     o_lightDir = -lightSample.normal;
-    //     o_lightDistance = DISTANT_LIGHT_DISTANCE;
-    // }
-    // else
+    if (lightSample.lightType == kEnvironment)
+    {
+        o_lightDir = -lightSample.normal;
+        o_lightDistance = DISTANT_LIGHT_DISTANCE;
+    }
+    else
     {
         float3 toLight = lightSample.position - surface.worldPos;
         o_lightDistance = length(toLight);
@@ -516,8 +573,8 @@ void RAB_GetLightDirDistance(RAB_Surface surface, RAB_LightSample lightSample,
 
 bool RAB_IsAnalyticLightSample(RAB_LightSample lightSample)
 {
-    // return lightSample.lightType != PolymorphicLightType::kTriangle && 
-    //     lightSample.lightType != PolymorphicLightType::kEnvironment;
+    return lightSample.lightType != kTriangle && 
+        lightSample.lightType != kEnvironment;
     return false;
 }
 
@@ -536,9 +593,9 @@ RAB_LightInfo RAB_LoadLightInfo(uint index, bool previousFrame)
 RAB_LightInfo RAB_LoadCompactLightInfo(uint linearIndex)
 {
     uvec4 packedData1, packedData2;
-    // packedData1 = u_RisLightDataBuffer[linearIndex * 2 + 0];
-    // packedData2 = u_RisLightDataBuffer[linearIndex * 2 + 1];
-    // return unpackCompactLightInfo(packedData1, packedData2);
+    packedData1 = u_RisLightDataBuffer[linearIndex * 2 + 0];
+    packedData2 = u_RisLightDataBuffer[linearIndex * 2 + 1];
+    return unpackCompactLightInfo(packedData1, packedData2);
     return RAB_EmptyLightInfo();
 }
 
@@ -548,12 +605,12 @@ RAB_LightInfo RAB_LoadCompactLightInfo(uint linearIndex)
 // A basic implementation can ignore this feature and always return false, which is just slower.
 bool RAB_StoreCompactLightInfo(uint linearIndex, RAB_LightInfo lightInfo)
 {
-    // uvec4 data1, data2;
-    // if (!packCompactLightInfo(lightInfo, data1, data2))
-    //     return false;
+    uvec4 data1, data2;
+    if (!packCompactLightInfo(lightInfo, data1, data2))
+        return false;
 
-    // u_RisLightDataBuffer[linearIndex * 2 + 0] = data1;
-    // u_RisLightDataBuffer[linearIndex * 2 + 1] = data2;
+    u_RisLightDataBuffer[linearIndex * 2 + 0] = data1;
+    u_RisLightDataBuffer[linearIndex * 2 + 1] = data2;
 
     return true;
 }
@@ -563,15 +620,7 @@ bool RAB_StoreCompactLightInfo(uint linearIndex, RAB_LightInfo lightInfo)
 // Returns the new index, or a negative number if the light does not exist in the other frame.
 int RAB_TranslateLightIndex(uint lightIndex, bool currentToPrevious)
 {
-    // In this implementation, the mapping buffer contains both forward and reverse mappings,
-    // stored at different offsets, so we don't care about the currentToPrevious parameter.
-    // uint mappedIndexPlusOne = t_LightIndexMappingBuffer[lightIndex];
-
-    // The mappings are stored offset by 1 to differentiate between valid and invalid mappings.
-    // The buffer is cleared with zeros which indicate an invalid mapping.
-    // Subtract that one to make this function return expected values.
-    // return int(mappedIndexPlusOne) - 1;
-    return 0;
+    return int(lightIndex);
 }
 
 // Forward declare the SDK function that's used in RAB_AreMaterialsSimilar
@@ -598,6 +647,7 @@ bool RAB_AreMaterialsSimilar(RAB_Surface a, RAB_Surface b)
     return true;
 }
 
+#ifndef REUSE
 float3 GetEnvironmentRadiance(float3 direction)
 {
     float2 uv = directionToEquirectUV(direction);
@@ -605,70 +655,42 @@ float3 GetEnvironmentRadiance(float3 direction)
 
     return environmentRadiance;
 }
+#endif
 
-// uint getLightIndex(uint instanceID, uint geometryIndex, uint primitiveIndex)
-// {
-//     uint lightIndex = RTXDI_InvalidLightIndex;
-//     InstanceData hitInstance = t_InstanceData[instanceID];
-//     uint geometryInstanceIndex = hitInstance.firstGeometryInstanceIndex + geometryIndex;
-//     lightIndex = t_GeometryInstanceToLight[geometryInstanceIndex];
-//     if (lightIndex != RTXDI_InvalidLightIndex)
-//       lightIndex += primitiveIndex;
-//     return lightIndex;
-// }
-
-
+#if !FINAL_SHADING
 // Return true if anything was hit. If false, RTXDI will do environment map sampling
 // o_lightIndex: If hit, must be a valid light index for RAB_LoadLightInfo, if no local light was hit, must be RTXDI_InvalidLightIndex
 // randXY: The randXY that corresponds to the hit location and is the same used for RAB_SamplePolymorphicLight
 bool RAB_TraceRayForLocalLight(float3 origin, float3 direction, float tMin, float tMax,
     out uint o_lightIndex, out float2 o_randXY)
 {
-//     o_lightIndex = RTXDI_InvalidLightIndex;
-//     o_randXY = 0;
+    o_lightIndex = RTXDI_InvalidLightIndex;
+    o_randXY = vec2(0);
 
-//     RayDesc ray;
-//     ray.Origin = origin;
-//     ray.Direction = direction;
-//     ray.TMin = tMin;
-//     ray.TMax = tMax;
+    RayDesc ray;
+    ray.Origin = origin;
+    ray.Direction = direction;
+    ray.TMin = tMin;
+    ray.TMax = tMax;
 
-//     float2 hitUV;
-//     bool hitAnything;
-// #if USE_RAY_QUERY
-//     RayQuery<RAY_FLAG_CULL_NON_OPAQUE | RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES> rayQuery;
-//     rayQuery.TraceRayInline(SceneBVH, RAY_FLAG_NONE, INSTANCE_MASK_OPAQUE, ray);
-//     rayQuery.Proceed();
+    float2 hitUV;
+    bool hitAnything;
 
-//     hitAnything = rayQuery.CommittedStatus() == COMMITTED_TRIANGLE_HIT;
-//     if (hitAnything)
-//     {
-//         o_lightIndex = getLightIndex(rayQuery.CommittedInstanceID(), rayQuery.CommittedGeometryIndex(), rayQuery.CommittedPrimitiveIndex());
-//         hitUV = rayQuery.CommittedTriangleBarycentrics();
-//     }
-// #else
-//     RayPayload payload = (RayPayload)0;
-//     payload.instanceID = ~0u;
-//     payload.throughput = 1.0;
+    trace(ray);
+    #if !PREPROSSES
+    #ifndef REUSE
+    hitUV = p.uv;
+    #endif
+    #endif
 
-//     TraceRay(SceneBVH, RAY_FLAG_CULL_NON_OPAQUE | RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES, INSTANCE_MASK_OPAQUE, 0, 0, 0, ray, payload);
-//     hitAnything = payload.instanceID != ~0u;
-//     if (hitAnything)
-//     {
-//         o_lightIndex = getLightIndex(payload.instanceID, payload.geometryIndex, payload.primitiveIndex);
-//         hitUV = payload.barycentrics;
-//     }
-// #endif
+    if (o_lightIndex != RTXDI_InvalidLightIndex)
+    {
+        o_randXY = randomFromBarycentric(hitUVToBarycentric(hitUV));
+    }
 
-//     if (o_lightIndex != RTXDI_InvalidLightIndex)
-//     {
-//         o_randXY = randomFromBarycentric(hitUVToBarycentric(hitUV));
-//     }
-
-    // return hitAnything;
-    return false;
+    return hitAnything;
 }
-
+#endif
 
 // Check if the sample is fine to be used as a valid spatial sample.
 // This function also be able to clamp the value of the Jacobian.
@@ -699,7 +721,7 @@ float RAB_GetGISampleTargetPdfForSurface(float3 samplePosition, float3 sampleRad
 // between the surface and the light sample. Conservative means if unsure, assume the light is visible.
 // Significant differences between this conservative visibility and the final one will result in more noise.
 // This function is used in the spatial resampling functions for ray traced bias correction.
-#ifndef FINAL_SHADING
+#if !FINAL_SHADING
 
 bool RAB_GetConservativeVisibility(RAB_Surface surface, float3 samplePosition)
 {

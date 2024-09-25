@@ -349,4 +349,48 @@ vec3 DemodulateSpecular(vec3 surfaceSpecularF0, vec3 specular)
     return specular / max(vec3(0.01), surfaceSpecularF0);
 }
 
+float3 Unpack_R8G8B8_UFLOAT(uint rgb)
+{
+    float r = Unpack_R8_UFLOAT(rgb);
+    float g = Unpack_R8_UFLOAT(rgb >> 8);
+    float b = Unpack_R8_UFLOAT(rgb >> 16);
+    return float3(r, g, b);
+}
+
+uint Pack_R8G8B8_UFLOAT(float3 rgb)
+{
+    float3 d = float3(0.5f, 0.5f, 0.5f);
+    uint r = Pack_R8_UFLOAT(rgb.r, d.r);
+    uint g = Pack_R8_UFLOAT(rgb.g, d.g) << 8;
+    uint b = Pack_R8_UFLOAT(rgb.b, d.b) << 16;
+    return r | g | b;
+}
+
+float3 equirectUVToDirection(float2 uv, out float cosElevation)
+{
+    float azimuth = (uv.x + 0.25) * (2 * RTXDI_PI);
+    float elevation = (0.5 - uv.y) * RTXDI_PI;
+    cosElevation = cos(elevation);
+
+    return float3(
+        cos(azimuth) * cosElevation,
+        sin(elevation),
+        sin(azimuth) * cosElevation
+    );
+}
+
+float3 sampleSphere(float2 rand, out float solidAnglePdf)
+{
+    // See (6-8) in https://mathworld.wolfram.com/SpherePointPicking.html
+
+    rand.y = rand.y * 2.0 - 1.0;
+
+    float2 tangential = SampleDisk(float2(rand.x, 1.0 - square(rand.y)));
+    float elevation = rand.y;
+
+    solidAnglePdf = 0.25f / RTXDI_PI;
+
+    return float3(tangential.xy, elevation);
+}
+
 #endif // HELPER_FUNCTIONS_HLSLI

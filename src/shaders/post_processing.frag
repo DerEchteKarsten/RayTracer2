@@ -3,33 +3,15 @@ layout(location = 0) out vec4 outColor;
 #extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
 #extension GL_EXT_debug_printf: enable
 #define RTXDI_GLSL
-#define RTXDI_ENABLE_PRESAMPLING 0
-
 #include "rtxdi/ReSTIRGIParameters.h"
 #include "./ShaderParameters.glsl"
 
-layout(binding = 0, set = 0) buffer TemporalReservoirBuffer {RTXDI_PackedGIReservoir reservoirs[];};
-layout(binding = 1, set = 0) uniform Uniform {ResamplingConstants g_Const;};
-
-layout(binding = 0, set = 1, r32f) uniform  image2D u_GBufferDepth;
-layout(binding = 1, set = 1, r32ui) uniform  uimage2D u_GBufferNormals;
-layout(binding = 2, set = 1, r32ui) uniform  uimage2D u_GBufferGeoNormals;
-layout(binding = 3, set = 1, r32ui) uniform  uimage2D u_GBufferDiffuseAlbedo;
-layout(binding = 4, set = 1, r32ui) uniform  uimage2D u_GBufferSpecularRough;
-layout(binding = 5, set = 1, rgba32f) uniform  image2D u_MotionVectors;
-layout(binding = 2, set = 0) uniform sampler2D skyBox;
-
-layout( push_constant ) uniform Frame {
-	uint frame;
-} f;
 
 #define square(x) x*x
 const float kMinRoughness = 0.05f;
-#define FINAL_SHADING
+#define FINAL_SHADING 1
+#define PREPROSSES 0
 #include "RtxdiApplicationBridge.glsl"
-
-
-#define RTXDI_GI_RESERVOIR_BUFFER reservoirs
 #include "rtxdi/GIReservoir.hlsli"
 
 

@@ -11,6 +11,13 @@
 
 #define BACKGROUND_DEPTH 100000.f
 
+const uint kPolymorphicLightTypeShift = 24;
+const uint kPolymorphicLightTypeMask = 0xf;
+const uint kPolymorphicLightShapingEnableBit = 1 << 28;
+const uint kPolymorphicLightIesProfileEnableBit = 1 << 29;
+const float kPolymorphicLightMinLog2Radiance = -8.f;
+const float kPolymorphicLightMaxLog2Radiance = 40.f;
+
 struct PlanarViewConstants
 {
     mat4    matWorldToView;
@@ -40,8 +47,14 @@ struct ResamplingConstants
     PlanarViewConstants view;
     PlanarViewConstants prevView;
     RTXDI_RuntimeParameters runtimeParams;
+    RTXDI_LightBufferParameters lightBufferParams;
 
     ReSTIRGI_Parameters restirGI;
+    ReSTIRDI_Parameters restirDI;
+    RTXDI_RISBufferSegmentParameters localLightsRISBufferSegmentParams;
+    RTXDI_RISBufferSegmentParameters environmentLightRISBufferSegmentParams;
+    uvec2 environmentPdfTextureSize;
+    uvec2 localLightPdfTextureSize;
 };
 
 
