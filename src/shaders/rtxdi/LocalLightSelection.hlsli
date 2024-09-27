@@ -108,7 +108,7 @@ void RTXDI_SelectNextLocalLight(
         break;
 #endif // RTXDI_ENABLE_PRESAMPLING
     default:
-    case RTXDI_LocalLightContextSamplingMode_UNIFORM:
+    case RTXDI_LocalLightContextSamplingMode_UNIFORM:        
         RTXDI_RandomlySelectLightUniformly(rng, ctx.lightBufferRegion, lightInfo, lightIndex, invSourcePdf);
         break;
     }

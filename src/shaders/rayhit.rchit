@@ -61,4 +61,6 @@ void main()
   p.color = color;
   p.depth = gl_HitTEXT;
   p.uv = uvs;
+  p.geometryIndex = gl_GeometryIndexEXT;
+  p.primitiveId = gl_PrimitiveID;
 }

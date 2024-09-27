@@ -51,6 +51,7 @@ struct {
     layout(binding = 12, set = 0) buffer LightInfoBuffer {RAB_LightInfo t_LightDataBuffer[];};
     layout(binding = 13, set = 0) buffer RisLightDataBuffer {uvec4 u_RisLightDataBuffer[];};
     layout(binding = 14, set = 0) buffer RisBuffer {uvec2 u_RisBuffer[];};
+    layout(binding = 15, set = 0) buffer GeomToLight {uint t_GeometryInstanceToLight[];};
 #endif
 
 #if PREPROSSES
@@ -551,7 +552,7 @@ RAB_LightSample RAB_SamplePolymorphicLight(RAB_LightInfo lightInfo, RAB_Surface 
     lightSample.radiance = pls.radiance;
     lightSample.solidAnglePdf = pls.solidAnglePdf;
     lightSample.lightType = getLightType(lightInfo);
-    return RAB_EmptyLightSample();
+    return lightSample;
 }
 
 void RAB_GetLightDirDistance(RAB_Surface surface, RAB_LightSample lightSample,
@@ -575,7 +576,6 @@ bool RAB_IsAnalyticLightSample(RAB_LightSample lightSample)
 {
     return lightSample.lightType != kTriangle && 
         lightSample.lightType != kEnvironment;
-    return false;
 }
 
 float RAB_LightSampleSolidAnglePdf(RAB_LightSample lightSample)
@@ -596,7 +596,6 @@ RAB_LightInfo RAB_LoadCompactLightInfo(uint linearIndex)
     packedData1 = u_RisLightDataBuffer[linearIndex * 2 + 0];
     packedData2 = u_RisLightDataBuffer[linearIndex * 2 + 1];
     return unpackCompactLightInfo(packedData1, packedData2);
-    return RAB_EmptyLightInfo();
 }
 
 // Stores triangle light data into a tile.
@@ -658,13 +657,23 @@ float3 GetEnvironmentRadiance(float3 direction)
 #endif
 
 #if !FINAL_SHADING
+#if !PREPROSSES
+uint getLightIndex(uint geometryIndex, uint primitiveIndex)
+{
+    uint lightIndex = RTXDI_InvalidLightIndex;
+    uint geometryInstanceIndex = geometryIndex;
+    lightIndex = t_GeometryInstanceToLight[geometryInstanceIndex];
+    if (lightIndex != RTXDI_InvalidLightIndex)
+      lightIndex += primitiveIndex;
+    return lightIndex;
+}
+#endif
 // Return true if anything was hit. If false, RTXDI will do environment map sampling
 // o_lightIndex: If hit, must be a valid light index for RAB_LoadLightInfo, if no local light was hit, must be RTXDI_InvalidLightIndex
 // randXY: The randXY that corresponds to the hit location and is the same used for RAB_SamplePolymorphicLight
 bool RAB_TraceRayForLocalLight(float3 origin, float3 direction, float tMin, float tMax,
     out uint o_lightIndex, out float2 o_randXY)
 {
-    o_lightIndex = RTXDI_InvalidLightIndex;
     o_randXY = vec2(0);
 
     RayDesc ray;
@@ -680,6 +689,7 @@ bool RAB_TraceRayForLocalLight(float3 origin, float3 direction, float tMin, floa
     #if !PREPROSSES
     #ifndef REUSE
     hitUV = p.uv;
+    o_lightIndex = getLightIndex(p.geometryIndex, p.primitiveId);
     #endif
     #endif
 

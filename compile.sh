@@ -24,3 +24,5 @@ compile $base/src/shaders/presample_locallights.comp
 
 compile $base/src/shaders/mip_levels.comp
 compile $base/src/shaders/env_mip_levels.comp
+
+compile $base/src/shaders/prepare_lights.comp

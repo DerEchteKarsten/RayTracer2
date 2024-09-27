@@ -31,6 +31,8 @@ struct Payload {
 	vec3 hitNormal;
 	float depth;
 	vec2 uv;
+	uint geometryIndex;
+  	uint primitiveId;
 };
 #endif
 

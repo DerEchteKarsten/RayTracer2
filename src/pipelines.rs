@@ -1,9 +1,9 @@
 use anyhow::{Ok, Result};
 use ash::vk::{
-    self, BorderColor, BufferUsageFlags, CompareOp, ImageLayout, ImageUsageFlags, ImageView,
-    PipelineCache, SamplerAddressMode, SamplerMipmapMode, ShaderStageFlags,
+    self, AccessFlags, BorderColor, BufferUsageFlags, CompareOp, ImageLayout, ImageUsageFlags,
+    ImageView, PipelineCache, SamplerAddressMode, SamplerMipmapMode, ShaderStageFlags,
 };
-use glam::{UVec2, Vec2};
+use glam::{vec3, UVec2, Vec2};
 use gpu_allocator::MemoryLocation;
 use ndarray::{arr3, prelude::*};
 use rand::rngs::ThreadRng;
@@ -19,8 +19,8 @@ use crate::{
     create_descriptor_set_layout, module_from_bytes, update_descriptor_sets, AccelerationStructure,
     Buffer, Image, ImageAndView, MipLevelPushConstants, Model, RayTracingShaderCreateInfo,
     RayTracingShaderGroup, RayTracingShaderGroupInfo, Renderer, ShaderBindingTable,
-    WriteDescriptorSet, WriteDescriptorSetKind, FRAMES_IN_FLIGHT, MAX_LOCAL_LIGHTS,
-    NEIGHBOR_OFFSET_COUNT, RTXDI_RESERVOIR_BLOCK_SIZE, WINDOW_SIZE,
+    WriteDescriptorSet, WriteDescriptorSetKind, FRAMES_IN_FLIGHT, NEIGHBOR_OFFSET_COUNT,
+    RTXDI_RESERVOIR_BLOCK_SIZE, WINDOW_SIZE,
 };
 
 pub struct GBuffer {
@@ -51,6 +51,9 @@ pub struct RendererResources {
     pub environment_pdf: Image,
     pub environment_mip_pipeline: ComputePipeline,
     pub local_lights_mip_pipeline: ComputePipeline,
+    pub prepare_lights_pipeline: ComputePipeline,
+    pub light_tasks_buffer: Buffer,
+    pub geometry_to_light_buffer_and_staging: (Buffer, Buffer),
 }
 
 pub struct PostProccesingPipeline {
@@ -273,7 +276,12 @@ impl ComputePipeline {
                     &[self.descriptor],
                     &[],
                 );
-                ctx.device.cmd_dispatch(*cmd, width / 32, height / 32, 1);
+                ctx.device.cmd_dispatch(
+                    *cmd,
+                    f32::ceil(width as f32 / 32.0) as u32,
+                    f32::ceil(height as f32 / 32.0) as u32,
+                    1,
+                );
 
                 width = u32::max(1u32, width >> mip_levels_per_pass);
                 height = u32::max(1u32, height >> mip_levels_per_pass);
@@ -289,6 +297,109 @@ impl ComputePipeline {
             );
         }
     }
+    pub fn execute_light_preperation(
+        self,
+        ctx: &Renderer,
+        light_tasks_buffer: &Buffer,
+        geometry_to_light_buffer_and_staging: &(Buffer, Buffer),
+        model: &Model,
+        cmd: &vk::CommandBuffer,
+    ) {
+        unsafe {
+            let mut geometry_to_light = vec![0xffffffffu32; model.geometry_infos.len()];
+            let mut light_tasks = vec![];
+            let mut light_buffer_offset = 0;
+            for (geometry_index, geometry) in model.geometry_infos.iter().enumerate() {
+                if geometry.emission[0] == 0.0
+                    && geometry.emission[1] == 0.0
+                    && geometry.emission[2] == 0.0
+                {
+                    continue;
+                }
+                geometry_to_light[geometry_index] = light_buffer_offset;
+                let triangle_count = model.index_counts[geometry_index] / 3;
+                light_tasks.push(PrepareLightsTask {
+                    geometry_index: geometry_index as u32,
+                    light_buffer_offset,
+                    triangle_count,
+                    pad: 0,
+                });
+                light_buffer_offset += triangle_count;
+            }
+
+            light_tasks_buffer
+                .copy_data_to_buffer(light_tasks.as_slice())
+                .unwrap();
+            geometry_to_light_buffer_and_staging
+                .1
+                .copy_data_to_buffer(geometry_to_light.as_slice())
+                .unwrap();
+
+            ctx.device.cmd_copy_buffer(
+                *cmd,
+                geometry_to_light_buffer_and_staging.1.inner,
+                geometry_to_light_buffer_and_staging.0.inner,
+                &[vk::BufferCopy::default()
+                    .dst_offset(0)
+                    .src_offset(0)
+                    .size(geometry_to_light_buffer_and_staging.1.size)],
+            );
+            ctx.device.cmd_pipeline_barrier(
+                *cmd,
+                vk::PipelineStageFlags::TRANSFER,
+                vk::PipelineStageFlags::COMPUTE_SHADER,
+                vk::DependencyFlags::BY_REGION,
+                &[],
+                &[vk::BufferMemoryBarrier::default()
+                    .buffer(geometry_to_light_buffer_and_staging.0.inner)
+                    .offset(0)
+                    .size(geometry_to_light_buffer_and_staging.0.size)
+                    .src_access_mask(AccessFlags::TRANSFER_WRITE)
+                    .dst_access_mask(AccessFlags::SHADER_READ)
+                    .src_queue_family_index(ctx.graphics_queue_family.index)
+                    .dst_queue_family_index(ctx.graphics_queue_family.index)],
+                &[],
+            );
+            ctx.device
+                .cmd_bind_pipeline(*cmd, vk::PipelineBindPoint::COMPUTE, self.handle);
+
+            let num_tasks = light_tasks.len() as u32;
+            let num_tasks =
+                std::slice::from_raw_parts(&num_tasks as *const u32 as *const _, size_of::<u32>());
+
+            ctx.device.cmd_push_constants(
+                *cmd,
+                self.layout,
+                ShaderStageFlags::COMPUTE,
+                0,
+                num_tasks,
+            );
+
+            ctx.device.cmd_bind_descriptor_sets(
+                *cmd,
+                vk::PipelineBindPoint::COMPUTE,
+                self.layout,
+                0,
+                &[self.descriptor],
+                &[],
+            );
+            ctx.device.cmd_dispatch(
+                *cmd,
+                f32::ceil(light_buffer_offset as f32 / 256.0) as u32,
+                1,
+                1,
+            );
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+struct PrepareLightsTask {
+    geometry_index: u32,
+    light_buffer_offset: u32,
+    triangle_count: u32,
+    pad: u32,
 }
 
 pub fn create_mip_pipeline(
@@ -392,6 +503,156 @@ pub fn create_mip_pipeline(
         };
         update_descriptor_sets(ctx, &descriptor_set0, &[write]);
     }
+
+    Ok(ComputePipeline {
+        descriptor: descriptor_set0,
+        handle,
+        layout,
+    })
+}
+
+pub fn create_lights_pipeline(
+    ctx: &mut Renderer,
+    local_lights_pdf: &vk::ImageView,
+    environment: (&vk::ImageView, &vk::Sampler),
+    lights_buffer: &Buffer,
+    light_tasks_buffer: &Buffer,
+    model: &Model,
+) -> Result<ComputePipeline> {
+    let mut bindings = vec![
+        vk::DescriptorSetLayoutBinding::default()
+            .binding(0)
+            .descriptor_count(1)
+            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+            .stage_flags(vk::ShaderStageFlags::COMPUTE),
+        vk::DescriptorSetLayoutBinding::default()
+            .binding(1)
+            .descriptor_count(1)
+            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+            .stage_flags(vk::ShaderStageFlags::COMPUTE),
+        vk::DescriptorSetLayoutBinding::default()
+            .binding(2)
+            .descriptor_count(1)
+            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+            .stage_flags(vk::ShaderStageFlags::COMPUTE),
+        vk::DescriptorSetLayoutBinding::default()
+            .binding(3)
+            .descriptor_count(1)
+            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+            .stage_flags(vk::ShaderStageFlags::COMPUTE),
+        vk::DescriptorSetLayoutBinding::default()
+            .binding(4)
+            .descriptor_count(1)
+            .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
+            .stage_flags(vk::ShaderStageFlags::COMPUTE),
+        vk::DescriptorSetLayoutBinding::default()
+            .binding(5)
+            .descriptor_count(1)
+            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+            .stage_flags(vk::ShaderStageFlags::COMPUTE),
+        vk::DescriptorSetLayoutBinding::default()
+            .binding(6)
+            .descriptor_count(1)
+            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+            .stage_flags(vk::ShaderStageFlags::COMPUTE),
+    ];
+
+    let descriptor0_layout = ctx.create_descriptor_set_layout(&bindings, &[])?;
+    let descriptor_layouts = [descriptor0_layout];
+
+    let layout_info = vk::PipelineLayoutCreateInfo::default()
+        .push_constant_ranges(&[vk::PushConstantRange {
+            offset: 0,
+            size: size_of::<u32>() as u32,
+            stage_flags: ShaderStageFlags::COMPUTE,
+        }])
+        .set_layouts(&descriptor_layouts);
+
+    let layout = unsafe { ctx.device.create_pipeline_layout(&layout_info, None)? };
+
+    let entry_point_name: CString = CString::new("main").unwrap();
+    let pipeline_info = vk::ComputePipelineCreateInfo::default()
+        .layout(layout)
+        .stage(
+            vk::PipelineShaderStageCreateInfo::default()
+                .module(ctx.create_shader_module("./src/shaders/prepare_lights.comp.spv"))
+                .stage(vk::ShaderStageFlags::COMPUTE)
+                .name(&entry_point_name),
+        );
+
+    let handle = unsafe {
+        ctx.device
+            .create_compute_pipelines(PipelineCache::null(), &[pipeline_info], None)
+            .unwrap()[0]
+    };
+
+    let pool = ctx
+        .create_descriptor_pool(
+            1,
+            &[
+                vk::DescriptorPoolSize::default()
+                    .descriptor_count(1)
+                    .ty(vk::DescriptorType::STORAGE_IMAGE),
+                vk::DescriptorPoolSize::default()
+                    .descriptor_count(5)
+                    .ty(vk::DescriptorType::STORAGE_BUFFER),
+                vk::DescriptorPoolSize::default()
+                    .descriptor_count(1)
+                    .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER),
+            ],
+        )
+        .unwrap();
+
+    let descriptor_set0 = allocate_descriptor_set(&ctx.device, &pool, &descriptor0_layout).unwrap();
+
+    let writes = [
+        WriteDescriptorSet {
+            binding: 0,
+            kind: WriteDescriptorSetKind::StorageBuffer {
+                buffer: model.geometry_info_buffer.inner,
+            },
+        },
+        WriteDescriptorSet {
+            binding: 1,
+            kind: WriteDescriptorSetKind::StorageBuffer {
+                buffer: model.vertex_buffer.inner,
+            },
+        },
+        WriteDescriptorSet {
+            binding: 2,
+            kind: WriteDescriptorSetKind::StorageBuffer {
+                buffer: model.index_buffer.inner,
+            },
+        },
+        WriteDescriptorSet {
+            binding: 3,
+            kind: WriteDescriptorSetKind::StorageBuffer {
+                buffer: lights_buffer.inner,
+            },
+        },
+        WriteDescriptorSet {
+            binding: 4,
+            kind: WriteDescriptorSetKind::StorageImage {
+                view: *local_lights_pdf,
+                layout: vk::ImageLayout::GENERAL,
+            },
+        },
+        WriteDescriptorSet {
+            binding: 5,
+            kind: WriteDescriptorSetKind::CombinedImageSampler {
+                view: *environment.0,
+                sampler: *environment.1,
+                layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+            },
+        },
+        WriteDescriptorSet {
+            binding: 6,
+            kind: WriteDescriptorSetKind::StorageBuffer {
+                buffer: light_tasks_buffer.inner,
+            },
+        },
+    ];
+    update_descriptor_sets(ctx, &descriptor_set0, &writes);
 
     Ok(ComputePipeline {
         descriptor: descriptor_set0,
@@ -882,6 +1143,7 @@ fn create_ray_tracing_pipeline(
     ris_lights_buffer: &Buffer,
     lights_buffer: &Buffer,
     ris_buffer: &Buffer,
+    geom_to_lights: &Buffer,
 ) -> Result<RayTracingPipeline> {
     let static_layout_bindings = [
         vk::DescriptorSetLayoutBinding::default()
@@ -959,6 +1221,11 @@ fn create_ray_tracing_pipeline(
             .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
             .descriptor_count(1)
             .stage_flags(vk::ShaderStageFlags::RAYGEN_KHR),
+        vk::DescriptorSetLayoutBinding::default()
+            .binding(15)
+            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+            .descriptor_count(1)
+            .stage_flags(vk::ShaderStageFlags::RAYGEN_KHR),
     ];
 
     let dynamic_layout_bindings = [
@@ -1024,7 +1291,7 @@ fn create_ray_tracing_pipeline(
             .descriptor_count(1),
         vk::DescriptorPoolSize::default()
             .ty(vk::DescriptorType::STORAGE_BUFFER)
-            .descriptor_count(9),
+            .descriptor_count(10),
         vk::DescriptorPoolSize::default()
             .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
             .descriptor_count((model.images.len() as u32) + 3),
@@ -1119,6 +1386,12 @@ fn create_ray_tracing_pipeline(
             binding: 14,
             kind: WriteDescriptorSetKind::StorageBuffer {
                 buffer: ris_buffer.inner,
+            },
+        },
+        WriteDescriptorSet {
+            binding: 15,
+            kind: WriteDescriptorSetKind::StorageBuffer {
+                buffer: geom_to_lights.inner,
             },
         },
     ];
@@ -1738,7 +2011,7 @@ pub fn create_render_recources(
     let environenvironment_pdf_views = ctx.create_image_views(&environment_pdf).unwrap();
     let environenvironment_pdf_view = ctx.create_image_view(&environment_pdf).unwrap();
 
-    let (width, height, mips) = ComputePdfTextureSize(MAX_LOCAL_LIGHTS);
+    let (width, height, mips) = ComputePdfTextureSize(model.lights);
 
     let local_lights_pdf = ctx
         .create_mipimage(
@@ -1771,7 +2044,7 @@ pub fn create_render_recources(
         .create_buffer(
             vk::BufferUsageFlags::STORAGE_BUFFER,
             MemoryLocation::GpuOnly,
-            48 * MAX_LOCAL_LIGHTS as u64,
+            48 * model.lights as u64,
             None,
         )
         .unwrap();
@@ -1821,6 +2094,24 @@ pub fn create_render_recources(
             .unwrap()
     };
 
+    let geometry_to_light_buffer = ctx
+        .create_buffer(
+            BufferUsageFlags::STORAGE_BUFFER | BufferUsageFlags::TRANSFER_DST,
+            MemoryLocation::GpuOnly,
+            model.geometry_infos.len() as u64,
+            None,
+        )
+        .unwrap();
+    let geometry_to_light_staging_buffer = ctx
+        .create_buffer(
+            BufferUsageFlags::TRANSFER_SRC | BufferUsageFlags::TRANSFER_DST,
+            MemoryLocation::CpuToGpu,
+            geometry_to_light_buffer.size,
+            None,
+        )
+        .unwrap();
+    let geometry_to_light_buffer_and_staging =
+        (geometry_to_light_buffer, geometry_to_light_staging_buffer);
     let raytracing_pipeline = create_ray_tracing_pipeline(
         ctx,
         model,
@@ -1838,6 +2129,7 @@ pub fn create_render_recources(
         &ris_lights_buffer,
         &lights_buffer,
         &ris_buffer,
+        &geometry_to_light_buffer_and_staging.0,
     )
     .unwrap();
 
@@ -1888,6 +2180,14 @@ pub fn create_render_recources(
         &temporal_reuse_shaders,
     )
     .unwrap();
+    let light_tasks_buffer = ctx
+        .create_buffer(
+            BufferUsageFlags::STORAGE_BUFFER | BufferUsageFlags::TRANSFER_DST,
+            MemoryLocation::GpuToCpu,
+            16 * 500,
+            None,
+        )
+        .unwrap();
 
     let environment_mip_pipeline = create_mip_pipeline(
         ctx,
@@ -1903,6 +2203,16 @@ pub fn create_render_recources(
         None,
     )
     .unwrap();
+    let prepare_lights_pipeline = create_lights_pipeline(
+        ctx,
+        &local_lights_pdf_view,
+        (&skybox_view, &skybox_sampler),
+        &lights_buffer,
+        &light_tasks_buffer,
+        model,
+    )
+    .unwrap();
+
     Ok(RendererResources {
         g_buffer,
         neighbors,
@@ -1922,6 +2232,9 @@ pub fn create_render_recources(
         environment_pdf,
         environment_mip_pipeline,
         local_lights_mip_pipeline,
+        prepare_lights_pipeline,
+        light_tasks_buffer,
+        geometry_to_light_buffer_and_staging,
     })
 }
 

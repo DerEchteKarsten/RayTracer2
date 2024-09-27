@@ -31,7 +31,7 @@ layout( push_constant ) uniform GConst {
     uint sourceMipLevel;
 } c_Const;
 
-layout(binding = 0, set = 0, r16f) uniform image2D u_IntegratedMips[32];
+layout(binding = 0, set = 0, r32f) uniform image2D u_IntegratedMips[32];
 
 #ifdef INPUT_ENVIRONMENT_MAP
 layout(binding = 1, set = 0) uniform sampler2D t_EnvironmentMap;

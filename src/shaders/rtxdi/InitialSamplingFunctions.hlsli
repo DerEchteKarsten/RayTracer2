@@ -290,9 +290,9 @@ RTXDI_DIReservoir RTXDI_SampleLocalLightsInternal(
         uint lightIndex;
         RAB_LightInfo lightInfo;
         float invSourcePdf;
-
         RTXDI_SelectNextLocalLight(lightSelectionContext, rng, lightInfo, lightIndex, invSourcePdf);
         float2 uv = RTXDI_RandomlySelectLocalLightUV(rng);
+
         bool zeroPdf = RTXDI_StreamLocalLightAtUVIntoReservoir(rng, sampleParams, surface, lightIndex, uv, invSourcePdf, lightInfo, state, o_selectedSample);
 
         if (zeroPdf)

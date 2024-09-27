@@ -75,7 +75,6 @@ const NEIGHBOR_OFFSET_COUNT: u32 = 8192;
 const RTXDI_RESERVOIR_BLOCK_SIZE: u32 = 16;
 const WINDOW_SIZE: IVec2 = IVec2::new(1920, 1080);
 const RESAMPLING: bool = false;
-const MAX_LOCAL_LIGHTS: u32 = 1000;
 
 fn main() {
     let model_thread = std::thread::spawn(|| gltf::load_file("./src/models/box.glb").unwrap());
@@ -231,7 +230,7 @@ fn main() {
                 temporalResamplingOutputBufferIndex: 0,
                 spatialResamplingInputBufferIndex: 0,
                 spatialResamplingOutputBufferIndex: 1,
-                finalShadingInputBufferIndex: 0,
+                finalShadingInputBufferIndex: if RESAMPLING {1} else {0},
                 pad1: 0,
                 pad2: 0,
             },
@@ -244,11 +243,11 @@ fn main() {
             reservoirBufferParams,
             spatialResamplingParams: ReSTIRGI_SpatialResamplingParameters {
                 spatialDepthThreshold: 0.1,
-                spatialNormalThreshold: 0.6,
+                spatialNormalThreshold: 0.3,
 
-                numSpatialSamples: 8,
+                numSpatialSamples: 1,
                 spatialBiasCorrectionMode: 2,
-                spatialSamplingRadius: 32.0,
+                spatialSamplingRadius: 3.0,
 
                 pad1: 0,
                 pad2: 0,
@@ -275,7 +274,10 @@ fn main() {
             pad1: 0,
             pad2: 0,
         },
-        environmentPdfTextureSize: uvec2(sky_box.image.extent.width, sky_box.image.extent.height),
+        environmentPdfTextureSize: uvec2(
+            renderer.environment_pdf.extent.width,
+            renderer.environment_pdf.extent.height,
+        ),
         localLightPdfTextureSize: uvec2(
             renderer.local_lights_pdf.extent.width,
             renderer.local_lights_pdf.extent.height,
@@ -308,11 +310,11 @@ fn main() {
                 numPrimaryLocalLightSamples: 1,
                 numPrimaryInfiniteLightSamples: 1,
                 numPrimaryEnvironmentSamples: 1,
-                numPrimaryBrdfSamples: 1,
-                brdfCutoff: 0.3,
+                numPrimaryBrdfSamples: 0,
+                brdfCutoff: 0.0,
                 enableInitialVisibility: 0,
                 environmentMapImportanceSampling: 1,
-                localLightSamplingMode: 1,
+                localLightSamplingMode: 2,
             },
             temporalResamplingParams: ReSTIRDI_TemporalResamplingParameters {
                 temporalDepthThreshold: 0.1,
@@ -352,19 +354,19 @@ fn main() {
         lightBufferParams: RTXDI_LightBufferParameters {
             localLightBufferRegion: RTXDI_LightBufferRegion {
                 firstLightIndex: 0,
-                numLights: 100,
+                numLights: model.lights,
                 pad1: 0,
                 pad2: 0,
             },
             infiniteLightBufferRegion: RTXDI_LightBufferRegion {
-                firstLightIndex: 100,
-                numLights: 100,
+                firstLightIndex: model.lights,
+                numLights: 0,
                 pad1: 0,
                 pad2: 0,
             },
             environmentLightParams: RTXDI_EnvironmentLightBufferParameters {
                 lightPresent: 1,
-                lightIndex: 200,
+                lightIndex: model.lights,
                 pad1: 0,
                 pad2: 0,
             },
@@ -402,6 +404,22 @@ fn main() {
         })
         .old_layout(ImageLayout::GENERAL)
         .new_layout(ImageLayout::GENERAL); 11];
+
+    let local_lights_barrier = vk::ImageMemoryBarrier::default()
+        .src_access_mask(AccessFlags::SHADER_WRITE | AccessFlags::SHADER_READ)
+        .dst_access_mask(AccessFlags::SHADER_WRITE | AccessFlags::SHADER_READ)
+        .src_queue_family_index(ctx.graphics_queue_family.index)
+        .dst_queue_family_index(ctx.graphics_queue_family.index)
+        .subresource_range(vk::ImageSubresourceRange {
+            aspect_mask: ImageAspectFlags::COLOR,
+            base_array_layer: 0,
+            base_mip_level: 0,
+            layer_count: 1,
+            level_count: 1,
+        })
+        .old_layout(ImageLayout::GENERAL)
+        .new_layout(ImageLayout::GENERAL)
+        .image(renderer.local_lights_pdf.inner);
 
     for i in 0..2 {
         image_barriers[0 + 5 * i] =
@@ -472,6 +490,24 @@ fn main() {
 
                             unsafe {
                                 if frame == 1 {
+                                    renderer.prepare_lights_pipeline.execute_light_preperation(
+                                        ctx,
+                                        &renderer.light_tasks_buffer,
+                                        &renderer.geometry_to_light_buffer_and_staging,
+                                        &model,
+                                        cmd,
+                                    );
+
+                                    ctx.device.cmd_pipeline_barrier(
+                                        *cmd,
+                                        PipelineStageFlags::COMPUTE_SHADER,
+                                        PipelineStageFlags::COMPUTE_SHADER,
+                                        DependencyFlags::BY_REGION,
+                                        &[],
+                                        &[],
+                                        &[local_lights_barrier],
+                                    );
+
                                     renderer
                                         .environment_presampeling_pipeline
                                         .execute_presampeling(&ctx, cmd, &[regir_memory_barrier]);

@@ -40,6 +40,7 @@ pub struct Model {
     pub geometry_info_buffer: Buffer,
     pub geometry_infos: Vec<GeometryInfo>,
     pub index_counts: Vec<u32>,
+    pub lights: u32,
 }
 
 pub const IDENTITY_MATRIX: vk::TransformMatrixKHR = vk::TransformMatrixKHR {
@@ -400,7 +401,7 @@ impl Model {
         let mut as_ranges = vec![];
         let mut max_primitive_counts = vec![];
         let mut index_counts = vec![];
-
+        let mut lights = 0;
         for (node_index, node) in model.nodes.iter().enumerate() {
             let mesh = node.mesh;
 
@@ -412,6 +413,9 @@ impl Model {
                 mesh.material.emission[2],
                 1.0,
             ];
+            if emission[0] != 0.0 || emission[1] != 0.0 || emission[2] != 0.0 {
+                lights += mesh.index_count / 3;
+            }
             geometry_infos.push(GeometryInfo {
                 transform: Mat4::from_cols_array_2d(&node.transform),
                 base_color: mesh.material.base_color,
@@ -472,6 +476,7 @@ impl Model {
             index_buffer,
             transform_buffer,
             geometry_info_buffer,
+            lights,
         })
     }
 }
