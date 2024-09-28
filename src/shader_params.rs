@@ -1,37 +1,35 @@
-use std::default;
-
 use glam::UVec2;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct PlanarViewConstants {
-    pub matWorldToView: glam::Mat4,
-    pub matViewToClip: glam::Mat4,
-    pub matWorldToClip: glam::Mat4,
-    pub matClipToView: glam::Mat4,
-    pub matViewToWorld: glam::Mat4,
-    pub matClipToWorld: glam::Mat4,
+    pub mat_world_to_view: glam::Mat4,
+    pub mat_view_to_clip: glam::Mat4,
+    pub mat_world_to_clip: glam::Mat4,
+    pub mat_clip_to_view: glam::Mat4,
+    pub mat_view_to_world: glam::Mat4,
+    pub mat_clip_to_world: glam::Mat4,
 
-    pub viewportOrigin: glam::Vec2,
-    pub viewportSize: glam::Vec2,
+    pub viewport_origin: glam::Vec2,
+    pub viewport_size: glam::Vec2,
 
-    pub viewportSizeInv: glam::Vec2,
-    pub pixelOffset: glam::Vec2,
+    pub viewport_size_inv: glam::Vec2,
+    pub pixel_offset: glam::Vec2,
 
-    pub clipToWindowScale: glam::Vec2,
-    pub clipToWindowBias: glam::Vec2,
+    pub clip_to_window_scale: glam::Vec2,
+    pub clip_to_window_bias: glam::Vec2,
 
-    pub windowToClipScale: glam::Vec2,
-    pub windowToClipBias: glam::Vec2,
+    pub window_to_clip_scale: glam::Vec2,
+    pub window_to_clip_bias: glam::Vec2,
 
-    pub cameraDirectionOrPosition: glam::Vec4,
+    pub camera_direction_or_position: glam::Vec4,
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct RTXDI_RuntimeParameters {
-    pub neighborOffsetMask: u32,      // Spatial
-    pub activeCheckerboardField: u32, // 0 - no checkerboard, 1 - odd pixels, 2 - even pixels
+    pub neighbor_offset_mask: u32,      // Spatial
+    pub active_checkerboard_field: u32, // 0 - no checkerboard, 1 - odd pixels, 2 - even pixels
     pub pad1: u32,
     pub pad2: u32,
 }
@@ -39,18 +37,18 @@ pub struct RTXDI_RuntimeParameters {
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct ReSTIRGI_TemporalResamplingParameters {
-    pub depthThreshold: f32,
-    pub normalThreshold: f32,
-    pub enablePermutationSampling: u32,
-    pub maxHistoryLength: u32,
+    pub depth_threshold: f32,
+    pub normal_threshold: f32,
+    pub enable_permutation_sampling: u32,
+    pub max_history_length: u32,
 
-    pub maxReservoirAge: u32,
-    pub enableBoilingFilter: u32,
-    pub boilingFilterStrength: f32,
-    pub enableFallbackSampling: u32,
+    pub max_reservoir_age: u32,
+    pub enable_boiling_filter: u32,
+    pub boiling_filter_strength: f32,
+    pub enable_fallback_sampling: u32,
 
-    pub temporalBiasCorrectionMode: u32, // = ResTIRGI_TemporalBiasCorrectionMode::Basic;
-    pub uniformRandomNumber: u32,
+    pub temporal_bias_correction_mode: u32, // = ResTIRGI_TemporalBiasCorrectionMode::Basic;
+    pub uniform_random_number: u32,
     pub pad2: u32,
     pub pad3: u32,
 }
@@ -59,12 +57,12 @@ pub struct ReSTIRGI_TemporalResamplingParameters {
 #[derive(Clone, Copy, Debug)]
 // See note for ReSTIRGI_TemporalResamplingParameters
 pub struct ReSTIRGI_SpatialResamplingParameters {
-    pub spatialDepthThreshold: f32,
-    pub spatialNormalThreshold: f32,
-    pub numSpatialSamples: u32,
-    pub spatialSamplingRadius: f32,
+    pub spatial_depth_threshold: f32,
+    pub spatial_normal_threshold: f32,
+    pub num_spatial_samples: u32,
+    pub spatial_sampling_radius: f32,
 
-    pub spatialBiasCorrectionMode: u32, // = ResTIRGI_SpatialBiasCorrectionMode::Basic;
+    pub spatial_bias_correction_mode: u32, // = ResTIRGI_SpatialBiasCorrectionMode::Basic;
     pub pad1: u32,
     pub pad2: u32,
     pub pad3: u32,
@@ -73,8 +71,8 @@ pub struct ReSTIRGI_SpatialResamplingParameters {
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct ReSTIRGI_FinalShadingParameters {
-    pub enableFinalVisibility: u32, // = true;
-    pub enableFinalMIS: u32,        // = true;
+    pub enable_final_visibility: u32, // = true;
+    pub enable_final_mis: u32,        // = true;
     pub pad1: u32,
     pub pad2: u32,
 }
@@ -82,13 +80,13 @@ pub struct ReSTIRGI_FinalShadingParameters {
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct ReSTIRGI_BufferIndices {
-    pub secondarySurfaceReSTIRDIOutputBufferIndex: u32,
-    pub temporalResamplingInputBufferIndex: u32,
-    pub temporalResamplingOutputBufferIndex: u32,
-    pub spatialResamplingInputBufferIndex: u32,
+    pub secondary_surface_re_stirdioutput_buffer_index: u32,
+    pub temporal_resampling_input_buffer_index: u32,
+    pub temporal_resampling_output_buffer_index: u32,
+    pub spatial_resampling_input_buffer_index: u32,
 
-    pub spatialResamplingOutputBufferIndex: u32,
-    pub finalShadingInputBufferIndex: u32,
+    pub spatial_resampling_output_buffer_index: u32,
+    pub final_shading_input_buffer_index: u32,
     pub pad1: u32,
     pub pad2: u32,
 }
@@ -96,8 +94,8 @@ pub struct ReSTIRGI_BufferIndices {
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
 pub struct RTXDI_ReservoirBufferParameters {
-    pub reservoirBlockRowPitch: u32,
-    pub reservoirArrayPitch: u32,
+    pub reservoir_block_row_pitch: u32,
+    pub reservoir_array_pitch: u32,
     pub pad1: u32,
     pub pad2: u32,
 }
@@ -105,18 +103,18 @@ pub struct RTXDI_ReservoirBufferParameters {
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct ReSTIRGI_Parameters {
-    pub reservoirBufferParams: RTXDI_ReservoirBufferParameters,
-    pub bufferIndices: ReSTIRGI_BufferIndices,
-    pub temporalResamplingParams: ReSTIRGI_TemporalResamplingParameters,
-    pub spatialResamplingParams: ReSTIRGI_SpatialResamplingParameters,
-    pub finalShadingParams: ReSTIRGI_FinalShadingParameters,
+    pub reservoir_buffer_params: RTXDI_ReservoirBufferParameters,
+    pub buffer_indices: ReSTIRGI_BufferIndices,
+    pub temporal_resampling_params: ReSTIRGI_TemporalResamplingParameters,
+    pub spatial_resampling_params: ReSTIRGI_SpatialResamplingParameters,
+    pub final_shading_params: ReSTIRGI_FinalShadingParameters,
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct RTXDI_LightBufferRegion {
-    pub firstLightIndex: u32,
-    pub numLights: u32,
+    pub first_light_index: u32,
+    pub num_lights: u32,
     pub pad1: u32,
     pub pad2: u32,
 }
@@ -124,8 +122,8 @@ pub struct RTXDI_LightBufferRegion {
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct RTXDI_EnvironmentLightBufferParameters {
-    pub lightPresent: u32,
-    pub lightIndex: u32,
+    pub light_present: u32,
+    pub light_index: u32,
     pub pad1: u32,
     pub pad2: u32,
 }
@@ -133,35 +131,35 @@ pub struct RTXDI_EnvironmentLightBufferParameters {
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct RTXDI_LightBufferParameters {
-    pub localLightBufferRegion: RTXDI_LightBufferRegion,
-    pub infiniteLightBufferRegion: RTXDI_LightBufferRegion,
-    pub environmentLightParams: RTXDI_EnvironmentLightBufferParameters,
+    pub local_light_buffer_region: RTXDI_LightBufferRegion,
+    pub infinite_light_buffer_region: RTXDI_LightBufferRegion,
+    pub environment_light_params: RTXDI_EnvironmentLightBufferParameters,
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct ReSTIRDI_InitialSamplingParameters {
-    pub numPrimaryLocalLightSamples: u32,
-    pub numPrimaryInfiniteLightSamples: u32,
-    pub numPrimaryEnvironmentSamples: u32,
-    pub numPrimaryBrdfSamples: u32,
+    pub num_primary_local_light_samples: u32,
+    pub num_primary_infinite_light_samples: u32,
+    pub num_primary_environment_samples: u32,
+    pub num_primary_brdf_samples: u32,
 
-    pub brdfCutoff: f32,
-    pub enableInitialVisibility: u32,
-    pub environmentMapImportanceSampling: u32, // Only used in InitialSamplingFunctions.hlsli via RAB_EvaluateEnvironmentMapSamplingPdf
-    pub localLightSamplingMode: u32,
+    pub brdf_cutoff: f32,
+    pub enable_initial_visibility: u32,
+    pub environment_map_importance_sampling: u32, // Only used in InitialSamplingFunctions.hlsli via RAB_EvaluateEnvironmentMapSamplingPdf
+    pub local_light_sampling_mode: u32,
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct ReSTIRDI_BufferIndices {
-    pub initialSamplingOutputBufferIndex: u32,
-    pub temporalResamplingInputBufferIndex: u32,
-    pub temporalResamplingOutputBufferIndex: u32,
-    pub spatialResamplingInputBufferIndex: u32,
+    pub initial_sampling_output_buffer_index: u32,
+    pub temporal_resampling_input_buffer_index: u32,
+    pub temporal_resampling_output_buffer_index: u32,
+    pub spatial_resampling_input_buffer_index: u32,
 
-    pub spatialResamplingOutputBufferIndex: u32,
-    pub shadingInputBufferIndex: u32,
+    pub spatial_resampling_output_buffer_index: u32,
+    pub shading_input_buffer_index: u32,
     pub pad1: u32,
     pub pad2: u32,
 }
@@ -169,18 +167,18 @@ pub struct ReSTIRDI_BufferIndices {
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct ReSTIRDI_TemporalResamplingParameters {
-    pub temporalDepthThreshold: f32,
-    pub temporalNormalThreshold: f32,
-    pub maxHistoryLength: u32,
-    pub temporalBiasCorrection: u32,
+    pub temporal_depth_threshold: f32,
+    pub temporal_normal_threshold: f32,
+    pub max_history_length: u32,
+    pub temporal_bias_correction: u32,
 
-    pub enablePermutationSampling: u32,
-    pub permutationSamplingThreshold: f32,
-    pub enableBoilingFilter: u32,
-    pub boilingFilterStrength: f32,
+    pub enable_permutation_sampling: u32,
+    pub permutation_sampling_threshold: f32,
+    pub enable_boiling_filter: u32,
+    pub boiling_filter_strength: f32,
 
-    pub discardInvisibleSamples: u32,
-    pub uniformRandomNumber: u32,
+    pub discard_invisible_samples: u32,
+    pub uniform_random_number: u32,
     pub pad2: u32,
     pub pad3: u32,
 }
@@ -188,26 +186,26 @@ pub struct ReSTIRDI_TemporalResamplingParameters {
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct ReSTIRDI_SpatialResamplingParameters {
-    pub spatialDepthThreshold: f32,
-    pub spatialNormalThreshold: f32,
-    pub spatialBiasCorrection: u32,
-    pub numSpatialSamples: u32,
+    pub spatial_depth_threshold: f32,
+    pub spatial_normal_threshold: f32,
+    pub spatial_bias_correction: u32,
+    pub num_spatial_samples: u32,
 
-    pub numDisocclusionBoostSamples: u32,
-    pub spatialSamplingRadius: f32,
-    pub neighborOffsetMask: u32,
-    pub discountNaiveSamples: u32,
+    pub num_disocclusion_boost_samples: u32,
+    pub spatial_sampling_radius: f32,
+    pub neighbor_offset_mask: u32,
+    pub discount_naive_samples: u32,
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct ReSTIRDI_ShadingParameters {
-    pub enableFinalVisibility: u32,
-    pub reuseFinalVisibility: u32,
-    pub finalVisibilityMaxAge: u32,
-    pub finalVisibilityMaxDistance: f32,
+    pub enable_final_visibility: u32,
+    pub reuse_final_visibility: u32,
+    pub final_visibility_max_age: u32,
+    pub final_visibility_max_distance: f32,
 
-    pub enableDenoiserInputPacking: u32,
+    pub enable_denoiser_input_packing: u32,
     pub pad1: u32,
     pub pad2: u32,
     pub pad3: u32,
@@ -216,20 +214,20 @@ pub struct ReSTIRDI_ShadingParameters {
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct ReSTIRDI_Parameters {
-    pub reservoirBufferParams: RTXDI_ReservoirBufferParameters,
-    pub bufferIndices: ReSTIRDI_BufferIndices,
-    pub initialSamplingParams: ReSTIRDI_InitialSamplingParameters,
-    pub temporalResamplingParams: ReSTIRDI_TemporalResamplingParameters,
-    pub spatialResamplingParams: ReSTIRDI_SpatialResamplingParameters,
-    pub shadingParams: ReSTIRDI_ShadingParameters,
+    pub reservoir_buffer_params: RTXDI_ReservoirBufferParameters,
+    pub buffer_indices: ReSTIRDI_BufferIndices,
+    pub initial_sampling_params: ReSTIRDI_InitialSamplingParameters,
+    pub temporal_resampling_params: ReSTIRDI_TemporalResamplingParameters,
+    pub spatial_resampling_params: ReSTIRDI_SpatialResamplingParameters,
+    pub shading_params: ReSTIRDI_ShadingParameters,
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct RTXDI_RISBufferSegmentParameters {
-    pub bufferOffset: u32,
-    pub tileSize: u32,
-    pub tileCount: u32,
+    pub buffer_offset: u32,
+    pub tile_size: u32,
+    pub tile_count: u32,
     pub pad1: u32,
 }
 
@@ -237,15 +235,15 @@ pub struct RTXDI_RISBufferSegmentParameters {
 #[derive(Clone, Copy, Debug)]
 pub struct GConst {
     pub view: PlanarViewConstants,
-    pub prevView: PlanarViewConstants,
-    pub runtimeParams: RTXDI_RuntimeParameters,
-    pub lightBufferParams: RTXDI_LightBufferParameters,
+    pub prev_view: PlanarViewConstants,
+    pub runtime_params: RTXDI_RuntimeParameters,
+    pub light_buffer_params: RTXDI_LightBufferParameters,
 
-    pub restirGI: ReSTIRGI_Parameters,
-    pub restirDI: ReSTIRDI_Parameters,
-    pub localLightsRISBufferSegmentParams: RTXDI_RISBufferSegmentParameters,
-    pub environmentLightRISBufferSegmentParams: RTXDI_RISBufferSegmentParameters,
+    pub restir_gi: ReSTIRGI_Parameters,
+    pub restir_di: ReSTIRDI_Parameters,
+    pub local_lights_risbuffer_segment_params: RTXDI_RISBufferSegmentParameters,
+    pub environment_light_risbuffer_segment_params: RTXDI_RISBufferSegmentParameters,
 
-    pub environmentPdfTextureSize: UVec2,
-    pub localLightPdfTextureSize: UVec2,
+    pub environment_pdf_texture_size: UVec2,
+    pub local_light_pdf_texture_size: UVec2,
 }

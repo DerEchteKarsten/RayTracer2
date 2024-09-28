@@ -1,7 +1,4 @@
-#![feature(f16)]
-
 mod context;
-use ash::ext::buffer_device_address;
 use ash::khr::{
     acceleration_structure, deferred_host_operations, get_memory_requirements2,
     ray_tracing_pipeline, shader_float_controls, shader_non_semantic_info, swapchain,
@@ -11,61 +8,46 @@ mod camera;
 use camera::*;
 mod gltf;
 mod light_passes;
-mod pipelines;
-mod shader_params;
-mod render_recources;
 mod mip_pass;
+mod postprocess;
 mod prepare_lights;
+mod render_recources;
+mod shader_params;
 
-use memoffset::offset_of;
+use light_passes::{calculate_reservoir_buffer_parameters, LightPasses};
 
 mod model;
-use gltf::Vertex;
-use log::{debug, info};
+use log;
+use mip_pass::GenerateMipsPass;
 use model::*;
 
-use anyhow::Result;
-use ash::vk::{
-    self, AabbPositionsKHR, AccelerationStructureTypeKHR, AccessFlags, AccessFlags2,
-    BufferUsageFlags, DependencyFlags, GeometryTypeKHR, ImageAspectFlags, ImageLayout,
-    ImageUsageFlags, Packed24_8, PipelineBindPoint, PipelineStageFlags, PipelineStageFlags2,
-    TransformMatrixKHR, KHR_SPIRV_1_4_NAME,
-};
-use gpu_allocator::MemoryLocation;
+use ash::vk::{self, AccelerationStructureTypeKHR, ImageLayout, KHR_SPIRV_1_4_NAME};
 
-use ash::Device;
-
-use glam::{uvec2, vec3, IVec2, Mat4, UVec2, Vec2, Vec3, Vec4};
-use pipelines::{create_render_recources, CalculateReservoirBufferParameters};
+use glam::{uvec2, vec3, IVec2, Mat4};
+use postprocess::PostProcessPass;
+use prepare_lights::PrepareLightsTasks;
+use render_recources::RenderResources;
 use shader_params::{
     GConst, RTXDI_EnvironmentLightBufferParameters, RTXDI_LightBufferParameters,
-    RTXDI_LightBufferRegion, RTXDI_RISBufferSegmentParameters, RTXDI_ReservoirBufferParameters,
-    RTXDI_RuntimeParameters, ReSTIRDI_BufferIndices, ReSTIRDI_InitialSamplingParameters,
-    ReSTIRDI_Parameters, ReSTIRDI_ShadingParameters, ReSTIRDI_SpatialResamplingParameters,
+    RTXDI_LightBufferRegion, RTXDI_RISBufferSegmentParameters, RTXDI_RuntimeParameters,
+    ReSTIRDI_BufferIndices, ReSTIRDI_InitialSamplingParameters, ReSTIRDI_Parameters,
+    ReSTIRDI_ShadingParameters, ReSTIRDI_SpatialResamplingParameters,
     ReSTIRDI_TemporalResamplingParameters, ReSTIRGI_BufferIndices, ReSTIRGI_FinalShadingParameters,
     ReSTIRGI_Parameters, ReSTIRGI_SpatialResamplingParameters,
     ReSTIRGI_TemporalResamplingParameters,
 };
 use simple_logger::SimpleLogger;
-use std::default::{self, Default};
-use std::ffi::{CStr, CString};
-use std::os::raw::c_void;
-use std::os::unix::thread;
-use std::slice::from_ref;
+use std::default::Default;
+use std::ffi::CStr;
 use std::time::{Duration, Instant};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::WindowAttributes;
-
-use raw_window_handle::{HasRawWindowHandle, RawDisplayHandle, RawWindowHandle};
-
-use std::mem::{size_of, transmute};
 
 use winit::{
     dpi::PhysicalSize,
     event::{ElementState, Event, WindowEvent},
     event_loop::{ControlFlow, EventLoop},
 };
-
 
 const NEIGHBOR_OFFSET_COUNT: u32 = 8192;
 const RTXDI_RESERVOIR_BLOCK_SIZE: u32 = 16;
@@ -101,6 +83,7 @@ fn main() {
         attomics: true,
     };
     let event_loop = EventLoop::new().unwrap();
+    #[allow(deprecated)]
     let window = event_loop
         .create_window(WindowAttributes::default().with_inner_size(PhysicalSize {
             width: WINDOW_SIZE.x,
@@ -128,7 +111,7 @@ fn main() {
         1000.0,
     );
 
-    let sampler_info = vk::SamplerCreateInfo {
+    let mut sampler_info = vk::SamplerCreateInfo {
         mag_filter: vk::Filter::LINEAR,
         min_filter: vk::Filter::LINEAR,
         mipmap_mode: vk::SamplerMipmapMode::LINEAR,
@@ -138,9 +121,13 @@ fn main() {
         max_anisotropy: 1.0,
         border_color: vk::BorderColor::FLOAT_OPAQUE_WHITE,
         compare_op: vk::CompareOp::NEVER,
+        unnormalized_coordinates: 1,
         ..Default::default()
     };
 
+    let skybox_pdf_sampler = unsafe { ctx.device.create_sampler(&sampler_info, None).unwrap() };
+    sampler_info.unnormalized_coordinates = 0;
+    let skybox_sampler = unsafe { ctx.device.create_sampler(&sampler_info, None).unwrap() };
     let mut controles = Controls {
         ..Default::default()
     };
@@ -157,13 +144,6 @@ fn main() {
 
     let model_mat = Mat4::from_scale(vec3(0.1, 0.1, 0.1));
     let tlas = {
-        #[rustfmt::skip]
-        let transform_matrix = vk::TransformMatrixKHR { matrix: [
-            1.0, 0.0, 0.0, 0.0,
-            0.0, 1.0, 0.0, 0.0,
-            0.0, 0.0, 1.0, 0.0
-        ]};
-
         let instaces = &[model.instance(model_mat)];
 
         let instance_buffer = ctx
@@ -202,248 +182,206 @@ fn main() {
         .unwrap()
     };
 
-    let reservoirBufferParams =
-        CalculateReservoirBufferParameters(WINDOW_SIZE.x as u32, WINDOW_SIZE.y as u32);
+    let reservoir_buffer_params =
+        calculate_reservoir_buffer_parameters(WINDOW_SIZE.x as u32, WINDOW_SIZE.y as u32);
 
-    let renderer = create_render_recources(
+    let resources = RenderResources::new(
         &mut ctx,
         &model,
-        &tlas,
-        sky_box.view,
         uvec2(sky_box.image.extent.width, sky_box.image.extent.height),
-        reservoirBufferParams.reservoirArrayPitch as u64 * 2 * 32,
+    );
+    let light_passes = LightPasses::new(&mut ctx, &model, &tlas, &resources, &sky_box.view);
+    let post_process = PostProcessPass::new(&mut ctx, &resources.g_buffers).unwrap();
+
+    let mip_environment = GenerateMipsPass::new(
+        &mut ctx,
+        &resources.environment_pdf_texture_mips,
+        resources.environment_pdf_texture.image.mip_levels,
+        Some((&sky_box.view, &skybox_pdf_sampler)),
     )
     .unwrap();
-    let view = camera.planar_view_constants();
 
+    let mip_lights = GenerateMipsPass::new(
+        &mut ctx,
+        &resources.local_light_pdf_texture_mips,
+        resources.local_light_pdf_texture.image.mip_levels,
+        None,
+    )
+    .unwrap();
+
+    let view = camera.planar_view_constants();
     let mut g_const = GConst {
         view,
-        prevView: view,
-        restirGI: ReSTIRGI_Parameters {
-            bufferIndices: ReSTIRGI_BufferIndices {
-                secondarySurfaceReSTIRDIOutputBufferIndex: 0,
-                temporalResamplingInputBufferIndex: 1,
-                temporalResamplingOutputBufferIndex: 0,
-                spatialResamplingInputBufferIndex: 0,
-                spatialResamplingOutputBufferIndex: 1,
-                finalShadingInputBufferIndex: if RESAMPLING { 1 } else { 0 },
+        prev_view: view,
+        restir_gi: ReSTIRGI_Parameters {
+            buffer_indices: ReSTIRGI_BufferIndices {
+                secondary_surface_re_stirdioutput_buffer_index: 0,
+                temporal_resampling_input_buffer_index: 1,
+                temporal_resampling_output_buffer_index: 0,
+                spatial_resampling_input_buffer_index: 0,
+                spatial_resampling_output_buffer_index: 1,
+                final_shading_input_buffer_index: if RESAMPLING { 1 } else { 0 },
                 pad1: 0,
                 pad2: 0,
             },
-            finalShadingParams: ReSTIRGI_FinalShadingParameters {
-                enableFinalMIS: 0,
-                enableFinalVisibility: 0,
+            final_shading_params: ReSTIRGI_FinalShadingParameters {
+                enable_final_mis: 0,
+                enable_final_visibility: 0,
                 pad1: 0,
                 pad2: 0,
             },
-            reservoirBufferParams,
-            spatialResamplingParams: ReSTIRGI_SpatialResamplingParameters {
-                spatialDepthThreshold: 0.1,
-                spatialNormalThreshold: 0.3,
+            reservoir_buffer_params,
+            spatial_resampling_params: ReSTIRGI_SpatialResamplingParameters {
+                spatial_depth_threshold: 0.1,
+                spatial_normal_threshold: 0.3,
 
-                numSpatialSamples: 1,
-                spatialBiasCorrectionMode: 2,
-                spatialSamplingRadius: 3.0,
+                num_spatial_samples: 1,
+                spatial_bias_correction_mode: 2,
+                spatial_sampling_radius: 3.0,
 
                 pad1: 0,
                 pad2: 0,
                 pad3: 0,
             },
-            temporalResamplingParams: ReSTIRGI_TemporalResamplingParameters {
-                boilingFilterStrength: 0.0,
-                depthThreshold: 0.1,
-                normalThreshold: 0.3,
-                enableBoilingFilter: 0,
-                enableFallbackSampling: 1,
-                enablePermutationSampling: 0,
-                maxHistoryLength: 20,
-                maxReservoirAge: 50,
-                temporalBiasCorrectionMode: 2,
-                uniformRandomNumber: rand::random(),
+            temporal_resampling_params: ReSTIRGI_TemporalResamplingParameters {
+                boiling_filter_strength: 0.0,
+                depth_threshold: 0.1,
+                normal_threshold: 0.3,
+                enable_boiling_filter: 0,
+                enable_fallback_sampling: 1,
+                enable_permutation_sampling: 0,
+                max_history_length: 20,
+                max_reservoir_age: 50,
+                temporal_bias_correction_mode: 2,
+                uniform_random_number: rand::random(),
                 pad2: 0,
                 pad3: 0,
             },
         },
-        runtimeParams: RTXDI_RuntimeParameters {
-            neighborOffsetMask: NEIGHBOR_OFFSET_COUNT - 1,
-            activeCheckerboardField: 0,
+        runtime_params: RTXDI_RuntimeParameters {
+            neighbor_offset_mask: NEIGHBOR_OFFSET_COUNT - 1,
+            active_checkerboard_field: 0,
             pad1: 0,
             pad2: 0,
         },
-        environmentPdfTextureSize: uvec2(
-            renderer.environment_pdf.extent.width,
-            renderer.environment_pdf.extent.height,
+        environment_pdf_texture_size: uvec2(
+            resources.environment_pdf_texture.image.extent.width,
+            resources.environment_pdf_texture.image.extent.height,
         ),
-        localLightPdfTextureSize: uvec2(
-            renderer.local_lights_pdf.extent.width,
-            renderer.local_lights_pdf.extent.height,
+        local_light_pdf_texture_size: uvec2(
+            resources.local_light_pdf_texture.image.extent.width,
+            resources.local_light_pdf_texture.image.extent.height,
         ),
-        environmentLightRISBufferSegmentParams: RTXDI_RISBufferSegmentParameters {
-            bufferOffset: 1024 * 128,
-            tileSize: 1024,
-            tileCount: 128,
+        environment_light_risbuffer_segment_params: RTXDI_RISBufferSegmentParameters {
+            buffer_offset: 1024 * 128,
+            tile_size: 1024,
+            tile_count: 128,
             pad1: 0,
         },
-        localLightsRISBufferSegmentParams: RTXDI_RISBufferSegmentParameters {
-            bufferOffset: 0,
-            tileCount: 128,
-            tileSize: 1024,
+        local_lights_risbuffer_segment_params: RTXDI_RISBufferSegmentParameters {
+            buffer_offset: 0,
+            tile_count: 128,
+            tile_size: 1024,
             pad1: 0,
         },
-        restirDI: ReSTIRDI_Parameters {
-            reservoirBufferParams,
-            bufferIndices: ReSTIRDI_BufferIndices {
-                shadingInputBufferIndex: 1,
-                temporalResamplingInputBufferIndex: 1,
-                temporalResamplingOutputBufferIndex: 0,
-                spatialResamplingInputBufferIndex: 0,
-                spatialResamplingOutputBufferIndex: 1,
-                initialSamplingOutputBufferIndex: 1,
+        restir_di: ReSTIRDI_Parameters {
+            reservoir_buffer_params,
+            buffer_indices: ReSTIRDI_BufferIndices {
+                shading_input_buffer_index: 1,
+                temporal_resampling_input_buffer_index: 1,
+                temporal_resampling_output_buffer_index: 0,
+                spatial_resampling_input_buffer_index: 0,
+                spatial_resampling_output_buffer_index: 1,
+                initial_sampling_output_buffer_index: 1,
                 pad1: 0,
                 pad2: 0,
             },
-            initialSamplingParams: ReSTIRDI_InitialSamplingParameters {
-                numPrimaryLocalLightSamples: 1,
-                numPrimaryInfiniteLightSamples: 1,
-                numPrimaryEnvironmentSamples: 1,
-                numPrimaryBrdfSamples: 0,
-                brdfCutoff: 0.0,
-                enableInitialVisibility: 1,
-                environmentMapImportanceSampling: 1,
-                localLightSamplingMode: 2,
+            initial_sampling_params: ReSTIRDI_InitialSamplingParameters {
+                num_primary_local_light_samples: 1,
+                num_primary_infinite_light_samples: 1,
+                num_primary_environment_samples: 1,
+                num_primary_brdf_samples: 0,
+                brdf_cutoff: 0.0,
+                enable_initial_visibility: 1,
+                environment_map_importance_sampling: 1,
+                local_light_sampling_mode: 2,
             },
-            temporalResamplingParams: ReSTIRDI_TemporalResamplingParameters {
-                temporalDepthThreshold: 0.1,
-                temporalNormalThreshold: 0.3,
-                maxHistoryLength: 100,
-                temporalBiasCorrection: 2,
-                enablePermutationSampling: 0,
-                permutationSamplingThreshold: 0.0,
-                enableBoilingFilter: 0,
-                boilingFilterStrength: 0.0,
-                discardInvisibleSamples: 1,
-                uniformRandomNumber: rand::random(),
+            temporal_resampling_params: ReSTIRDI_TemporalResamplingParameters {
+                temporal_depth_threshold: 0.1,
+                temporal_normal_threshold: 0.3,
+                max_history_length: 100,
+                temporal_bias_correction: 2,
+                enable_permutation_sampling: 0,
+                permutation_sampling_threshold: 0.0,
+                enable_boiling_filter: 0,
+                boiling_filter_strength: 0.0,
+                discard_invisible_samples: 1,
+                uniform_random_number: rand::random(),
                 pad2: 0,
                 pad3: 0,
             },
-            spatialResamplingParams: ReSTIRDI_SpatialResamplingParameters {
-                spatialDepthThreshold: 0.1,
-                spatialNormalThreshold: 0.3,
-                spatialBiasCorrection: 2,
-                numSpatialSamples: 3,
-                numDisocclusionBoostSamples: 2,
-                spatialSamplingRadius: 32.0,
-                neighborOffsetMask: NEIGHBOR_OFFSET_COUNT - 1,
-                discountNaiveSamples: 0,
+            spatial_resampling_params: ReSTIRDI_SpatialResamplingParameters {
+                spatial_depth_threshold: 0.1,
+                spatial_normal_threshold: 0.3,
+                spatial_bias_correction: 2,
+                num_spatial_samples: 3,
+                num_disocclusion_boost_samples: 2,
+                spatial_sampling_radius: 32.0,
+                neighbor_offset_mask: NEIGHBOR_OFFSET_COUNT - 1,
+                discount_naive_samples: 0,
             },
-            shadingParams: ReSTIRDI_ShadingParameters {
-                enableFinalVisibility: 0,
-                reuseFinalVisibility: 1,
-                finalVisibilityMaxAge: 10,
-                finalVisibilityMaxDistance: 1000.0,
-                enableDenoiserInputPacking: 1,
+            shading_params: ReSTIRDI_ShadingParameters {
+                enable_final_visibility: 0,
+                reuse_final_visibility: 1,
+                final_visibility_max_age: 10,
+                final_visibility_max_distance: 1000.0,
+                enable_denoiser_input_packing: 1,
                 pad1: 0,
                 pad2: 0,
                 pad3: 0,
             },
         },
-        lightBufferParams: RTXDI_LightBufferParameters {
-            localLightBufferRegion: RTXDI_LightBufferRegion {
-                firstLightIndex: 0,
-                numLights: model.lights,
+        light_buffer_params: RTXDI_LightBufferParameters {
+            local_light_buffer_region: RTXDI_LightBufferRegion {
+                first_light_index: 0,
+                num_lights: model.lights,
                 pad1: 0,
                 pad2: 0,
             },
-            infiniteLightBufferRegion: RTXDI_LightBufferRegion {
-                firstLightIndex: model.lights,
-                numLights: 0,
+            infinite_light_buffer_region: RTXDI_LightBufferRegion {
+                first_light_index: model.lights,
+                num_lights: 0,
                 pad1: 0,
                 pad2: 0,
             },
-            environmentLightParams: RTXDI_EnvironmentLightBufferParameters {
-                lightPresent: 1,
-                lightIndex: model.lights,
+            environment_light_params: RTXDI_EnvironmentLightBufferParameters {
+                light_present: 1,
+                light_index: model.lights,
                 pad1: 0,
                 pad2: 0,
             },
         },
     };
 
-    let gi_reservoir_buffer_barrier = vk::BufferMemoryBarrier::default()
-        .src_access_mask(AccessFlags::SHADER_WRITE | AccessFlags::SHADER_READ)
-        .dst_access_mask(AccessFlags::SHADER_WRITE | AccessFlags::SHADER_READ)
-        .src_queue_family_index(ctx.graphics_queue_family.index)
-        .dst_queue_family_index(ctx.graphics_queue_family.index)
-        .size(renderer.reservoirs.size)
-        .buffer(renderer.reservoirs.inner)
-        .offset(0);
-    let regir_memory_barrier = vk::BufferMemoryBarrier::default()
-        .src_access_mask(AccessFlags::SHADER_WRITE | AccessFlags::SHADER_READ)
-        .dst_access_mask(AccessFlags::SHADER_WRITE | AccessFlags::SHADER_READ)
-        .src_queue_family_index(ctx.graphics_queue_family.index)
-        .dst_queue_family_index(ctx.graphics_queue_family.index)
-        .size(renderer.ris_buffer.size)
-        .buffer(renderer.ris_buffer.inner)
-        .offset(0);
+    let prepare_lights = PrepareLightsTasks::new(
+        &mut ctx,
+        &model,
+        &resources,
+        (&sky_box.view, &skybox_sampler),
+    )
+    .unwrap();
 
-    let mut image_barriers = [vk::ImageMemoryBarrier::default()
-        .src_access_mask(AccessFlags::SHADER_WRITE | AccessFlags::SHADER_READ)
-        .dst_access_mask(AccessFlags::SHADER_WRITE | AccessFlags::SHADER_READ)
-        .src_queue_family_index(ctx.graphics_queue_family.index)
-        .dst_queue_family_index(ctx.graphics_queue_family.index)
-        .subresource_range(vk::ImageSubresourceRange {
-            aspect_mask: ImageAspectFlags::COLOR,
-            base_array_layer: 0,
-            base_mip_level: 0,
-            layer_count: 1,
-            level_count: 1,
-        })
-        .old_layout(ImageLayout::GENERAL)
-        .new_layout(ImageLayout::GENERAL); 11];
-
-    let local_lights_barrier = vk::ImageMemoryBarrier::default()
-        .src_access_mask(AccessFlags::SHADER_WRITE | AccessFlags::SHADER_READ)
-        .dst_access_mask(AccessFlags::SHADER_WRITE | AccessFlags::SHADER_READ)
-        .src_queue_family_index(ctx.graphics_queue_family.index)
-        .dst_queue_family_index(ctx.graphics_queue_family.index)
-        .subresource_range(vk::ImageSubresourceRange {
-            aspect_mask: ImageAspectFlags::COLOR,
-            base_array_layer: 0,
-            base_mip_level: 0,
-            layer_count: 1,
-            level_count: 1,
-        })
-        .old_layout(ImageLayout::GENERAL)
-        .new_layout(ImageLayout::GENERAL)
-        .image(renderer.local_lights_pdf.inner);
-
-    for i in 0..2 {
-        image_barriers[0 + 5 * i] =
-            image_barriers[0 + 5 * i].image(renderer.g_buffer[i].diffuse_albedo.image.inner);
-        image_barriers[1 + 5 * i] =
-            image_barriers[1 + 5 * i].image(renderer.g_buffer[i].normal.image.inner);
-        image_barriers[2 + 5 * i] =
-            image_barriers[2 + 5 * i].image(renderer.g_buffer[i].geo_normals.image.inner);
-        image_barriers[3 + 5 * i] =
-            image_barriers[3 + 5 * i].image(renderer.g_buffer[i].depth.image.inner);
-        image_barriers[4 + 5 * i] =
-            image_barriers[4 + 5 * i].image(renderer.g_buffer[i].motion_vectors.image.inner);
-        image_barriers[5 + 5 * i] =
-            image_barriers[5 + 5 * i].image(renderer.g_buffer[i].specular_rough.image.inner);
-    }
-
-    renderer
+    light_passes
         .uniform_buffer
         .copy_data_to_aligned_buffer(std::slice::from_ref(&g_const), 16)
         .unwrap();
 
-    let mut moved = false;
     let mut frame: u64 = 0;
-    let mut now = Instant::now();
     let mut last_time = Instant::now();
     let mut frame_time = Duration::new(0, 0);
+    let mut skybox_dirty = true;
 
-    #[allow(clippy::collapsible_match, clippy::single_match)]
+    #[allow(clippy::collapsible_match, clippy::single_match, deprecated)]
     event_loop
         .run(move |event, control_flow| {
             control_flow.set_control_flow(ControlFlow::Poll);
@@ -451,9 +389,9 @@ fn main() {
             match event {
                 Event::NewEvents(_) => {
                     controles = controles.reset();
-                    now = Instant::now();
+                    let now = Instant::now();
                     frame_time = now - last_time;
-                    last_time = now;
+                    last_time = Instant::now();
                     println!("{:?}", frame_time);
                 }
                 Event::WindowEvent { event, .. } => match event {
@@ -469,118 +407,63 @@ fn main() {
                     WindowEvent::RedrawRequested => {
                         frame += 1;
                         let new_cam = camera.update(&controles, frame_time);
-                        moved = new_cam != camera;
                         camera = new_cam;
 
-                        g_const.prevView = g_const.view;
+                        g_const.prev_view = g_const.view;
                         g_const.view = camera.planar_view_constants();
 
-                        renderer
-                            .uniform_buffer
-                            .copy_data_to_aligned_buffer(std::slice::from_ref(&g_const), 16)
-                            .unwrap();
+                        if let Err(e) = light_passes.update_uniform(&g_const) {
+                            log::error!("{}", e);
+                        }
 
                         ctx.render(|ctx, i| {
                             let cmd = &ctx.cmd_buffs[i as usize];
-                            // println!("{}", renderer.environment_pdf.mip_levels);
-
-                            unsafe {
-                                if frame == 1 {
-                                    renderer.prepare_lights_pipeline.execute_light_preperation(
-                                        ctx,
-                                        &renderer.light_tasks_buffer,
-                                        &renderer.geometry_to_light_buffer_and_staging,
-                                        &model,
-                                        cmd,
-                                    );
-
-                                    ctx.device.cmd_pipeline_barrier(
-                                        *cmd,
-                                        PipelineStageFlags::COMPUTE_SHADER,
-                                        PipelineStageFlags::COMPUTE_SHADER,
-                                        DependencyFlags::BY_REGION,
-                                        &[],
-                                        &[],
-                                        &[local_lights_barrier],
-                                    );
-
-                                    renderer
-                                        .environment_presampeling_pipeline
-                                        .execute_presampeling(&ctx, cmd, &[regir_memory_barrier]);
-                                    renderer.environment_mip_pipeline.execute_mip_generation(
-                                        &ctx,
-                                        cmd,
-                                        renderer.environment_pdf.extent.width,
-                                        renderer.environment_pdf.extent.height,
-                                        renderer.environment_pdf.mip_levels,
-                                    );
-                                }
-
-                                let frame_c = std::slice::from_raw_parts(
-                                    &frame as *const u64 as *const u8,
-                                    size_of::<u32>(),
-                                );
-
-                                renderer
-                                    .local_light_presampeling_pipeline
-                                    .execute_presampeling(ctx, cmd, &[regir_memory_barrier]);
-
-                                renderer.local_lights_mip_pipeline.execute_mip_generation(
+                            if frame == 1 {
+                                prepare_lights.execute(
                                     ctx,
                                     cmd,
-                                    renderer.local_lights_pdf.extent.width,
-                                    renderer.local_lights_pdf.extent.height,
-                                    renderer.local_lights_pdf.mip_levels,
+                                    &resources.light_buffer,
+                                    (
+                                        &resources.geometry_instance_to_light_buffer,
+                                        &resources.geometry_instance_to_light_buffer_staging,
+                                    ),
+                                    &model,
                                 );
-
-                                renderer
-                                    .raytracing_pipeline
-                                    .execute(&ctx, cmd, frame, frame_c);
-
-                                if RESAMPLING {
-                                    ctx.device.cmd_pipeline_barrier(
-                                        *cmd,
-                                        PipelineStageFlags::COMPUTE_SHADER,
-                                        PipelineStageFlags::RAY_TRACING_SHADER_KHR,
-                                        DependencyFlags::BY_REGION,
-                                        &[],
-                                        &[regir_memory_barrier, gi_reservoir_buffer_barrier],
-                                        &image_barriers,
-                                    );
-
-                                    renderer
-                                        .temporal_reuse_pipeline
-                                        .execute(&ctx, cmd, frame, frame_c);
-
-                                    ctx.device.cmd_pipeline_barrier(
-                                        *cmd,
-                                        PipelineStageFlags::RAY_TRACING_SHADER_KHR,
-                                        PipelineStageFlags::RAY_TRACING_SHADER_KHR,
-                                        DependencyFlags::BY_REGION,
-                                        &[],
-                                        &[gi_reservoir_buffer_barrier, regir_memory_barrier],
-                                        &[],
-                                    );
-
-                                    renderer
-                                        .spatial_reuse_pipeline
-                                        .execute(&ctx, cmd, frame, frame_c);
-                                }
-
-                                ctx.device.cmd_pipeline_barrier(
-                                    *cmd,
-                                    PipelineStageFlags::RAY_TRACING_SHADER_KHR,
-                                    PipelineStageFlags::FRAGMENT_SHADER,
-                                    DependencyFlags::BY_REGION,
-                                    &[],
-                                    &[gi_reservoir_buffer_barrier],
-                                    &image_barriers,
-                                );
-
-                                renderer
-                                    .post_proccesing_pipeline
-                                    .execute(ctx, cmd, frame_c, i, frame);
                             }
+                            let skybox_changed =
+                                light_passes.execute_presampeling(ctx, cmd, frame, skybox_dirty);
+                            if skybox_dirty {
+                                mip_environment.execute_mip_generation(
+                                    ctx,
+                                    cmd,
+                                    resources.environment_pdf_texture.image.extent.width,
+                                    resources.environment_pdf_texture.image.extent.height,
+                                    resources.environment_pdf_texture.image.mip_levels,
+                                );
+                                skybox_dirty = skybox_changed;
+                            }
+                            mip_lights.execute_mip_generation(
+                                ctx,
+                                cmd,
+                                resources.local_light_pdf_texture.image.extent.width,
+                                resources.local_light_pdf_texture.image.extent.height,
+                                resources.local_light_pdf_texture.image.mip_levels,
+                            );
+
+                            light_passes.execute(ctx, cmd, frame);
+                            post_process.execute(ctx, cmd, frame, i);
+                            ctx.pipeline_image_barriers(
+                                cmd,
+                                &[ImageBarrier {
+                                    image: &ctx.swapchain.images[i as usize].image,
+                                    old_layout: vk::ImageLayout::UNDEFINED,
+                                    new_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                                    src_access_mask: vk::AccessFlags2::NONE,
+                                    dst_access_mask: vk::AccessFlags2::SHADER_WRITE,
+                                    src_stage_mask: vk::PipelineStageFlags2::NONE,
+                                    dst_stage_mask: vk::PipelineStageFlags2::COMPUTE_SHADER,
+                                }],
+                            );
                         })
                         .unwrap();
                         window.request_redraw();

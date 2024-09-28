@@ -394,7 +394,7 @@ PolymorphicLightSample calcEnvironmentLightSample(in const float2 random, in con
     float3 sampleRadiance = self.radianceScale;
     if (self.textureIndex >= 0)
     {
-        sampleRadiance *= textureLod(skyBox, textureUV, 0).xyz;
+        sampleRadiance *= textureLod(SkyBox, textureUV, 0).xyz;
     }
 
     // Inf / NaN guard.

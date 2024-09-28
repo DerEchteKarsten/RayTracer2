@@ -1,8 +1,4 @@
-use std::{
-    fs::File,
-    io::BufReader,
-    mem::{size_of, size_of_val},
-};
+use std::mem::{size_of, size_of_val};
 
 use crate::{
     context::*,
@@ -10,9 +6,8 @@ use crate::{
 };
 use anyhow::Result;
 use ash::vk::{self, Packed24_8};
-use glam::{vec3, Mat4, Vec3, Vec4};
+use glam::{Mat4, Vec4};
 use gpu_allocator::MemoryLocation;
-use std::slice::from_ref;
 
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]

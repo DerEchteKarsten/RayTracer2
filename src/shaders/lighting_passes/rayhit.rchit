@@ -1,21 +1,16 @@
 #version 460
-#extension GL_EXT_ray_tracing : enable
-#extension GL_EXT_nonuniform_qualifier : enable
-#extension GL_EXT_debug_printf : enable
-#extension GL_GOOGLE_include_directive : enable
 
-#include "./common.glsl"
+#extension GL_GOOGLE_include_directive : enable
+#extension GL_EXT_ray_tracing : require
+
+#include "../common.glsl"
 
 layout(location = 0) rayPayloadInEXT Payload p;
 
+#include "RtxdiApplicationBridge.glsl"
+
 //layout(location = 1) rayPayloadEXT bool isShadowed;
-
 hitAttributeEXT vec2 attribs;
-
-layout(binding = 4, set = 0) readonly buffer Vertices { Vertex v[]; } vertices;
-layout(binding = 5, set = 0) readonly buffer Indices { uint i[]; } indices;
-layout(binding = 6, set = 0) readonly buffer GeometryInfos { GeometryInfo g[]; } geometryInfos;
-layout(binding = 7, set = 0) uniform sampler2D textures[];
 
 void main()
 {

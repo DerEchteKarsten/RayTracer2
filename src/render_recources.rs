@@ -2,13 +2,19 @@ use ash::vk::{self, BufferUsageFlags, ImageLayout, ImageUsageFlags, ImageView};
 use glam::UVec2;
 use gpu_allocator::MemoryLocation;
 
-use crate::{light_passes::{fill_neighbor_offset_buffer, ComputePdfTextureSize}, pipelines::CalculateReservoirBufferParameters, Buffer, ImageAndView, Model, Renderer, NEIGHBOR_OFFSET_COUNT, WINDOW_SIZE};
-
+use crate::{
+    light_passes::{
+        calculate_reservoir_buffer_parameters, compute_pdf_texture_size,
+        fill_neighbor_offset_buffer,
+    },
+    Buffer, ImageAndView, Model, Renderer, NEIGHBOR_OFFSET_COUNT, WINDOW_SIZE,
+};
 
 pub struct RenderResources {
     pub task_buffer: Buffer,
     pub light_buffer: Buffer,
     pub geometry_instance_to_light_buffer: Buffer,
+    pub geometry_instance_to_light_buffer_staging: Buffer,
     pub ris_buffer: Buffer,
     pub ris_light_data_buffer: Buffer,
     pub neighbor_offsets_buffer: Buffer,
@@ -25,6 +31,7 @@ pub struct RenderResources {
     pub diffuse_lighting: ImageAndView,
     pub specular_lighting: ImageAndView,
     pub temporal_sample_position: ImageAndView,
+    pub secondary_gbuffer: Buffer,
 }
 
 #[derive(Default)]
@@ -34,14 +41,11 @@ pub struct GBuffer {
     pub geo_normals: ImageAndView,
     pub diffuse_albedo: ImageAndView,
     pub specular_rough: ImageAndView,
-    pub luminance: ImageAndView,
+    pub emissive: ImageAndView,
 }
 
 impl GBuffer {
     fn new(ctx: &mut Renderer) -> Self {
-        let width = WINDOW_SIZE.x as u32;
-        let height = WINDOW_SIZE.y as u32;
-
         let depth = ctx
             .create_storage_image(
                 WINDOW_SIZE.x as u32,
@@ -77,11 +81,11 @@ impl GBuffer {
                 vk::Format::R32_UINT,
             )
             .unwrap();
-        let luminance = ctx
+        let emissive = ctx
             .create_storage_image(
                 WINDOW_SIZE.x as u32,
                 WINDOW_SIZE.y as u32,
-                vk::Format::R16G16_SFLOAT,
+                vk::Format::R16G16B16A16_SFLOAT,
             )
             .unwrap();
 
@@ -91,16 +95,16 @@ impl GBuffer {
             geo_normals,
             normal,
             specular_rough,
-            luminance,
+            emissive,
         }
     }
 }
 
 impl RenderResources {
-    fn new(ctx: &mut Renderer, model: &Model, skybox_size: UVec2) -> Self {
+    pub fn new(ctx: &mut Renderer, model: &Model, skybox_size: UVec2) -> Self {
         let reservoir_buffer_params =
-            CalculateReservoirBufferParameters(WINDOW_SIZE.x as u32, WINDOW_SIZE.y as u32);
-        let reservoir_buffer_size = reservoir_buffer_params.reservoirArrayPitch as u64 * 2 * 32;
+            calculate_reservoir_buffer_parameters(WINDOW_SIZE.x as u32, WINDOW_SIZE.y as u32);
+        let reservoir_buffer_size = reservoir_buffer_params.reservoir_array_pitch as u64 * 2 * 32;
 
         let task_buffer = ctx
             .create_buffer(
@@ -122,6 +126,14 @@ impl RenderResources {
             .create_buffer(
                 BufferUsageFlags::STORAGE_BUFFER | BufferUsageFlags::TRANSFER_DST,
                 MemoryLocation::GpuOnly,
+                model.geometry_infos.len() as u64,
+                None,
+            )
+            .unwrap();
+        let geometry_instance_to_light_buffer_staging = ctx
+            .create_buffer(
+                BufferUsageFlags::STORAGE_BUFFER | BufferUsageFlags::TRANSFER_SRC,
+                MemoryLocation::GpuToCpu,
                 model.geometry_infos.len() as u64,
                 None,
             )
@@ -184,7 +196,7 @@ impl RenderResources {
         let environment_pdf_texture_mips = ctx.create_image_views(&environment_pdf).unwrap();
         let environenvironment_pdf_view = ctx.create_image_view(&environment_pdf).unwrap();
 
-        let (width, height, mips) = ComputePdfTextureSize(model.lights);
+        let (width, height, mips) = compute_pdf_texture_size(model.lights);
 
         let local_lights_pdf = ctx
             .create_mipimage(
@@ -275,12 +287,23 @@ impl RenderResources {
             )
             .unwrap();
 
+        let secondary_gbuffer = ctx
+            .create_buffer(
+                BufferUsageFlags::STORAGE_BUFFER,
+                MemoryLocation::GpuOnly,
+                (12 + 4 + 8 + 4 + 4 + 12 + 4)
+                    * reservoir_buffer_params.reservoir_array_pitch as u64,
+                None,
+            )
+            .unwrap();
+
         Self {
             motion_vectors,
             g_buffers,
             task_buffer,
             light_buffer,
             geometry_instance_to_light_buffer,
+            geometry_instance_to_light_buffer_staging,
             ris_buffer,
             ris_light_data_buffer,
             neighbor_offsets_buffer,
@@ -295,6 +318,7 @@ impl RenderResources {
             diffuse_lighting,
             specular_lighting,
             temporal_sample_position,
+            secondary_gbuffer,
         }
     }
 }

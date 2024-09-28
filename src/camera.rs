@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use glam::{vec3, Affine3A, Mat3, Mat4, Quat, Vec3, Vec4};
+use glam::{vec3, Mat3, Mat4, Quat, Vec3};
 use winit::{
     event::{DeviceEvent, ElementState, Event, MouseButton, WindowEvent},
     keyboard::{KeyCode, PhysicalKey},
@@ -110,34 +110,34 @@ impl Camera {
     }
     pub fn planar_view_constants(&self) -> PlanarViewConstants {
         let window_size = glam::vec2(WINDOW_SIZE.x as f32, WINDOW_SIZE.y as f32);
-        let clipToWindowScale = glam::vec2(0.5 * window_size.x, -0.5 * window_size.y);
-        let clipToWindowBias = window_size * 0.5;
-        let windowToClipScale = 1.0 / clipToWindowScale;
+        let clip_to_window_scale = glam::vec2(0.5 * window_size.x, -0.5 * window_size.y);
+        let clip_to_window_bias = window_size * 0.5;
+        let window_to_clip_scale = 1.0 / clip_to_window_scale;
 
         PlanarViewConstants {
-            matWorldToView: self.view_matrix(),
-            matViewToClip: self.projection_matrix(),
-            matWorldToClip: self.projection_matrix() * self.view_matrix(),
-            matClipToView: self.projection_matrix().inverse(),
-            matViewToWorld: self.view_matrix().inverse(),
-            matClipToWorld: self.projection_matrix().inverse() * self.view_matrix().inverse(),
-            viewportOrigin: glam::vec2(0.0, 0.0),
-            viewportSize: window_size,
-            viewportSizeInv: 1.0 / window_size,
+            mat_world_to_view: self.view_matrix(),
+            mat_view_to_clip: self.projection_matrix(),
+            mat_world_to_clip: self.projection_matrix() * self.view_matrix(),
+            mat_clip_to_view: self.projection_matrix().inverse(),
+            mat_view_to_world: self.view_matrix().inverse(),
+            mat_clip_to_world: self.projection_matrix().inverse() * self.view_matrix().inverse(),
+            viewport_origin: glam::vec2(0.0, 0.0),
+            viewport_size: window_size,
+            viewport_size_inv: 1.0 / window_size,
 
-            clipToWindowScale,
-            clipToWindowBias,
+            clip_to_window_scale,
+            clip_to_window_bias,
 
-            windowToClipScale,
-            windowToClipBias: -clipToWindowBias * windowToClipScale,
+            window_to_clip_scale,
+            window_to_clip_bias: -clip_to_window_bias * window_to_clip_scale,
 
-            cameraDirectionOrPosition: glam::vec4(
+            camera_direction_or_position: glam::vec4(
                 self.position.x,
                 self.position.y,
                 self.position.z,
                 1.0,
             ),
-            pixelOffset: glam::vec2(0.0, 0.0),
+            pixel_offset: glam::vec2(0.0, 0.0),
         }
     }
 }
@@ -145,14 +145,14 @@ impl Camera {
 #[rustfmt::skip]
 pub fn perspective(fovy: f32, aspect: f32, near: f32, far: f32) -> Mat4 {
     
-    let yScale = 1.0 / f32::tan(0.5 * fovy);
-    let xScale = yScale / aspect;
-    let zScale = 1.0 / (far - near);
+    let y_scale = 1.0 / f32::tan(0.5 * fovy);
+    let x_scale = y_scale / aspect;
+    let z_scale = 1.0 / (far - near);
     return Mat4::from_cols_array(&[
-                xScale, 0.0, 0.0, 0.0,
-                0.0, yScale, 0.0, 0.0,
-                0.0, 0.0, -(near + far) * zScale, 1.0,
-                0.0, 0.0, -2.0 * near * far * zScale, 0.0
+                x_scale, 0.0, 0.0, 0.0,
+                0.0, y_scale, 0.0, 0.0,
+                0.0, 0.0, -(near + far) * z_scale, 1.0,
+                0.0, 0.0, -2.0 * near * far * z_scale, 0.0
             ]);
 }
 

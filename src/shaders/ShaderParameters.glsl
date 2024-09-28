@@ -42,6 +42,19 @@ struct PlanarViewConstants
     vec4      cameraDirectionOrPosition;
 };
 
+struct SecondaryGBufferData
+{
+    float3 worldPos;
+    uint normal;
+
+    uint2 throughputAndFlags;   // .x = throughput.rg as float16, .y = throughput.b as float16, flags << 16
+    uint diffuseAlbedo;         // R11G11B10_UFLOAT
+    uint specularAndRoughness;  // R8G8B8A8_Gamma_UFLOAT
+    
+    float3 emission;
+    float pdf;
+};
+
 struct ResamplingConstants
 {
     PlanarViewConstants view;

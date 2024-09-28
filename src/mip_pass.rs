@@ -1,9 +1,9 @@
 use std::ffi::CString;
 
+use crate::context::*;
 use anyhow::Result;
 use ash::vk::{self, PipelineCache, ShaderStageFlags};
 use glam::UVec2;
-use crate::context::*;
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -16,7 +16,7 @@ struct MipLevelPushConstants {
 pub struct GenerateMipsPass {
     handle: vk::Pipeline,
     descriptor: vk::DescriptorSet,
-    layout: vk::PipelineLayout
+    layout: vk::PipelineLayout,
 }
 
 impl GenerateMipsPass {
@@ -24,14 +24,14 @@ impl GenerateMipsPass {
         ctx: &mut Renderer,
         input_images: &[vk::ImageView],
         mips: u32,
-        environment_pdf: Option<(&vk::ImageView, &vk::Sampler)>,
+        environment: Option<(&vk::ImageView, &vk::Sampler)>,
     ) -> Result<Self> {
         let mut bindings = vec![vk::DescriptorSetLayoutBinding::default()
             .binding(0)
             .descriptor_count(32)
             .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
             .stage_flags(vk::ShaderStageFlags::COMPUTE)];
-        if environment_pdf.is_some() {
+        if environment.is_some() {
             bindings.push(
                 vk::DescriptorSetLayoutBinding::default()
                     .binding(1)
@@ -40,7 +40,7 @@ impl GenerateMipsPass {
                     .stage_flags(vk::ShaderStageFlags::COMPUTE),
             )
         }
-        let descriptor0_layout = ctx.create_descriptor_set_layout(&bindings, &[])?;
+        let descriptor0_layout = ctx.create_descriptor_set_layout(&bindings)?;
         let descriptor_layouts = [descriptor0_layout];
 
         let layout_info = vk::PipelineLayoutCreateInfo::default()
@@ -53,7 +53,7 @@ impl GenerateMipsPass {
 
         let layout = unsafe { ctx.device.create_pipeline_layout(&layout_info, None)? };
 
-        let path = if environment_pdf.is_some() {
+        let path = if environment.is_some() {
             "./src/shaders/env_mip_levels.comp.spv"
         } else {
             "./src/shaders/mip_levels.comp.spv"
@@ -76,20 +76,11 @@ impl GenerateMipsPass {
         };
 
         let pool = ctx
-            .create_descriptor_pool(
-                1,
-                &[
-                    vk::DescriptorPoolSize::default()
-                        .descriptor_count(32)
-                        .ty(vk::DescriptorType::STORAGE_IMAGE),
-                    vk::DescriptorPoolSize::default()
-                        .descriptor_count(1)
-                        .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER),
-                ],
-            )
+            .create_descriptor_pool(1, &calculate_pool_sizes(&[bindings.as_slice()]))
             .unwrap();
 
-        let descriptor_set0 = allocate_descriptor_set(&ctx.device, &pool, &descriptor0_layout).unwrap();
+        let descriptor_set0 =
+            allocate_descriptor_set(&ctx.device, &pool, &descriptor0_layout).unwrap();
 
         for i in 0..mips {
             let image_info = [vk::DescriptorImageInfo::default()
@@ -105,7 +96,7 @@ impl GenerateMipsPass {
             unsafe { ctx.device.update_descriptor_sets(&[write], &[]) };
         }
 
-        if let Some(environment) = environment_pdf {
+        if let Some(environment) = environment {
             let write = WriteDescriptorSet {
                 binding: 1,
                 kind: WriteDescriptorSetKind::CombinedImageSampler {
@@ -125,7 +116,7 @@ impl GenerateMipsPass {
     }
 
     pub fn execute_mip_generation(
-        self,
+        &self,
         ctx: &Renderer,
         cmd: &vk::CommandBuffer,
         source_width: u32,
@@ -133,7 +124,13 @@ impl GenerateMipsPass {
         mip_levels: u32,
     ) {
         unsafe {
-            ctx.memory_barrier(cmd, vk::PipelineStageFlags::ALL_COMMANDS, vk::PipelineStageFlags::COMPUTE_SHADER, vk::AccessFlags::SHADER_WRITE, vk::AccessFlags::SHADER_WRITE);
+            ctx.memory_barrier(
+                cmd,
+                vk::PipelineStageFlags::ALL_COMMANDS,
+                vk::PipelineStageFlags::COMPUTE_SHADER,
+                vk::AccessFlags::SHADER_WRITE,
+                vk::AccessFlags::SHADER_WRITE,
+            );
             ctx.device
                 .cmd_bind_pipeline(*cmd, vk::PipelineBindPoint::COMPUTE, self.handle);
             ctx.device.cmd_bind_descriptor_sets(
@@ -162,7 +159,7 @@ impl GenerateMipsPass {
                     &constants as *const _ as *const u8,
                     size_of::<MipLevelPushConstants>(),
                 );
-                
+
                 ctx.device.cmd_push_constants(
                     *cmd,
                     self.layout,
@@ -170,7 +167,7 @@ impl GenerateMipsPass {
                     0,
                     &constants,
                 );
-               
+
                 ctx.device.cmd_dispatch(
                     *cmd,
                     f32::ceil(width as f32 / 32.0) as u32,

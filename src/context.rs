@@ -2,7 +2,7 @@ use anyhow::Result;
 use ash::{
     ext::debug_utils,
     khr::{self, acceleration_structure, ray_tracing_pipeline},
-    vk::{self, ImageAspectFlags, ImageUsageFlags, ImageView},
+    vk::{self, ImageAspectFlags, ImageView},
     Device, Entry, Instance,
 };
 
@@ -12,20 +12,14 @@ use gpu_allocator::{
 };
 use image::{DynamicImage, GenericImageView};
 use log::debug;
-use raw_window_handle::{
-    HasRawDisplayHandle, HasRawWindowHandle, RawDisplayHandle, RawWindowHandle,
-};
+use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 use std::{
     borrow::BorrowMut,
     ffi::{c_char, CStr, CString},
     mem::{align_of, size_of, size_of_val},
     os::raw::c_void,
     ptr,
-    time::Instant,
 };
-// use raw_window_handle::{RawDisplayHandle, RawWindowHandle};
-use simple_logger::SimpleLogger;
-use std::slice::from_ref;
 
 pub const FRAMES_IN_FLIGHT: u32 = 1;
 
@@ -118,8 +112,8 @@ pub struct ImageAndView {
 
 impl<'a> Renderer<'a> {
     pub fn new(
-        window_handle: &dyn HasRawWindowHandle,
-        display_handle: &dyn HasRawDisplayHandle,
+        window_handle: &dyn HasWindowHandle,
+        display_handle: &dyn HasDisplayHandle,
         required_device_features: &DeviceFeatures,
         device_extensions: [&CStr; 10],
         window_width: u32,
@@ -147,10 +141,11 @@ impl<'a> Renderer<'a> {
             .map(|raw_name| raw_name.as_ptr())
             .collect();
 
-        let mut instance_extensions =
-            ash_window::enumerate_required_extensions(display_handle.raw_display_handle().unwrap())
-                .unwrap()
-                .to_vec();
+        let mut instance_extensions = ash_window::enumerate_required_extensions(
+            display_handle.display_handle().unwrap().into(),
+        )
+        .unwrap()
+        .to_vec();
 
         //#[cfg(debug_assertions)]
         instance_extensions.push(debug_utils::NAME.as_ptr());
@@ -188,7 +183,7 @@ impl<'a> Renderer<'a> {
                 )
                 .pfn_user_callback(Some(vulkan_debug_callback));
             let debug_utils_loader = debug_utils::Instance::new(&entry, &instance);
-            let debug_call_back = unsafe {
+            unsafe {
                 debug_utils_loader
                     .create_debug_utils_messenger(&debug_info, None)
                     .unwrap()
@@ -198,8 +193,8 @@ impl<'a> Renderer<'a> {
             ash_window::create_surface(
                 &entry,
                 &instance,
-                display_handle.raw_display_handle().unwrap(),
-                window_handle.raw_window_handle().unwrap(),
+                display_handle.display_handle().unwrap().into(),
+                window_handle.window_handle().unwrap().into(),
                 None,
             )
         }
@@ -234,7 +229,7 @@ impl<'a> Renderer<'a> {
                     | vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER,
             ),
         )?;
-        let mut allocator = Allocator::new(&AllocatorCreateDesc {
+        let allocator = Allocator::new(&AllocatorCreateDesc {
             instance: instance.clone(),
             device: device.clone(),
             physical_device: physical_device.handel,
@@ -572,9 +567,8 @@ impl<'a> Renderer<'a> {
     pub fn create_descriptor_set_layout(
         &self,
         bindings: &[vk::DescriptorSetLayoutBinding],
-        flags: &[vk::DescriptorBindingFlags],
     ) -> Result<vk::DescriptorSetLayout> {
-        create_descriptor_set_layout(&self.device, bindings, flags)
+        create_descriptor_set_layout(&self.device, bindings)
     }
 
     pub fn create_descriptor_pool(
@@ -612,7 +606,6 @@ impl<'a> Renderer<'a> {
     where
         F: FnOnce(&mut Renderer, u32),
     {
-        let last_time = Instant::now();
         let (image_index, frame_index) = {
             let frame_index: u64 = (self.frame + 1) % FRAMES_IN_FLIGHT as u64;
             let frame = &self.frames_in_flight[frame_index as usize];
@@ -887,11 +880,7 @@ impl<'a> Renderer<'a> {
             unsafe {
                 self.ray_tracing
                     .acceleration_structure_fn
-                    .cmd_build_acceleration_structures(
-                        *cmd_buffer,
-                        from_ref(&build_geo_info),
-                        from_ref(&as_ranges),
-                    )
+                    .cmd_build_acceleration_structures(*cmd_buffer, &[build_geo_info], &[as_ranges])
             };
         })?;
 
@@ -1209,13 +1198,8 @@ pub struct ImageBarrier<'a> {
 pub fn create_descriptor_set_layout(
     device: &Device,
     bindings: &[vk::DescriptorSetLayoutBinding],
-    flags: &[vk::DescriptorBindingFlags],
 ) -> Result<vk::DescriptorSetLayout> {
-    let mut dsl_info = vk::DescriptorSetLayoutCreateInfo::default().bindings(bindings);
-
-    let mut info = vk::DescriptorSetLayoutBindingFlagsCreateInfo::default().binding_flags(flags);
-    dsl_info = dsl_info.push_next(&mut info);
-
+    let dsl_info = vk::DescriptorSetLayoutCreateInfo::default().bindings(bindings);
     let res = unsafe { device.create_descriptor_set_layout(&dsl_info, None)? };
 
     Ok(res)
@@ -2024,7 +2008,7 @@ impl Fence {
     pub fn wait(&self, device: &Device, timeout: Option<u64>) -> Result<()> {
         let timeout = timeout.unwrap_or(std::u64::MAX);
 
-        unsafe { device.wait_for_fences(from_ref(&self.handel), true, timeout)? };
+        unsafe { device.wait_for_fences(&[self.handel], true, timeout)? };
 
         Ok(())
     }

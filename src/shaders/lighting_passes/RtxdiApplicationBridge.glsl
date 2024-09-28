@@ -1,101 +1,79 @@
 #ifndef RTXDI_APPLICATION_BRIDGE_HLSLI
 #define RTXDI_APPLICATION_BRIDGE_HLSLI
-#define RTXDI_GI_ALLOWED_BIAS_CORRECTION RTXDI_BIAS_CORRECTION_RAY_TRACED
-const bool kSpecularOnly = false;
+#extension GL_EXT_nonuniform_qualifier : enable
+#extension GL_EXT_scalar_block_layout : enable
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+#extension GL_EXT_buffer_reference2 : require
+#extension GL_EXT_debug_printf : enable
+#extension GL_EXT_shader_explicit_arithmetic_types : enable
+#define RTXDI_GLSL
 
-#include "ShaderParameters.glsl"
-#include "GBufferHelpers.glsl"
-#include "packing.glsl"
-#include "rtxdi/ReSTIRGIParameters.h"
+// #define RTXDI_GI_ALLOWED_BIAS_CORRECTION RTXDI_BIAS_CORRECTION_RAY_TRACED
 
-layout(binding = 0, set = 2, r32f) uniform readonly image2D t_PrevGBufferDepth;
-layout(binding = 1, set = 2, r32ui) uniform readonly uimage2D t_PrevGBufferNormals;
-layout(binding = 2, set = 2, r32ui) uniform readonly uimage2D t_PrevGBufferGeoNormals;
-layout(binding = 3, set = 2, r32ui) uniform readonly uimage2D t_PrevGBufferDiffuseAlbedo;
-layout(binding = 4, set = 2, r32ui) uniform readonly uimage2D t_PrevGBufferSpecularRough;
+#include "../ShaderParameters.glsl"
+#include "../GBufferHelpers.glsl"
+#include "../packing.glsl"
+#include "../rtxdi/ReSTIRGIParameters.h"
 
-layout(binding = 0, set = 1, r32f) uniform  image2D u_GBufferDepth;
-layout(binding = 1, set = 1, r32ui) uniform  uimage2D u_GBufferNormals;
-layout(binding = 2, set = 1, r32ui) uniform  uimage2D u_GBufferGeoNormals;
-layout(binding = 3, set = 1, r32ui) uniform  uimage2D u_GBufferDiffuseAlbedo;
-layout(binding = 4, set = 1, r32ui) uniform  uimage2D u_GBufferSpecularRough;
-layout(binding = 5, set = 1, rgba32f) uniform  image2D u_MotionVectors;
-
-#ifndef EXCLUDE_PUSH_CONSTANT
 layout( push_constant ) uniform Frame {
 	uint frame;
 } f;
-#else
-struct {
-    uint frame;
-} f = {0};
-#endif
 
-#if !FINAL_SHADING
-    layout(binding = 8, set = 0) uniform sampler2D skyBox;
-#else
-    layout(binding = 2, set = 0) uniform sampler2D skyBox;
-#endif
+layout(binding = 0, set = 2, r32f) uniform readonly image2D PrevGBufferDepth;
+layout(binding = 1, set = 2, r32ui) uniform readonly uimage2D PrevGBufferNormals;
+layout(binding = 2, set = 2, r32ui) uniform readonly uimage2D PrevGBufferGeoNormals;
+layout(binding = 3, set = 2, r32ui) uniform readonly uimage2D PrevGBufferDiffuseAlbedo;
+layout(binding = 4, set = 2, r32ui) uniform readonly uimage2D PrevGBufferSpecularRough;
 
-#include "PolymorphicLight.glsl"
-
-#if !FINAL_SHADING && !PREPROSSES
-    layout(binding = 0, set = 0) uniform accelerationStructureEXT SceneBVH;
-    layout(binding = 1, set = 0) uniform Uniform {ResamplingConstants g_Const;};
-    layout(binding = 2, set = 0) buffer NeighborsBuffer {vec2 neighbors[];};
-    layout(binding = 3, set = 0) buffer ReservoirBuffer {RTXDI_PackedGIReservoir reservoirs[];};
-
-    layout(binding = 9, set = 0) uniform sampler2D t_EnvironmentPdfTexture;
-    layout(binding = 10, set = 0) uniform sampler2D t_LocalLightPdfTexture;
-    layout(binding = 11, set = 0) buffer DIReservoirBuffer {RTXDI_PackedDIReservoir light_reservoirs[];};
-    layout(binding = 12, set = 0) buffer LightInfoBuffer {RAB_LightInfo t_LightDataBuffer[];};
-    layout(binding = 13, set = 0) buffer RisLightDataBuffer {uvec4 u_RisLightDataBuffer[];};
-    layout(binding = 14, set = 0) buffer RisBuffer {uvec2 u_RisBuffer[];};
-    layout(binding = 15, set = 0) buffer GeomToLight {uint t_GeometryInstanceToLight[];};
-#endif
-
-#if PREPROSSES
-    RTXDI_PackedGIReservoir reservoirs[1];
-    layout(binding = 0, set = 0) buffer DIReservoirBuffer {RTXDI_PackedDIReservoir light_reservoirs[];};
-    layout(binding = 1, set = 0) buffer LightInfoBuffer {RAB_LightInfo t_LightDataBuffer[];};
-    layout(binding = 2, set = 0) buffer RisLightDataBuffer {uvec4 u_RisLightDataBuffer[];};
-    layout(binding = 3, set = 0) buffer RisBuffer {uvec2 u_RisBuffer[];};
-    layout(binding = 4, set = 0) uniform sampler2D t_EnvironmentPdfTexture;
-    layout(binding = 5, set = 0) uniform sampler2D t_LocalLightPdfTexture;
-    layout(binding = 6, set = 0) uniform Uniform {ResamplingConstants g_Const;};
-#endif
-
-#if FINAL_SHADING
-    layout(binding = 0, set = 0) buffer TemporalReservoirBuffer {RTXDI_PackedGIReservoir reservoirs[];};
-    layout(binding = 1, set = 0) uniform Uniform {ResamplingConstants g_Const;};
-    layout(binding = 3, set = 0) buffer DIReservoirBuffer {RTXDI_PackedDIReservoir light_reservoirs[];};
-    layout(binding = 4, set = 0) buffer LightInfoBuffer {RAB_LightInfo t_LightDataBuffer[];};
-    layout(binding = 5, set = 0) buffer RisLightDataBuffer {uvec4 u_RisLightDataBuffer[];};
-    layout(binding = 6, set = 0) buffer RisBuffer {uvec2 u_RisBuffer[];};
-#endif
+layout(binding = 0, set = 1, r32f) uniform  image2D GBufferDepth;
+layout(binding = 1, set = 1, r32ui) uniform  uimage2D GBufferNormals;
+layout(binding = 2, set = 1, r32ui) uniform  uimage2D GBufferGeoNormals;
+layout(binding = 3, set = 1, r32ui) uniform  uimage2D GBufferDiffuseAlbedo;
+layout(binding = 4, set = 1, r32ui) uniform  uimage2D GBufferSpecularRough;
 
 
-#define RTXDI_RIS_BUFFER u_RisBuffer 
+layout(binding = 0, set = 0, rgba32f) uniform  image2D MotionVectors;
+layout(binding = 1, set = 0) uniform accelerationStructureEXT SceneBVH;
+layout(binding = 2, set = 0) uniform Uniform {ResamplingConstants g_Const;};
+layout(binding = 3, set = 0) readonly buffer Vertices { Vertex v[]; } vertices;
+layout(binding = 4, set = 0) readonly buffer Indices { uint i[]; } indices;
+layout(binding = 5, set = 0) readonly buffer GeometryInfos { GeometryInfo g[]; } geometryInfos;
+layout(binding = 6, set = 0) uniform sampler2D textures[];
+layout(binding = 7, set = 0) uniform sampler2D SkyBox;
+#include "../PolymorphicLight.glsl"
+layout(binding = 8, set = 0) buffer LightInfoBuffer {RAB_LightInfo LightDataBuffer[];};
+layout(binding = 9, set = 0) buffer NeighborsBuffer {vec2 Neighbors[];};
+layout(binding = 10, set = 0) uniform sampler2D EnvironmentPdfTexture;
+layout(binding = 11, set = 0) uniform sampler2D LocalLightPdfTexture;
+layout(binding = 12, set = 0) buffer GeomToLight {uint GeometryInstanceToLight[];};
+layout(binding = 13, set = 0) buffer DIReservoirBuffer {RTXDI_PackedDIReservoir DIReservoirs[];};
+layout(binding = 14, set = 0, rgba16f) uniform image2D DiffuseLighting;
+layout(binding = 15, set = 0, rgba16f) uniform image2D SpecularLighting;
+layout(binding = 16, set = 0, rg16i) uniform iimage2D TemporalSamplePositions;
+layout(binding = 17, set = 0) buffer ReservoirBuffer {RTXDI_PackedGIReservoir GIReservoirs[];};
+layout(binding = 18, set = 0) buffer risBuffer {uvec2 RisBuffer[];};
+layout(binding = 19, set = 0) buffer risLightDataBuffer {uvec4 RisLightDataBuffer[];};
+layout(binding = 20, set = 0) buffer secondaryGBuffer {SecondaryGBufferData SecondaryGBuffer[];};
 
-#define RTXDI_GI_RESERVOIR_BUFFER reservoirs
-#include "rtxdi/GIReservoir.hlsli"
+#define RTXDI_RIS_BUFFER RisBuffer 
+#define RTXDI_GI_RESERVOIR_BUFFER GIReservoirs
+#define RTXDI_NEIGHBOR_OFFSETS_BUFFER Neighbors
+#define RTXDI_LIGHT_RESERVOIR_BUFFER DIReservoirs
 
-#define RTXDI_NEIGHBOR_OFFSETS_BUFFER neighbors
-#define RTXDI_LIGHT_RESERVOIR_BUFFER light_reservoirs
+#define PolymorphicLightInfo RAB_LightInfo;
+#define RandomSamplerState RAB_RandomSamplerState;
 
-#include "Helpers.glsl"
-
-// A surface with enough information to evaluate BRDFs
-void trace(RayDesc ray) {
-    #if !PREPROSSES
-    #if !FINAL_SHADING
-    traceRayEXT(SceneBVH, gl_RayFlagsOpaqueEXT, 0xff, 0, 0, 0, ray.Origin, ray.TMin, ray.Direction, ray.TMax, 0);
-    #endif
-    #endif
-}
-
+#include "../rtxdi/GIReservoir.hlsli"
+#include "../Helpers.glsl"
 
 const bool environmentMapImportanceSampling = true;
+const bool kSpecularOnly = false;
+
+void trace(RayDesc ray) {
+    #ifndef COMPUTE
+    traceRayEXT(SceneBVH, gl_RayFlagsOpaqueEXT, 0xff, 0, 0, 0, ray.Origin, ray.TMin, ray.Direction, ray.TMax, 0);
+    #endif
+}
 
 struct RAB_Surface
 {
@@ -118,9 +96,6 @@ struct RAB_LightSample
     float solidAnglePdf;
     PolymorphicLightType lightType;
 };
-
-#define PolymorphicLightInfo RAB_LightInfo;
-#define RandomSamplerState RAB_RandomSamplerState;
 
 
 vec3 worldToTangent(RAB_Surface surface, vec3 w)
@@ -284,7 +259,6 @@ int2 RAB_ClampSamplePositionIntoView(int2 pixelPosition, bool previousFrame)
 
     return pixelPosition;
 }
-#if !FINAL_SHADING
 RAB_Surface GetPrevGBufferSurface(
     ivec2 pixelPosition, 
     PlanarViewConstants view
@@ -295,15 +269,15 @@ RAB_Surface GetPrevGBufferSurface(
     if (pixelPosition.x >= view.viewportSize.x || pixelPosition.y >= view.viewportSize.y)
         return surface;
 
-    surface.viewDepth = imageLoad(t_PrevGBufferDepth, pixelPosition).r;
+    surface.viewDepth = imageLoad(PrevGBufferDepth, pixelPosition).r;
 
     if(surface.viewDepth == BACKGROUND_DEPTH)
         return surface;
 
-    surface.normal = octToNdirUnorm32(imageLoad(t_PrevGBufferNormals, pixelPosition).r);
-    surface.geoNormal = octToNdirUnorm32(imageLoad(t_PrevGBufferGeoNormals, pixelPosition).r);
-    surface.diffuseAlbedo = Unpack_R11G11B10_UFLOAT(imageLoad(t_PrevGBufferDiffuseAlbedo, pixelPosition).r).rgb;
-    vec4 specularRough = Unpack_R8G8B8A8_Gamma_UFLOAT(imageLoad(t_PrevGBufferSpecularRough, pixelPosition).r);
+    surface.normal = octToNdirUnorm32(imageLoad(PrevGBufferNormals, pixelPosition).r);
+    surface.geoNormal = octToNdirUnorm32(imageLoad(PrevGBufferGeoNormals, pixelPosition).r);
+    surface.diffuseAlbedo = Unpack_R11G11B10_UFLOAT(imageLoad(PrevGBufferDiffuseAlbedo, pixelPosition).r).rgb;
+    vec4 specularRough = Unpack_R8G8B8A8_Gamma_UFLOAT(imageLoad(PrevGBufferSpecularRough, pixelPosition).r);
     surface.specularF0 = specularRough.rgb;
     surface.roughness = specularRough.a;
     surface.worldPos = viewDepthToWorldPos(view, pixelPosition, surface.viewDepth);
@@ -312,7 +286,6 @@ RAB_Surface GetPrevGBufferSurface(
 
     return surface;
 }
-#endif
 
 
 RAB_Surface GetGBufferSurface(
@@ -325,15 +298,15 @@ RAB_Surface GetGBufferSurface(
     if (pixelPosition.x >= view.viewportSize.x || pixelPosition.y >= view.viewportSize.y)
         return surface;
 
-    surface.viewDepth = imageLoad(u_GBufferDepth, pixelPosition).r;
+    surface.viewDepth = imageLoad(GBufferDepth, pixelPosition).r;
 
     if(surface.viewDepth == BACKGROUND_DEPTH)
         return surface;
 
-    surface.normal = octToNdirUnorm32(imageLoad(u_GBufferNormals, pixelPosition).r);
-    surface.geoNormal = octToNdirUnorm32(imageLoad(u_GBufferGeoNormals, pixelPosition).r);
-    surface.diffuseAlbedo = Unpack_R11G11B10_UFLOAT(imageLoad(u_GBufferDiffuseAlbedo, pixelPosition).r).rgb;
-    vec4 specularRough = Unpack_R8G8B8A8_Gamma_UFLOAT(imageLoad(u_GBufferSpecularRough, pixelPosition).r);
+    surface.normal = octToNdirUnorm32(imageLoad(GBufferNormals, pixelPosition).r);
+    surface.geoNormal = octToNdirUnorm32(imageLoad(GBufferGeoNormals, pixelPosition).r);
+    surface.diffuseAlbedo = Unpack_R11G11B10_UFLOAT(imageLoad(GBufferDiffuseAlbedo, pixelPosition).r).rgb;
+    vec4 specularRough = Unpack_R8G8B8A8_Gamma_UFLOAT(imageLoad(GBufferSpecularRough, pixelPosition).r);
     surface.specularF0 = specularRough.rgb;
     surface.roughness = specularRough.a;
     surface.worldPos = viewDepthToWorldPos(view, pixelPosition, surface.viewDepth);
@@ -400,12 +373,10 @@ float RAB_GetSurfaceLinearDepth(RAB_Surface surface)
 // for different resampling passes, which is important for image quality.
 // In general, a high quality RNG is critical to get good results from ReSTIR.
 // A table-based blue noise RNG dose not provide enough entropy, for example.
-#if !FINAL_SHADING
 RAB_RandomSamplerState RAB_InitRandomSampler(uint2 index, uint pass)
 {
     return initRandomSampler(index, f.frame + pass * 13);
 }
-#endif
 
 // Draws a random number X from the sampler, so that (0 <= X < 1).
 float RAB_GetNextRandom(inout RAB_RandomSamplerState rng)
@@ -421,8 +392,6 @@ float2 RAB_GetEnvironmentMapRandXYFromDir(float3 worldDir)
 
 // Computes the probability of a particular direction being sampled from the environment map
 // relative to all the other possible directions, based on the environment map pdf texture.
-#ifndef REUSE
-#if !FINAL_SHADING
 float RAB_EvaluateEnvironmentMapSamplingPdf(float3 L)
 {
     if (!environmentMapImportanceSampling)
@@ -432,10 +401,10 @@ float RAB_EvaluateEnvironmentMapSamplingPdf(float3 L)
 
     uint2 pdfTextureSize = g_Const.environmentPdfTextureSize.xy;
     uint2 texelPosition = uint2(pdfTextureSize * uv);
-    float texelValue = texture(t_EnvironmentPdfTexture, ivec2(texelPosition)).r;
+    float texelValue = texture(EnvironmentPdfTexture, ivec2(texelPosition)).r;
     
     int lastMipLevel = max(0, int(floor(log2(max(pdfTextureSize.x, pdfTextureSize.y)))));
-    float averageValue = textureLod(t_EnvironmentPdfTexture, ivec2(0, 0), lastMipLevel).x;
+    float averageValue = textureLod(EnvironmentPdfTexture, ivec2(0, 0), lastMipLevel).x;
 
     // The single texel in the last mip level is effectively the average of all texels in mip 0,
     // padded to a square shape with zeros. So, in case the PDF texture has a 2:1 aspect ratio,
@@ -450,10 +419,10 @@ float RAB_EvaluateLocalLightSourcePdf(uint lightIndex)
 {
     uint2 pdfTextureSize = g_Const.localLightPdfTextureSize.xy;
     uint2 texelPosition = RTXDI_LinearIndexToZCurve(lightIndex);
-    float texelValue = texture(t_LocalLightPdfTexture, ivec2(texelPosition)).r;
+    float texelValue = texture(LocalLightPdfTexture, ivec2(texelPosition)).r;
 
     int lastMipLevel = max(0, int(floor(log2(max(pdfTextureSize.x, pdfTextureSize.y)))));
-    float averageValue = textureLod(t_LocalLightPdfTexture, ivec2(0, 0), lastMipLevel).x;
+    float averageValue = textureLod(LocalLightPdfTexture, ivec2(0, 0), lastMipLevel).x;
 
     // See the comment at 'sum' in RAB_EvaluateEnvironmentMapSamplingPdf.
     // The same texture shape considerations apply to local lights.
@@ -461,8 +430,6 @@ float RAB_EvaluateLocalLightSourcePdf(uint lightIndex)
 
     return texelValue / sum;
 }
-#endif
-#endif
 
 
 bool RAB_GetSurfaceBrdfSample(RAB_Surface surface, inout RAB_RandomSamplerState rng, out float3 dir)
@@ -586,15 +553,15 @@ float RAB_LightSampleSolidAnglePdf(RAB_LightSample lightSample)
 // Loads polymorphic light data from the global light buffer.
 RAB_LightInfo RAB_LoadLightInfo(uint index, bool previousFrame)
 {
-    return t_LightDataBuffer[index];
+    return LightDataBuffer[index];
 }
 
 // Loads triangle light data from a tile produced by the presampling pass.
 RAB_LightInfo RAB_LoadCompactLightInfo(uint linearIndex)
 {
     uvec4 packedData1, packedData2;
-    packedData1 = u_RisLightDataBuffer[linearIndex * 2 + 0];
-    packedData2 = u_RisLightDataBuffer[linearIndex * 2 + 1];
+    packedData1 = RisLightDataBuffer[linearIndex * 2 + 0];
+    packedData2 = RisLightDataBuffer[linearIndex * 2 + 1];
     return unpackCompactLightInfo(packedData1, packedData2);
 }
 
@@ -608,8 +575,8 @@ bool RAB_StoreCompactLightInfo(uint linearIndex, RAB_LightInfo lightInfo)
     if (!packCompactLightInfo(lightInfo, data1, data2))
         return false;
 
-    u_RisLightDataBuffer[linearIndex * 2 + 0] = data1;
-    u_RisLightDataBuffer[linearIndex * 2 + 1] = data2;
+    RisLightDataBuffer[linearIndex * 2 + 0] = data1;
+    RisLightDataBuffer[linearIndex * 2 + 1] = data2;
 
     return true;
 }
@@ -646,28 +613,23 @@ bool RAB_AreMaterialsSimilar(RAB_Surface a, RAB_Surface b)
     return true;
 }
 
-#ifndef REUSE
 float3 GetEnvironmentRadiance(float3 direction)
 {
     float2 uv = directionToEquirectUV(direction);
-    vec3 environmentRadiance = texture(skyBox, uv).rgb;
+    vec3 environmentRadiance = texture(SkyBox, uv).rgb;
 
     return environmentRadiance;
 }
-#endif
 
-#if !FINAL_SHADING
-#if !PREPROSSES
 uint getLightIndex(uint geometryIndex, uint primitiveIndex)
 {
     uint lightIndex = RTXDI_InvalidLightIndex;
     uint geometryInstanceIndex = geometryIndex;
-    lightIndex = t_GeometryInstanceToLight[geometryInstanceIndex];
+    lightIndex = GeometryInstanceToLight[geometryInstanceIndex];
     if (lightIndex != RTXDI_InvalidLightIndex)
       lightIndex += primitiveIndex;
     return lightIndex;
 }
-#endif
 // Return true if anything was hit. If false, RTXDI will do environment map sampling
 // o_lightIndex: If hit, must be a valid light index for RAB_LoadLightInfo, if no local light was hit, must be RTXDI_InvalidLightIndex
 // randXY: The randXY that corresponds to the hit location and is the same used for RAB_SamplePolymorphicLight
@@ -686,12 +648,8 @@ bool RAB_TraceRayForLocalLight(float3 origin, float3 direction, float tMin, floa
     bool hitAnything;
 
     trace(ray);
-    #if !PREPROSSES
-    #ifndef REUSE
     hitUV = p.uv;
     o_lightIndex = getLightIndex(p.geometryIndex, p.primitiveId);
-    #endif
-    #endif
 
     if (o_lightIndex != RTXDI_InvalidLightIndex)
     {
@@ -700,7 +658,6 @@ bool RAB_TraceRayForLocalLight(float3 origin, float3 direction, float tMin, floa
 
     return hitAnything;
 }
-#endif
 
 // Check if the sample is fine to be used as a valid spatial sample.
 // This function also be able to clamp the value of the Jacobian.
@@ -731,8 +688,6 @@ float RAB_GetGISampleTargetPdfForSurface(float3 samplePosition, float3 sampleRad
 // between the surface and the light sample. Conservative means if unsure, assume the light is visible.
 // Significant differences between this conservative visibility and the final one will result in more noise.
 // This function is used in the spatial resampling functions for ray traced bias correction.
-#if !FINAL_SHADING
-
 bool RAB_GetConservativeVisibility(RAB_Surface surface, float3 samplePosition)
 {
     return GetConservativeVisibility(surface, samplePosition);
@@ -745,6 +700,5 @@ bool RAB_GetTemporalConservativeVisibility(RAB_Surface currentSurface, RAB_Surfa
 {
     return GetConservativeVisibility(previousSurface, samplePosition);
 }
-#endif
 
 #endif // RTXDI_APPLICATION_BRIDGE_HLSLI

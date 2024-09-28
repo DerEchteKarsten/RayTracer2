@@ -2,14 +2,16 @@ use std::ffi::CString;
 
 use anyhow::Result;
 use ash::vk::{
-    self, AccessFlags, BufferUsageFlags, DescriptorType, ImageLayout, ImageUsageFlags, ImageView,
-    PipelineBindPoint, PipelineCache, PipelineStageFlags, ShaderStageFlags,
+    self, AccessFlags, DescriptorType, ImageView, PipelineBindPoint, PipelineCache,
+    PipelineStageFlags, ShaderStageFlags,
 };
-use glam::UVec2;
 use gpu_allocator::MemoryLocation;
 
 use crate::{
-    context::*, pipelines::CalculateReservoirBufferParameters, render_recources::RenderResources, shader_params::GConst, Model, NEIGHBOR_OFFSET_COUNT, WINDOW_SIZE
+    context::*,
+    render_recources::RenderResources,
+    shader_params::{GConst, RTXDI_ReservoirBufferParameters},
+    Model, RTXDI_RESERVOIR_BLOCK_SIZE, WINDOW_SIZE,
 };
 
 struct RayTracingPass {
@@ -62,7 +64,7 @@ impl RayTracingPass {
             handle,
         })
     }
-    fn execute(&self, ctx: &mut Renderer, cmd: &vk::CommandBuffer) {
+    fn execute(&self, ctx: &Renderer, cmd: &vk::CommandBuffer) {
         unsafe {
             ctx.device
                 .cmd_bind_pipeline(*cmd, PipelineBindPoint::RAY_TRACING_KHR, self.handle);
@@ -105,9 +107,10 @@ impl ComputePass {
 
         Ok(Self { handle: handel[0] })
     }
-    fn execute(&self, ctx: &mut Renderer, cmd: &vk::CommandBuffer, x: u32, y: u32, z: u32) {
+    fn execute(&self, ctx: &Renderer, cmd: &vk::CommandBuffer, x: u32, y: u32, z: u32) {
         unsafe {
-            ctx.device.cmd_bind_pipeline(*cmd, vk::PipelineBindPoint::COMPUTE, self.handle);
+            ctx.device
+                .cmd_bind_pipeline(*cmd, vk::PipelineBindPoint::COMPUTE, self.handle);
             ctx.device.cmd_dispatch(*cmd, x, y, z);
         }
     }
@@ -122,6 +125,7 @@ pub struct LightPasses {
     di_fused_resampling_pass: RayTracingPass,
 
     brdf_ray_tracing_pass: RayTracingPass,
+    shade_secondary_surfaces_pass: RayTracingPass,
     gi_temporal_resampling_pass: RayTracingPass,
     gi_spatial_resampling_pass: RayTracingPass,
     gi_final_shading_pass: RayTracingPass,
@@ -131,8 +135,7 @@ pub struct LightPasses {
     current_set: vk::DescriptorSet,
     prev_set: vk::DescriptorSet,
 
-    uniform_buffer: Buffer,
-    unifrom_data: GConst,
+    pub uniform_buffer: Buffer,
 }
 
 impl LightPasses {
@@ -158,8 +161,6 @@ impl LightPasses {
                 .descriptor_type(DescriptorType::STORAGE_IMAGE), // Prev Diffuse Albedo
             vk::DescriptorSetLayoutBinding::default()
                 .descriptor_type(DescriptorType::STORAGE_IMAGE), // Prev Specular Rough
-            vk::DescriptorSetLayoutBinding::default()
-                .descriptor_type(DescriptorType::STORAGE_IMAGE), // Restir Luminance
         ];
         bindings = bindings
             .iter_mut()
@@ -214,6 +215,8 @@ impl LightPasses {
                 .descriptor_type(DescriptorType::STORAGE_BUFFER), // RIS Buffer
             vk::DescriptorSetLayoutBinding::default()
                 .descriptor_type(DescriptorType::STORAGE_BUFFER), // RIS Light Data
+            vk::DescriptorSetLayoutBinding::default()
+                .descriptor_type(DescriptorType::STORAGE_BUFFER), // Secondary GBuffer
         ];
         bindings = bindings
             .iter_mut()
@@ -223,12 +226,11 @@ impl LightPasses {
         bindings
     }
 
-    fn new(
+    pub fn new(
         ctx: &mut Renderer,
         model: &Model,
         top_as: &AccelerationStructure,
         resources: &RenderResources,
-        unifrom_data: GConst,
         skybox_view: &ImageView,
     ) -> Self {
         unsafe {
@@ -251,14 +253,10 @@ impl LightPasses {
                 .unwrap();
 
             let static_bindings = Self::get_static_descriptor_bindings(model.textures.len() as u32);
-            let static_set_layout = ctx
-                .create_descriptor_set_layout(&static_bindings, &[])
-                .unwrap();
+            let static_set_layout = ctx.create_descriptor_set_layout(&static_bindings).unwrap();
 
             let dynamic_bindings = Self::get_dynamic_descriptor_bindings();
-            let dynamic_set_layout = ctx
-                .create_descriptor_set_layout(&dynamic_bindings, &[])
-                .unwrap();
+            let dynamic_set_layout = ctx.create_descriptor_set_layout(&dynamic_bindings).unwrap();
 
             let set_layouts = &[static_set_layout, dynamic_set_layout, dynamic_set_layout];
 
@@ -361,7 +359,10 @@ impl LightPasses {
                     buffer: resources.ris_buffer.inner,
                 },
                 WriteDescriptorSetKind::StorageBuffer {
-                    buffer: resources.light_buffer.inner,
+                    buffer: resources.ris_light_data_buffer.inner,
+                },
+                WriteDescriptorSetKind::StorageBuffer {
+                    buffer: resources.secondary_gbuffer.inner,
                 },
             ];
 
@@ -373,6 +374,7 @@ impl LightPasses {
                     kind: b,
                 })
                 .collect::<Vec<WriteDescriptorSet>>();
+            update_descriptor_sets(ctx, &static_set, static_writes.as_slice());
 
             for i in 0..2 as usize {
                 let dynamic_writes = vec![
@@ -478,6 +480,13 @@ impl LightPasses {
                     false,
                 )
                 .unwrap(),
+                shade_secondary_surfaces_pass: RayTracingPass::new(
+                    ctx,
+                    layout,
+                    "./src/shade_secondary_surfaces.comp.spv",
+                    false,
+                )
+                .unwrap(),
                 gi_temporal_resampling_pass: RayTracingPass::new(
                     ctx,
                     layout,
@@ -504,12 +513,17 @@ impl LightPasses {
                 current_set: dynamic_sets[0],
                 prev_set: dynamic_sets[1],
                 uniform_buffer,
-                unifrom_data,
             }
         }
     }
 
-    fn execute_presampeling(&self, ctx: &mut Renderer, cmd: &vk::CommandBuffer, i: u64, skybox_changed: &mut bool) {
+    pub fn execute_presampeling(
+        &self,
+        ctx: &Renderer,
+        cmd: &vk::CommandBuffer,
+        i: u64,
+        skybox_changed: bool,
+    ) -> bool {
         unsafe {
             ctx.device.cmd_bind_descriptor_sets(
                 *cmd,
@@ -531,15 +545,19 @@ impl LightPasses {
                 ],
                 &[],
             );
-            self.presample_lights_pass.execute(ctx, cmd, 1024 / 256, 128, 1);
-            if *skybox_changed {
-                self.presample_environment_map_pass.execute(ctx, cmd, 1024 / 256, 128, 1);
-                *skybox_changed = false;
+            self.presample_lights_pass
+                .execute(ctx, cmd, 1024 / 256, 128, 1);
+            if skybox_changed {
+                self.presample_environment_map_pass
+                    .execute(ctx, cmd, 1024 / 256, 128, 1);
+                return false;
+            } else {
+                return true;
             }
         }
     }
 
-    fn execute(&self, ctx: &mut Renderer, cmd: &vk::CommandBuffer, i: u64) {
+    pub fn execute(&self, ctx: &Renderer, cmd: &vk::CommandBuffer, i: u64) {
         unsafe {
             ctx.memory_barrier(
                 cmd,
@@ -569,6 +587,17 @@ impl LightPasses {
                 &[],
             );
 
+            let frame_c =
+                std::slice::from_raw_parts(&i as *const u64 as *const u8, size_of::<u32>());
+
+            ctx.device.cmd_push_constants(
+                *cmd,
+                self.layout,
+                vk::ShaderStageFlags::RAYGEN_KHR,
+                0,
+                frame_c,
+            );
+
             self.g_buffer_pass.execute(ctx, cmd);
 
             ctx.memory_barrier(
@@ -590,6 +619,7 @@ impl LightPasses {
                 AccessFlags::SHADER_READ,
             );
 
+            self.shade_secondary_surfaces_pass.execute(ctx, cmd);
             self.gi_temporal_resampling_pass.execute(ctx, cmd);
             self.gi_spatial_resampling_pass.execute(ctx, cmd);
 
@@ -604,12 +634,17 @@ impl LightPasses {
             self.gi_final_shading_pass.execute(ctx, cmd);
         }
     }
+
+    pub fn update_uniform(&self, g_const: &GConst) -> Result<()> {
+        self.uniform_buffer
+            .copy_data_to_aligned_buffer(std::slice::from_ref(&g_const), 16)
+    }
 }
 
 pub fn fill_neighbor_offset_buffer(neighbor_offset_count: u32) -> Vec<u8> {
     let mut buffer = vec![];
 
-    let R = 250;
+    let r = 250;
     let phi2 = 1.0 / 1.3247179572447;
     let mut u = 0.5;
     let mut v = 0.5;
@@ -623,29 +658,47 @@ pub fn fill_neighbor_offset_buffer(neighbor_offset_count: u32) -> Vec<u8> {
             v -= 1.0;
         }
 
-        let rSq = (u - 0.5) * (u - 0.5) + (v - 0.5) * (v - 0.5);
-        if rSq > 0.25 {
+        let r_sq = (u - 0.5) * (u - 0.5) + (v - 0.5) * (v - 0.5);
+        if r_sq > 0.25 {
             continue;
         }
 
-        buffer.push(((u - 0.5) * R as f32) as u8);
-        buffer.push(((v - 0.5) * R as f32) as u8);
+        buffer.push(((u - 0.5) * r as f32) as u8);
+        buffer.push(((v - 0.5) * r as f32) as u8);
     }
 
     buffer
 }
 
-pub fn ComputePdfTextureSize(maxItems: u32) -> (u32, u32, u32) {
+pub fn compute_pdf_texture_size(max_items: u32) -> (u32, u32, u32) {
     // Compute the size of a power-of-2 rectangle that fits all items, 1 item per pixel
-    let mut textureWidth = f64::max(1.0, f64::ceil(f64::sqrt(maxItems as f64)));
-    textureWidth = f64::exp2(f64::ceil(f64::log2(textureWidth)));
-    let mut textureHeight = f64::max(1.0, f64::ceil(maxItems as f64 / textureWidth));
-    textureHeight = f64::exp2(f64::ceil(f64::log2(textureHeight)));
-    let textureMips = f64::max(1.0, f64::log2(f64::max(textureWidth, textureHeight)) + 1.0);
+    let mut texture_width = f64::max(1.0, f64::ceil(f64::sqrt(max_items as f64)));
+    texture_width = f64::exp2(f64::ceil(f64::log2(texture_width)));
+    let mut texture_height = f64::max(1.0, f64::ceil(max_items as f64 / texture_width));
+    texture_height = f64::exp2(f64::ceil(f64::log2(texture_height)));
+    let texture_mips = f64::max(
+        1.0,
+        f64::log2(f64::max(texture_width, texture_height)) + 1.0,
+    );
 
     (
-        textureWidth as u32,
-        textureHeight as u32,
-        textureMips as u32,
+        texture_width as u32,
+        texture_height as u32,
+        texture_mips as u32,
     )
+}
+
+pub fn calculate_reservoir_buffer_parameters(
+    render_width: u32,
+    render_height: u32,
+) -> RTXDI_ReservoirBufferParameters {
+    let render_width_blocks =
+        (render_width + RTXDI_RESERVOIR_BLOCK_SIZE - 1) / RTXDI_RESERVOIR_BLOCK_SIZE;
+    let render_height_blocks =
+        (render_height + RTXDI_RESERVOIR_BLOCK_SIZE - 1) / RTXDI_RESERVOIR_BLOCK_SIZE;
+    let mut params = RTXDI_ReservoirBufferParameters::default();
+    params.reservoir_block_row_pitch =
+        render_width_blocks * (RTXDI_RESERVOIR_BLOCK_SIZE * RTXDI_RESERVOIR_BLOCK_SIZE);
+    params.reservoir_array_pitch = params.reservoir_block_row_pitch * render_height_blocks;
+    return params;
 }

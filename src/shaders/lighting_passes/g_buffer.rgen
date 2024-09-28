@@ -1,0 +1,25 @@
+#version 460
+
+#extension GL_GOOGLE_include_directive : enable
+#extension GL_EXT_ray_tracing : require
+
+#include "../common.glsl"
+
+layout(location = 0) rayPayloadEXT Payload p;
+
+#include "RtxdiApplicationBridge.glsl"
+#include "../PrimaryRays.glsl"
+
+void main() {
+    ivec2 size = ivec2(gl_LaunchSizeEXT.xy);
+    ivec2 pixelCord = ivec2(gl_LaunchIDEXT.xy);
+
+    PrimarySurfaceOutput primary = TracePrimaryRay(pixelCord);
+
+    imageStore(u_GBufferDepth, pixelCord, vec4(primary.surface.viewDepth)); 
+    imageStore(u_GBufferNormals, pixelCord, uvec4(ndirToOctUnorm32(primary.surface.normal))); 
+    imageStore(u_GBufferGeoNormals, pixelCord, uvec4(ndirToOctUnorm32(primary.surface.geoNormal))); 
+    imageStore(u_GBufferDiffuseAlbedo, pixelCord, uvec4(Pack_R11G11B10_UFLOAT(primary.surface.diffuseAlbedo))); 
+    imageStore(u_GBufferSpecularRough, pixelCord, uvec4(Pack_R8G8B8A8_Gamma_UFLOAT(vec4(primary.surface.specularF0, primary.surface.roughness)))); 
+    imageStore(u_MotionVectors, pixelCord, vec4(primary.motionVector, 0.0));
+}
