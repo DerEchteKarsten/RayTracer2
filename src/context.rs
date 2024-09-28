@@ -110,6 +110,7 @@ pub struct Renderer<'a> {
     _entry: Entry,
 }
 
+#[derive(Default)]
 pub struct ImageAndView {
     pub image: Image,
     pub view: ImageView,
@@ -1010,6 +1011,56 @@ impl<'a> Renderer<'a> {
         .unwrap();
         Ok((pipeline[0], shader_group_info))
     }
+
+    pub fn memory_barrier(
+        &self,
+        cmd: &vk::CommandBuffer,
+        src: vk::PipelineStageFlags,
+        dst: vk::PipelineStageFlags,
+        src_acces: vk::AccessFlags,
+        dst_acces: vk::AccessFlags,
+    ) {
+        unsafe {
+            let memory_barriers = [vk::MemoryBarrier::default()
+                .src_access_mask(src_acces)
+                .dst_access_mask(dst_acces)];
+            self.device.cmd_pipeline_barrier(
+                *cmd,
+                src,
+                dst,
+                vk::DependencyFlags::BY_REGION,
+                &memory_barriers,
+                &[],
+                &[],
+            );
+        }
+    }
+
+    pub fn create_storage_image(
+        &mut self,
+        width: u32,
+        height: u32,
+        format: vk::Format,
+    ) -> Result<ImageAndView> {
+        let image = self
+            .create_image(
+                vk::ImageUsageFlags::STORAGE,
+                MemoryLocation::GpuOnly,
+                format,
+                width,
+                height,
+            )
+            .unwrap();
+        Renderer::transition_image_layout_to_general(
+            &self.device,
+            &self.command_pool,
+            &image,
+            &self.graphics_queue,
+        )
+        .unwrap();
+        let view = self.create_image_view(&image).unwrap();
+        Ok(ImageAndView { image, view })
+    }
 }
 
 pub struct ShaderBindingTable {
@@ -1322,7 +1373,7 @@ pub enum WriteDescriptorSetKind {
     },
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct Image {
     pub inner: vk::Image,
     pub allocation: Option<Allocation>,
@@ -2129,6 +2180,77 @@ fn new_device(
     };
 
     Ok(device)
+}
+
+pub fn calculate_pool_sizes(
+    bindings: &[&[vk::DescriptorSetLayoutBinding]],
+) -> Vec<vk::DescriptorPoolSize> {
+    let mut sizes = vec![
+        vk::DescriptorPoolSize {
+            descriptor_count: 0,
+            ty: vk::DescriptorType::UNIFORM_BUFFER,
+        },
+        vk::DescriptorPoolSize {
+            descriptor_count: 0,
+            ty: vk::DescriptorType::ACCELERATION_STRUCTURE_KHR,
+        },
+        vk::DescriptorPoolSize {
+            descriptor_count: 0,
+            ty: vk::DescriptorType::STORAGE_BUFFER,
+        },
+        vk::DescriptorPoolSize {
+            descriptor_count: 0,
+            ty: vk::DescriptorType::STORAGE_IMAGE,
+        },
+        vk::DescriptorPoolSize {
+            descriptor_count: 0,
+            ty: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
+        },
+        vk::DescriptorPoolSize {
+            descriptor_count: 0,
+            ty: vk::DescriptorType::INPUT_ATTACHMENT,
+        },
+        vk::DescriptorPoolSize {
+            descriptor_count: 0,
+            ty: vk::DescriptorType::SAMPLED_IMAGE,
+        },
+        vk::DescriptorPoolSize {
+            descriptor_count: 0,
+            ty: vk::DescriptorType::SAMPLER,
+        },
+    ];
+
+    for b in bindings.concat().iter() {
+        match b.descriptor_type {
+            vk::DescriptorType::UNIFORM_BUFFER => {
+                sizes[0].descriptor_count += 1;
+            }
+            vk::DescriptorType::ACCELERATION_STRUCTURE_KHR => {
+                sizes[1].descriptor_count += 1;
+            }
+            vk::DescriptorType::STORAGE_BUFFER => {
+                sizes[2].descriptor_count += 1;
+            }
+            vk::DescriptorType::STORAGE_IMAGE => {
+                sizes[3].descriptor_count += 1;
+            }
+            vk::DescriptorType::COMBINED_IMAGE_SAMPLER => {
+                sizes[4].descriptor_count += 1;
+            }
+            vk::DescriptorType::INPUT_ATTACHMENT => {
+                sizes[5].descriptor_count += 1;
+            }
+            vk::DescriptorType::SAMPLED_IMAGE => {
+                sizes[6].descriptor_count += 1;
+            }
+            vk::DescriptorType::SAMPLER => {
+                sizes[7].descriptor_count += 1;
+            }
+            _ => (),
+        }
+    }
+
+    sizes
 }
 
 fn enumerate_physical_devices(

@@ -17,7 +17,7 @@ use crate::shader_params::{GConst, RTXDI_ReservoirBufferParameters};
 use crate::{
     allocate_descriptor_set, allocate_descriptor_sets, create_descriptor_pool,
     create_descriptor_set_layout, module_from_bytes, update_descriptor_sets, AccelerationStructure,
-    Buffer, Image, ImageAndView, MipLevelPushConstants, Model, RayTracingShaderCreateInfo,
+    Buffer, Image, ImageAndView, Model, RayTracingShaderCreateInfo,
     RayTracingShaderGroup, RayTracingShaderGroupInfo, Renderer, ShaderBindingTable,
     WriteDescriptorSet, WriteDescriptorSetKind, FRAMES_IN_FLIGHT, NEIGHBOR_OFFSET_COUNT,
     RTXDI_RESERVOIR_BLOCK_SIZE, WINDOW_SIZE,

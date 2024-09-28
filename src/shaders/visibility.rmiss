@@ -4,8 +4,12 @@
 
 layout(location = 0) rayPayloadInEXT VisibilityCheck {
     bool missed;
+    uint geometryIndex;
+  	uint primitiveId;
 } p;
 
 void main() {
     p.missed = true;
+    p.geometryIndex = gl_GeometryIndexEXT;
+    p.primitiveId = gl_PrimitiveID;
 }

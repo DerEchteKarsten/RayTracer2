@@ -1,33 +1,129 @@
-use ash::vk::{self, DescriptorType, ShaderStageFlags};
+use std::ffi::CString;
 
-use crate::{context::*, shader_params::GConst, Model};
+use anyhow::Result;
+use ash::vk::{
+    self, AccessFlags, BufferUsageFlags, DescriptorType, ImageLayout, ImageUsageFlags, ImageView,
+    PipelineBindPoint, PipelineCache, PipelineStageFlags, ShaderStageFlags,
+};
+use glam::UVec2;
+use gpu_allocator::MemoryLocation;
+
+use crate::{
+    context::*, pipelines::CalculateReservoirBufferParameters, render_recources::RenderResources, shader_params::GConst, Model, NEIGHBOR_OFFSET_COUNT, WINDOW_SIZE
+};
 
 struct RayTracingPass {
     shader_binding_table: ShaderBindingTable,
-    shader_group_info: RayTracingShaderGroupInfo,
     handle: vk::Pipeline,
 }
 
+impl RayTracingPass {
+    fn new(
+        ctx: &mut Renderer,
+        layout: vk::PipelineLayout,
+        path: &str,
+        visibility_check: bool,
+    ) -> Result<Self> {
+        let raygen_bytes = std::fs::read(path)?;
+        let shaders_create_info = [
+            RayTracingShaderCreateInfo {
+                source: &[(raygen_bytes.as_slice(), vk::ShaderStageFlags::RAYGEN_KHR)],
+                group: RayTracingShaderGroup::RayGen,
+            },
+            RayTracingShaderCreateInfo {
+                source: &[(
+                    if !visibility_check {
+                        &include_bytes!("./shaders/raymiss.rmiss.spv")[..]
+                    } else {
+                        &include_bytes!("./shaders/visibility.rmiss.spv")[..]
+                    },
+                    vk::ShaderStageFlags::MISS_KHR,
+                )],
+                group: RayTracingShaderGroup::Miss,
+            },
+            RayTracingShaderCreateInfo {
+                source: &[(
+                    if !visibility_check {
+                        &include_bytes!("./shaders/rayhit.rchit.spv")[..]
+                    } else {
+                        &include_bytes!("./shaders/visibility.rchit.spv")[..]
+                    },
+                    vk::ShaderStageFlags::CLOSEST_HIT_KHR,
+                )],
+                group: RayTracingShaderGroup::Hit,
+            },
+        ];
+
+        let (handle, shader_group_info) =
+            ctx.create_raytracing_pipeline(layout, &shaders_create_info)?;
+        let shader_binding_table = ctx.create_shader_binding_table(&handle, &shader_group_info)?;
+        Ok(Self {
+            shader_binding_table,
+            handle,
+        })
+    }
+    fn execute(&self, ctx: &mut Renderer, cmd: &vk::CommandBuffer) {
+        unsafe {
+            ctx.device
+                .cmd_bind_pipeline(*cmd, PipelineBindPoint::RAY_TRACING_KHR, self.handle);
+            let call_region = vk::StridedDeviceAddressRegionKHR::default();
+
+            ctx.ray_tracing.pipeline_fn.cmd_trace_rays(
+                *cmd,
+                &self.shader_binding_table.raygen_region,
+                &self.shader_binding_table.miss_region,
+                &self.shader_binding_table.hit_region,
+                &call_region,
+                WINDOW_SIZE.x as u32,
+                WINDOW_SIZE.y as u32,
+                1,
+            );
+        }
+    }
+}
+
 struct ComputePass {
-    handel: vk::Pipeline,
+    handle: vk::Pipeline,
+}
+
+impl ComputePass {
+    fn new(ctx: &mut Renderer, layout: vk::PipelineLayout, path: &str) -> Result<Self> {
+        let entry_point_name: CString = CString::new("main").unwrap();
+        let pipeline_info = vk::ComputePipelineCreateInfo::default()
+            .layout(layout)
+            .stage(
+                vk::PipelineShaderStageCreateInfo::default()
+                    .module(ctx.create_shader_module(path))
+                    .stage(vk::ShaderStageFlags::COMPUTE)
+                    .name(&entry_point_name),
+            );
+        let handel = unsafe {
+            ctx.device
+                .create_compute_pipelines(PipelineCache::null(), &[pipeline_info], None)
+        }
+        .unwrap();
+
+        Ok(Self { handle: handel[0] })
+    }
+    fn execute(&self, ctx: &mut Renderer, cmd: &vk::CommandBuffer, x: u32, y: u32, z: u32) {
+        unsafe {
+            ctx.device.cmd_bind_pipeline(*cmd, vk::PipelineBindPoint::COMPUTE, self.handle);
+            ctx.device.cmd_dispatch(*cmd, x, y, z);
+        }
+    }
 }
 
 pub struct LightPasses {
     presample_lights_pass: ComputePass,
     presample_environment_map_pass: ComputePass,
-    presample_re_gir: ComputePass,
 
     g_buffer_pass: RayTracingPass,
 
-    di_generate_initial_samples_pass: RayTracingPass,
     di_fused_resampling_pass: RayTracingPass,
-    di_gradients_pass: RayTracingPass,
-    di_shade_samples_pass: RayTracingPass,
 
     brdf_ray_tracing_pass: RayTracingPass,
     gi_temporal_resampling_pass: RayTracingPass,
     gi_spatial_resampling_pass: RayTracingPass,
-    gi_fused_resampling_pass: RayTracingPass,
     gi_final_shading_pass: RayTracingPass,
 
     layout: vk::PipelineLayout,
@@ -37,45 +133,6 @@ pub struct LightPasses {
 
     uniform_buffer: Buffer,
     unifrom_data: GConst,
-}
-
-pub struct RenderResources {
-    task_buffer: Buffer,
-    primitive_light_buffer: Buffer,
-    light_data_buffer: Buffer,
-    geometry_instance_to_light_buffer: Buffer,
-    light_index_mapping_buffer: Buffer,
-    ris_buffer: Buffer,
-    ris_light_data_buffer: Buffer,
-    neighbor_offsets_buffer: Buffer,
-    di_reservoir_buffer: Buffer,
-    secondary_gbuffer: Buffer,
-    environment_pdf_texture: ImageAndView,
-    local_light_pdf_texture: ImageAndView,
-    gi_reservoir_buffer: Buffer,
-}
-
-impl RenderResources {
-    fn new(ctx: &mut Renderer) -> Self {
-
-
-        
-        Self {
-            task_buffer: (),
-            primitive_light_buffer: (),
-            light_data_buffer: (),
-            geometry_instance_to_light_buffer: (),
-            light_index_mapping_buffer: (),
-            ris_buffer: (),
-            ris_light_data_buffer: (),
-            neighbor_offsets_buffer: (),
-            di_reservoir_buffer: (),
-            secondary_gbuffer: (),
-            environment_pdf_texture: (),
-            local_light_pdf_texture: (),
-            gi_reservoir_buffer: (),
-        }
-    }
 }
 
 impl LightPasses {
@@ -104,10 +161,11 @@ impl LightPasses {
             vk::DescriptorSetLayoutBinding::default()
                 .descriptor_type(DescriptorType::STORAGE_IMAGE), // Restir Luminance
         ];
-        bindings
+        bindings = bindings
             .iter_mut()
             .enumerate()
-            .map(|(i, b)| b.binding(i as u32).stage_flags(ShaderStageFlags::ALL));
+            .map(|(i, b)| b.binding(i as u32).stage_flags(ShaderStageFlags::ALL))
+            .collect();
         bindings
     }
 
@@ -120,11 +178,13 @@ impl LightPasses {
             vk::DescriptorSetLayoutBinding::default()
                 .descriptor_type(DescriptorType::ACCELERATION_STRUCTURE_KHR), // Acceleration Structure
             vk::DescriptorSetLayoutBinding::default()
+                .descriptor_type(DescriptorType::UNIFORM_BUFFER), // Unifrom Buffer
+            vk::DescriptorSetLayoutBinding::default()
                 .descriptor_type(DescriptorType::STORAGE_BUFFER), // Geometrie Infos
             vk::DescriptorSetLayoutBinding::default()
                 .descriptor_type(DescriptorType::STORAGE_BUFFER), // Vertex Buffer
             vk::DescriptorSetLayoutBinding::default()
-                .descriptor_type(DescriptorType::STORAGE_IMAGE), // Index Buffer
+                .descriptor_type(DescriptorType::STORAGE_BUFFER), // Index Buffer
             vk::DescriptorSetLayoutBinding::default()
                 .descriptor_type(DescriptorType::COMBINED_IMAGE_SAMPLER) // Textures
                 .descriptor_count(num_textures),
@@ -149,23 +209,47 @@ impl LightPasses {
             vk::DescriptorSetLayoutBinding::default()
                 .descriptor_type(DescriptorType::STORAGE_IMAGE), // Temporal Sample Positions
             vk::DescriptorSetLayoutBinding::default()
-                .descriptor_type(DescriptorType::STORAGE_IMAGE), // Gradients
-            vk::DescriptorSetLayoutBinding::default()
                 .descriptor_type(DescriptorType::STORAGE_BUFFER), // GI Reservoirs
             vk::DescriptorSetLayoutBinding::default()
                 .descriptor_type(DescriptorType::STORAGE_BUFFER), // RIS Buffer
             vk::DescriptorSetLayoutBinding::default()
                 .descriptor_type(DescriptorType::STORAGE_BUFFER), // RIS Light Data
         ];
-        bindings
+        bindings = bindings
             .iter_mut()
             .enumerate()
-            .map(|(i, b)| b.binding(i as u32).stage_flags(ShaderStageFlags::ALL));
+            .map(|(i, b)| b.binding(i as u32).stage_flags(ShaderStageFlags::ALL))
+            .collect();
         bindings
     }
 
-    fn new(ctx: &mut Renderer, model: &Model) -> Self {
+    fn new(
+        ctx: &mut Renderer,
+        model: &Model,
+        top_as: &AccelerationStructure,
+        resources: &RenderResources,
+        unifrom_data: GConst,
+        skybox_view: &ImageView,
+    ) -> Self {
         unsafe {
+            let sampler_create_info: vk::SamplerCreateInfo = vk::SamplerCreateInfo {
+                mag_filter: vk::Filter::NEAREST,
+                min_filter: vk::Filter::NEAREST,
+                mipmap_mode: vk::SamplerMipmapMode::NEAREST,
+                address_mode_u: vk::SamplerAddressMode::MIRRORED_REPEAT,
+                address_mode_v: vk::SamplerAddressMode::MIRRORED_REPEAT,
+                address_mode_w: vk::SamplerAddressMode::MIRRORED_REPEAT,
+                max_anisotropy: 1.0,
+                border_color: vk::BorderColor::FLOAT_OPAQUE_WHITE,
+                compare_op: vk::CompareOp::NEVER,
+                ..Default::default()
+            };
+
+            let skybox_sampler = ctx
+                .device
+                .create_sampler(&sampler_create_info, None)
+                .unwrap();
+
             let static_bindings = Self::get_static_descriptor_bindings(model.textures.len() as u32);
             let static_set_layout = ctx
                 .create_descriptor_set_layout(&static_bindings, &[])
@@ -176,41 +260,392 @@ impl LightPasses {
                 .create_descriptor_set_layout(&dynamic_bindings, &[])
                 .unwrap();
 
+            let set_layouts = &[static_set_layout, dynamic_set_layout, dynamic_set_layout];
+
             let layout_info = vk::PipelineLayoutCreateInfo::default()
                 .push_constant_ranges(&[vk::PushConstantRange {
                     offset: 0,
                     size: 4,
                     stage_flags: ShaderStageFlags::ALL,
                 }])
-                .set_layouts(&[static_set_layout, dynamic_set_layout, dynamic_set_layout]);
+                .set_layouts(set_layouts);
 
             let layout = ctx
                 .device
                 .create_pipeline_layout(&layout_info, None)
                 .unwrap();
 
+            let pool_sizes =
+                &calculate_pool_sizes(&[static_bindings.as_slice(), dynamic_bindings.as_slice()]);
+
+            let descriptor_pool = ctx.create_descriptor_pool(3, pool_sizes).unwrap();
+
+            let static_set =
+                allocate_descriptor_set(&ctx.device, &descriptor_pool, &static_set_layout).unwrap();
+            let dynamic_sets =
+                allocate_descriptor_sets(&ctx.device, &descriptor_pool, &dynamic_set_layout, 2)
+                    .unwrap();
+
+            let uniform_buffer = ctx
+                .create_buffer(
+                    vk::BufferUsageFlags::UNIFORM_BUFFER,
+                    MemoryLocation::CpuToGpu,
+                    size_of::<GConst>() as u64,
+                    None,
+                )
+                .unwrap();
+
+            let static_writes = vec![
+                WriteDescriptorSetKind::StorageImage {
+                    view: resources.motion_vectors.view,
+                    layout: vk::ImageLayout::GENERAL,
+                },
+                WriteDescriptorSetKind::AccelerationStructure {
+                    acceleration_structure: top_as.handle,
+                },
+                WriteDescriptorSetKind::UniformBuffer {
+                    buffer: uniform_buffer.inner,
+                },
+                WriteDescriptorSetKind::StorageBuffer {
+                    buffer: model.geometry_info_buffer.inner,
+                },
+                WriteDescriptorSetKind::StorageBuffer {
+                    buffer: model.vertex_buffer.inner,
+                },
+                WriteDescriptorSetKind::StorageBuffer {
+                    buffer: model.index_buffer.inner,
+                },
+                WriteDescriptorSetKind::CombinedImageSampler {
+                    view: *skybox_view,
+                    sampler: skybox_sampler,
+                    layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                },
+                WriteDescriptorSetKind::StorageBuffer {
+                    buffer: resources.light_buffer.inner,
+                },
+                WriteDescriptorSetKind::StorageBuffer {
+                    buffer: resources.neighbor_offsets_buffer.inner,
+                },
+                WriteDescriptorSetKind::CombinedImageSampler {
+                    view: resources.environment_pdf_texture.view,
+                    sampler: resources.environment_pdf_sampler,
+                    layout: vk::ImageLayout::GENERAL,
+                },
+                WriteDescriptorSetKind::CombinedImageSampler {
+                    view: resources.local_light_pdf_texture.view,
+                    sampler: resources.local_light_pdf_sampler,
+                    layout: vk::ImageLayout::GENERAL,
+                },
+                WriteDescriptorSetKind::StorageBuffer {
+                    buffer: resources.geometry_instance_to_light_buffer.inner,
+                },
+                WriteDescriptorSetKind::StorageBuffer {
+                    buffer: resources.di_reservoir_buffer.inner,
+                },
+                WriteDescriptorSetKind::StorageImage {
+                    view: resources.diffuse_lighting.view,
+                    layout: vk::ImageLayout::GENERAL,
+                },
+                WriteDescriptorSetKind::StorageImage {
+                    view: resources.specular_lighting.view,
+                    layout: vk::ImageLayout::GENERAL,
+                },
+                WriteDescriptorSetKind::StorageImage {
+                    view: resources.temporal_sample_position.view,
+                    layout: vk::ImageLayout::GENERAL,
+                },
+                WriteDescriptorSetKind::StorageBuffer {
+                    buffer: resources.gi_reservoir_buffer.inner,
+                },
+                WriteDescriptorSetKind::StorageBuffer {
+                    buffer: resources.ris_buffer.inner,
+                },
+                WriteDescriptorSetKind::StorageBuffer {
+                    buffer: resources.light_buffer.inner,
+                },
+            ];
+
+            let static_writes = static_writes
+                .into_iter()
+                .enumerate()
+                .map(|(i, b)| WriteDescriptorSet {
+                    binding: i as u32,
+                    kind: b,
+                })
+                .collect::<Vec<WriteDescriptorSet>>();
+
+            for i in 0..2 as usize {
+                let dynamic_writes = vec![
+                    WriteDescriptorSetKind::StorageImage {
+                        view: resources.g_buffers[i].depth.view,
+                        layout: vk::ImageLayout::GENERAL,
+                    },
+                    WriteDescriptorSetKind::StorageImage {
+                        view: resources.g_buffers[i].normal.view,
+                        layout: vk::ImageLayout::GENERAL,
+                    },
+                    WriteDescriptorSetKind::StorageImage {
+                        view: resources.g_buffers[i].geo_normals.view,
+                        layout: vk::ImageLayout::GENERAL,
+                    },
+                    WriteDescriptorSetKind::StorageImage {
+                        view: resources.g_buffers[i].diffuse_albedo.view,
+                        layout: vk::ImageLayout::GENERAL,
+                    },
+                    WriteDescriptorSetKind::StorageImage {
+                        view: resources.g_buffers[i].specular_rough.view,
+                        layout: vk::ImageLayout::GENERAL,
+                    },
+                    WriteDescriptorSetKind::StorageImage {
+                        view: resources.g_buffers[1 - i].depth.view,
+                        layout: vk::ImageLayout::GENERAL,
+                    },
+                    WriteDescriptorSetKind::StorageImage {
+                        view: resources.g_buffers[1 - i].normal.view,
+                        layout: vk::ImageLayout::GENERAL,
+                    },
+                    WriteDescriptorSetKind::StorageImage {
+                        view: resources.g_buffers[1 - i].geo_normals.view,
+                        layout: vk::ImageLayout::GENERAL,
+                    },
+                    WriteDescriptorSetKind::StorageImage {
+                        view: resources.g_buffers[1 - i].diffuse_albedo.view,
+                        layout: vk::ImageLayout::GENERAL,
+                    },
+                    WriteDescriptorSetKind::StorageImage {
+                        view: resources.g_buffers[1 - i].specular_rough.view,
+                        layout: vk::ImageLayout::GENERAL,
+                    },
+                ];
+
+                let dynamic_writes = dynamic_writes
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, b)| WriteDescriptorSet {
+                        binding: i as u32,
+                        kind: b,
+                    })
+                    .collect::<Vec<WriteDescriptorSet>>();
+
+                update_descriptor_sets(ctx, &dynamic_sets[i], dynamic_writes.as_slice());
+            }
+
+            for (i, (image_index, sampler_index)) in model.textures.iter().enumerate() {
+                let view = &model.views[*image_index];
+                let sampler = &model.samplers[*sampler_index];
+                let img_info = vk::DescriptorImageInfo::default()
+                    .image_view(*view)
+                    .sampler(*sampler)
+                    .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
+
+                ctx.device.update_descriptor_sets(
+                    &[vk::WriteDescriptorSet::default()
+                        .dst_array_element(i as u32)
+                        .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                        .dst_binding(6)
+                        .dst_set(static_set.clone())
+                        .image_info(&[img_info])],
+                    &[],
+                );
+            }
+
             Self {
-                presample_lights_pass: (),
-                presample_environment_map_pass: (),
-                presample_re_gir: (),
-                g_buffer_pass: (),
-                di_generate_initial_samples_pass: (),
-                di_fused_resampling_pass: (),
-                di_gradients_pass: (),
-                di_shade_samples_pass: (),
-                brdf_ray_tracing_pass: (),
-                gi_temporal_resampling_pass: (),
-                gi_spatial_resampling_pass: (),
-                gi_fused_resampling_pass: (),
-                gi_final_shading_pass: (),
+                presample_lights_pass: ComputePass::new(
+                    ctx,
+                    layout,
+                    "./src/presample_lights.comp.spv",
+                )
+                .unwrap(),
+                presample_environment_map_pass: ComputePass::new(
+                    ctx,
+                    layout,
+                    "./src/presample_environment.comp.spv",
+                )
+                .unwrap(),
+                g_buffer_pass: RayTracingPass::new(ctx, layout, "./src/g_buffer.rgen.spv", false)
+                    .unwrap(),
+                di_fused_resampling_pass: RayTracingPass::new(
+                    ctx,
+                    layout,
+                    "./src/di_fused_resampling.rgen.spv",
+                    true,
+                )
+                .unwrap(),
+                brdf_ray_tracing_pass: RayTracingPass::new(
+                    ctx,
+                    layout,
+                    "./src/raygen.comp.spv",
+                    false,
+                )
+                .unwrap(),
+                gi_temporal_resampling_pass: RayTracingPass::new(
+                    ctx,
+                    layout,
+                    "./src/temporal_resampling.comp.spv",
+                    false,
+                )
+                .unwrap(),
+                gi_spatial_resampling_pass: RayTracingPass::new(
+                    ctx,
+                    layout,
+                    "./src/spatial_resampling.comp.spv",
+                    false,
+                )
+                .unwrap(),
+                gi_final_shading_pass: RayTracingPass::new(
+                    ctx,
+                    layout,
+                    "./src/final_shading.comp.spv",
+                    false,
+                )
+                .unwrap(),
                 layout,
-                static_set: (),
-                current_set: (),
-                prev_set: (),
-                uniform_buffer: (),
-                di_reservoir_buffer: (),
-                gi_reservoir_buffer: (),
+                static_set,
+                current_set: dynamic_sets[0],
+                prev_set: dynamic_sets[1],
+                uniform_buffer,
+                unifrom_data,
             }
         }
     }
+
+    fn execute_presampeling(&self, ctx: &mut Renderer, cmd: &vk::CommandBuffer, i: u64, skybox_changed: &mut bool) {
+        unsafe {
+            ctx.device.cmd_bind_descriptor_sets(
+                *cmd,
+                vk::PipelineBindPoint::COMPUTE,
+                self.layout,
+                0,
+                &[
+                    self.static_set,
+                    if i % 2 == 0 {
+                        self.current_set
+                    } else {
+                        self.prev_set
+                    },
+                    if i % 2 == 0 {
+                        self.prev_set
+                    } else {
+                        self.current_set
+                    },
+                ],
+                &[],
+            );
+            self.presample_lights_pass.execute(ctx, cmd, 1024 / 256, 128, 1);
+            if *skybox_changed {
+                self.presample_environment_map_pass.execute(ctx, cmd, 1024 / 256, 128, 1);
+                *skybox_changed = false;
+            }
+        }
+    }
+
+    fn execute(&self, ctx: &mut Renderer, cmd: &vk::CommandBuffer, i: u64) {
+        unsafe {
+            ctx.memory_barrier(
+                cmd,
+                PipelineStageFlags::ALL_COMMANDS,
+                PipelineStageFlags::RAY_TRACING_SHADER_KHR,
+                AccessFlags::SHADER_WRITE,
+                AccessFlags::SHADER_READ,
+            );
+            ctx.device.cmd_bind_descriptor_sets(
+                *cmd,
+                vk::PipelineBindPoint::RAY_TRACING_KHR,
+                self.layout,
+                0,
+                &[
+                    self.static_set,
+                    if i % 2 == 0 {
+                        self.current_set
+                    } else {
+                        self.prev_set
+                    },
+                    if i % 2 == 0 {
+                        self.prev_set
+                    } else {
+                        self.current_set
+                    },
+                ],
+                &[],
+            );
+
+            self.g_buffer_pass.execute(ctx, cmd);
+
+            ctx.memory_barrier(
+                cmd,
+                PipelineStageFlags::RAY_TRACING_SHADER_KHR,
+                PipelineStageFlags::RAY_TRACING_SHADER_KHR,
+                AccessFlags::SHADER_WRITE,
+                AccessFlags::SHADER_READ,
+            );
+
+            self.di_fused_resampling_pass.execute(ctx, cmd);
+            self.brdf_ray_tracing_pass.execute(ctx, cmd);
+
+            ctx.memory_barrier(
+                cmd,
+                PipelineStageFlags::RAY_TRACING_SHADER_KHR,
+                PipelineStageFlags::RAY_TRACING_SHADER_KHR,
+                AccessFlags::SHADER_WRITE,
+                AccessFlags::SHADER_READ,
+            );
+
+            self.gi_temporal_resampling_pass.execute(ctx, cmd);
+            self.gi_spatial_resampling_pass.execute(ctx, cmd);
+
+            ctx.memory_barrier(
+                cmd,
+                PipelineStageFlags::RAY_TRACING_SHADER_KHR,
+                PipelineStageFlags::RAY_TRACING_SHADER_KHR,
+                AccessFlags::SHADER_WRITE,
+                AccessFlags::SHADER_READ,
+            );
+
+            self.gi_final_shading_pass.execute(ctx, cmd);
+        }
+    }
+}
+
+pub fn fill_neighbor_offset_buffer(neighbor_offset_count: u32) -> Vec<u8> {
+    let mut buffer = vec![];
+
+    let R = 250;
+    let phi2 = 1.0 / 1.3247179572447;
+    let mut u = 0.5;
+    let mut v = 0.5;
+    while buffer.len() < (neighbor_offset_count * 2) as usize {
+        u += phi2;
+        v += phi2 * phi2;
+        if u >= 1.0 {
+            u -= 1.0;
+        }
+        if v >= 1.0 {
+            v -= 1.0;
+        }
+
+        let rSq = (u - 0.5) * (u - 0.5) + (v - 0.5) * (v - 0.5);
+        if rSq > 0.25 {
+            continue;
+        }
+
+        buffer.push(((u - 0.5) * R as f32) as u8);
+        buffer.push(((v - 0.5) * R as f32) as u8);
+    }
+
+    buffer
+}
+
+pub fn ComputePdfTextureSize(maxItems: u32) -> (u32, u32, u32) {
+    // Compute the size of a power-of-2 rectangle that fits all items, 1 item per pixel
+    let mut textureWidth = f64::max(1.0, f64::ceil(f64::sqrt(maxItems as f64)));
+    textureWidth = f64::exp2(f64::ceil(f64::log2(textureWidth)));
+    let mut textureHeight = f64::max(1.0, f64::ceil(maxItems as f64 / textureWidth));
+    textureHeight = f64::exp2(f64::ceil(f64::log2(textureHeight)));
+    let textureMips = f64::max(1.0, f64::log2(f64::max(textureWidth, textureHeight)) + 1.0);
+
+    (
+        textureWidth as u32,
+        textureHeight as u32,
+        textureMips as u32,
+    )
 }

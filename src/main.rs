@@ -13,7 +13,10 @@ mod gltf;
 mod light_passes;
 mod pipelines;
 mod shader_params;
-mod ui;
+mod render_recources;
+mod mip_pass;
+mod prepare_lights;
+
 use memoffset::offset_of;
 
 mod model;
@@ -63,13 +66,6 @@ use winit::{
     event_loop::{ControlFlow, EventLoop},
 };
 
-#[repr(C)]
-#[derive(Clone, Copy)]
-struct MipLevelPushConstants {
-    source_size: UVec2,
-    num_dest_mip_levels: u32,
-    source_mip_level: u32,
-}
 
 const NEIGHBOR_OFFSET_COUNT: u32 = 8192;
 const RTXDI_RESERVOIR_BLOCK_SIZE: u32 = 16;
