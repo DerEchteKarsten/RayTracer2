@@ -13,6 +13,7 @@ const float kMinRoughness = 0.05f;
 #define PREPROSSES 0
 #include "RtxdiApplicationBridge.glsl"
 #include "rtxdi/GIReservoir.hlsli"
+#include "rtxdi/DIReservoir.hlsli"
 
 
 #define PI 3.1415926
@@ -103,6 +104,7 @@ const float gamma = 2.2;
 
 const float kMaxBrdfValue = 1e4;
 const float kMISRoughness = 0.3;
+#include "ShadingHelpers.glsl"
 
 float GetMISWeight(const SplitBrdf roughBrdf, const SplitBrdf trueBrdf, const float3 diffuseAlbedo)
 {
@@ -121,45 +123,72 @@ void main() {
     ivec2 pixelPosition = ivec2(gl_FragCoord.xy);
     const RAB_Surface primarySurface = GetGBufferSurface(pixelPosition, g_Const.view);
     const uvec2 reservoirPosition = RTXDI_PixelPosToReservoirPos(pixelPosition, g_Const.runtimeParams.activeCheckerboardField);
-    const RTXDI_GIReservoir reservoir = RTXDI_LoadGIReservoir(g_Const.restirGI.reservoirBufferParams, reservoirPosition, g_Const.restirGI.bufferIndices.finalShadingInputBufferIndex);
+    // const RTXDI_GIReservoir reservoir = RTXDI_LoadGIReservoir(g_Const.restirGI.reservoirBufferParams, reservoirPosition, g_Const.restirGI.bufferIndices.finalShadingInputBufferIndex);
 
-    if (RTXDI_IsValidGIReservoir(reservoir))
-    {
-        vec3 radiance = reservoir.radiance * reservoir.weightSum;
+    // if (RTXDI_IsValidGIReservoir(reservoir))
+    // {
+    //     vec3 radiance = reservoir.radiance * reservoir.weightSum;
         
-        const SplitBrdf brdf = EvaluateBrdf(primarySurface, reservoir.position);
-		vec3 diffuse, specular;
-        if (g_Const.restirGI.finalShadingParams.enableFinalMIS == 1)
+    //     const SplitBrdf brdf = EvaluateBrdf(primarySurface, reservoir.position);
+		// vec3 diffuse, specular;
+    //     if (g_Const.restirGI.finalShadingParams.enableFinalMIS == 1)
+    //     {
+    //         const RTXDI_GIReservoir initialReservoir = RTXDI_LoadGIReservoir(g_Const.restirGI.reservoirBufferParams, reservoirPosition, g_Const.restirGI.bufferIndices.secondarySurfaceReSTIRDIOutputBufferIndex);//LoadInitialSampleReservoir(reservoirPosition, primarySurface);
+    //         const SplitBrdf brdf0 = EvaluateBrdf(primarySurface, initialReservoir.position);
+
+    //         RAB_Surface roughenedSurface = primarySurface;
+    //         roughenedSurface.roughness = max(roughenedSurface.roughness, kMISRoughness);
+
+    //         const SplitBrdf roughBrdf = EvaluateBrdf(roughenedSurface, reservoir.position);
+    //         const SplitBrdf roughBrdf0 = EvaluateBrdf(roughenedSurface, initialReservoir.position);
+
+    //         const float finalWeight = 1.0 - GetMISWeight(roughBrdf, brdf, primarySurface.diffuseAlbedo);
+    //         const float initialWeight = GetMISWeight(roughBrdf0, brdf0, primarySurface.diffuseAlbedo);
+
+    //         const float3 initialRadiance = initialReservoir.radiance * initialReservoir.weightSum;
+
+    //         diffuse = brdf.demodulatedDiffuse * radiance * finalWeight 
+    //                 + brdf0.demodulatedDiffuse * initialRadiance * initialWeight;
+
+    //         specular = brdf.specular * radiance * finalWeight 
+    //                  + brdf0.specular * initialRadiance * initialWeight;
+    //     }else {
+    //         diffuse = brdf.demodulatedDiffuse * radiance;
+		// 	      specular = brdf.specular * radiance;
+    //     }
+
+    //     specular = DemodulateSpecular(brdf.specular * radiance, primarySurface.specularF0);
+
+    //     diffuse.rgb *= primarySurface.diffuseAlbedo;
+    //     specular.rgb *= max(vec3(0.01), primarySurface.specularF0);
+
+    //     col = diffuse + specular;
+
+    float3 diffuse = vec3(0);
+    float3 specular = vec3(0);
+    float lightDistance = 0;
+    float2 currLuminance = vec2(0);
+
+    RTXDI_DIReservoir reservoir = RTXDI_LoadDIReservoir(g_Const.restirDI.reservoirBufferParams, pixelPosition, 0);
+
+    if (RTXDI_IsValidDIReservoir(reservoir))
+    {
+        RAB_LightInfo lightInfo = RAB_LoadLightInfo(RTXDI_GetDIReservoirLightIndex(reservoir), false);
+
+        RAB_LightSample lightSample = RAB_SamplePolymorphicLight(lightInfo,
+            primarySurface, RTXDI_GetDIReservoirSampleUV(reservoir));
+
+        bool needToStore = ShadeSurfaceWithLightSample(reservoir, primarySurface, lightSample,
+            /* previousFrameTLAS = */ false, /* enableVisibilityReuse = */ true, diffuse, specular, lightDistance);
+    
+        currLuminance = float2(calcLuminance(diffuse * primarySurface.diffuseAlbedo), calcLuminance(specular));
+    
+        specular = DemodulateSpecular(primarySurface.specularF0, specular);
+
+        if (needToStore)
         {
-            const RTXDI_GIReservoir initialReservoir = RTXDI_LoadGIReservoir(g_Const.restirGI.reservoirBufferParams, reservoirPosition, g_Const.restirGI.bufferIndices.secondarySurfaceReSTIRDIOutputBufferIndex);//LoadInitialSampleReservoir(reservoirPosition, primarySurface);
-            const SplitBrdf brdf0 = EvaluateBrdf(primarySurface, initialReservoir.position);
-
-            RAB_Surface roughenedSurface = primarySurface;
-            roughenedSurface.roughness = max(roughenedSurface.roughness, kMISRoughness);
-
-            const SplitBrdf roughBrdf = EvaluateBrdf(roughenedSurface, reservoir.position);
-            const SplitBrdf roughBrdf0 = EvaluateBrdf(roughenedSurface, initialReservoir.position);
-
-            const float finalWeight = 1.0 - GetMISWeight(roughBrdf, brdf, primarySurface.diffuseAlbedo);
-            const float initialWeight = GetMISWeight(roughBrdf0, brdf0, primarySurface.diffuseAlbedo);
-
-            const float3 initialRadiance = initialReservoir.radiance * initialReservoir.weightSum;
-
-            diffuse = brdf.demodulatedDiffuse * radiance * finalWeight 
-                    + brdf0.demodulatedDiffuse * initialRadiance * initialWeight;
-
-            specular = brdf.specular * radiance * finalWeight 
-                     + brdf0.specular * initialRadiance * initialWeight;
-        }else {
-            diffuse = brdf.demodulatedDiffuse * radiance;
-			      specular = brdf.specular * radiance;
+            RTXDI_StoreDIReservoir(reservoir, g_Const.restirDI.reservoirBufferParams, pixelPosition, 0);
         }
-
-        specular = DemodulateSpecular(brdf.specular * radiance, primarySurface.specularF0);
-
-        diffuse.rgb *= primarySurface.diffuseAlbedo;
-        specular.rgb *= max(vec3(0.01), primarySurface.specularF0);
-
         col = diffuse + specular;
     } else {
         const vec2 pixelCenter = vec2(pixelPosition.xy) + vec2(0.5);

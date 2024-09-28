@@ -66,12 +66,12 @@ struct {
 #endif
 
 #if FINAL_SHADING
-    RTXDI_PackedDIReservoir light_reservoirs[1];
-    RAB_LightInfo t_LightDataBuffer[1];
-    uvec4 u_RisLightDataBuffer[1];
-    uvec2 u_RisBuffer[1];
     layout(binding = 0, set = 0) buffer TemporalReservoirBuffer {RTXDI_PackedGIReservoir reservoirs[];};
     layout(binding = 1, set = 0) uniform Uniform {ResamplingConstants g_Const;};
+    layout(binding = 3, set = 0) buffer DIReservoirBuffer {RTXDI_PackedDIReservoir light_reservoirs[];};
+    layout(binding = 4, set = 0) buffer LightInfoBuffer {RAB_LightInfo t_LightDataBuffer[];};
+    layout(binding = 5, set = 0) buffer RisLightDataBuffer {uvec4 u_RisLightDataBuffer[];};
+    layout(binding = 6, set = 0) buffer RisBuffer {uvec2 u_RisBuffer[];};
 #endif
 
 

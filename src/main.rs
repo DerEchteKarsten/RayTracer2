@@ -10,10 +10,10 @@ use context::*;
 mod camera;
 use camera::*;
 mod gltf;
+mod light_passes;
 mod pipelines;
 mod shader_params;
 mod ui;
-
 use memoffset::offset_of;
 
 mod model;
@@ -230,7 +230,7 @@ fn main() {
                 temporalResamplingOutputBufferIndex: 0,
                 spatialResamplingInputBufferIndex: 0,
                 spatialResamplingOutputBufferIndex: 1,
-                finalShadingInputBufferIndex: if RESAMPLING {1} else {0},
+                finalShadingInputBufferIndex: if RESAMPLING { 1 } else { 0 },
                 pad1: 0,
                 pad2: 0,
             },
@@ -312,7 +312,7 @@ fn main() {
                 numPrimaryEnvironmentSamples: 1,
                 numPrimaryBrdfSamples: 0,
                 brdfCutoff: 0.0,
-                enableInitialVisibility: 0,
+                enableInitialVisibility: 1,
                 environmentMapImportanceSampling: 1,
                 localLightSamplingMode: 2,
             },

@@ -823,6 +823,10 @@ fn create_post_proccesing_pipelien(
     skybox_view: &vk::ImageView,
     uniform_buffer: &Buffer,
     reservoirs: &Buffer,
+    di_reservoirs: &Buffer,
+    lights_buffer: &Buffer,
+    ris_buffer: &Buffer,
+    ris_lights_buffer: &Buffer,
 ) -> Result<PostProccesingPipeline> {
     let attachments = [vk::AttachmentDescription::default()
         .samples(vk::SampleCountFlags::TYPE_1)
@@ -874,6 +878,26 @@ fn create_post_proccesing_pipelien(
             .binding(2)
             .descriptor_count(1)
             .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+            .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+        vk::DescriptorSetLayoutBinding::default()
+            .binding(3)
+            .descriptor_count(1)
+            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+            .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+        vk::DescriptorSetLayoutBinding::default()
+            .binding(4)
+            .descriptor_count(1)
+            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+            .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+        vk::DescriptorSetLayoutBinding::default()
+            .binding(5)
+            .descriptor_count(1)
+            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+            .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+        vk::DescriptorSetLayoutBinding::default()
+            .binding(6)
+            .descriptor_count(1)
+            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
             .stage_flags(vk::ShaderStageFlags::FRAGMENT),
     ];
     let dynamic_bindings = [
@@ -1013,7 +1037,7 @@ fn create_post_proccesing_pipelien(
             .descriptor_count(1)
             .ty(vk::DescriptorType::UNIFORM_BUFFER),
         vk::DescriptorPoolSize::default()
-            .descriptor_count(1)
+            .descriptor_count(5)
             .ty(vk::DescriptorType::STORAGE_BUFFER),
     ];
 
@@ -1036,6 +1060,30 @@ fn create_post_proccesing_pipelien(
                 sampler: *skybox_sampler,
                 view: *skybox_view,
                 layout: ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+            },
+        },
+        WriteDescriptorSet {
+            binding: 3,
+            kind: WriteDescriptorSetKind::StorageBuffer {
+                buffer: di_reservoirs.inner,
+            },
+        },
+        WriteDescriptorSet {
+            binding: 4,
+            kind: WriteDescriptorSetKind::StorageBuffer {
+                buffer: lights_buffer.inner,
+            },
+        },
+        WriteDescriptorSet {
+            binding: 5,
+            kind: WriteDescriptorSetKind::StorageBuffer {
+                buffer: ris_lights_buffer.inner,
+            },
+        },
+        WriteDescriptorSet {
+            binding: 6,
+            kind: WriteDescriptorSetKind::StorageBuffer {
+                buffer: ris_buffer.inner,
             },
         },
     ];
@@ -1912,6 +1960,41 @@ pub fn create_render_recources(
         )
         .unwrap();
 
+    let di_reservoirs = ctx
+        .create_buffer(
+            vk::BufferUsageFlags::STORAGE_BUFFER,
+            MemoryLocation::GpuOnly,
+            reservoir_buffer_size,
+            None,
+        )
+        .unwrap();
+
+    let lights_buffer = ctx
+        .create_buffer(
+            vk::BufferUsageFlags::STORAGE_BUFFER,
+            MemoryLocation::GpuOnly,
+            48 * model.lights as u64,
+            None,
+        )
+        .unwrap();
+    let ris_lights_buffer = ctx
+        .create_buffer(
+            vk::BufferUsageFlags::STORAGE_BUFFER,
+            MemoryLocation::GpuOnly,
+            size_of::<u32>() as u64 * 8 * WINDOW_SIZE.x as u64 * WINDOW_SIZE.y as u64,
+            None,
+        )
+        .unwrap();
+
+    let ris_buffer = ctx
+        .create_buffer(
+            vk::BufferUsageFlags::STORAGE_BUFFER,
+            MemoryLocation::GpuOnly,
+            size_of::<u32>() as u64 * 2 * WINDOW_SIZE.x as u64 * WINDOW_SIZE.y as u64,
+            None,
+        )
+        .unwrap();
+
     let post_proccesing_pipeline = create_post_proccesing_pipelien(
         ctx,
         &g_buffer,
@@ -1919,6 +2002,10 @@ pub fn create_render_recources(
         &skybox_view,
         &uniform_buffer,
         &reservoirs,
+        &di_reservoirs,
+        &lights_buffer,
+        &ris_buffer,
+        &ris_lights_buffer,
     )
     .unwrap();
 
@@ -2030,40 +2117,6 @@ pub fn create_render_recources(
     ctx.transition_image_layout(&local_lights_pdf, ImageLayout::GENERAL)
         .unwrap();
     ctx.transition_image_layout(&environment_pdf, ImageLayout::GENERAL)
-        .unwrap();
-
-    let di_reservoirs = ctx
-        .create_buffer(
-            vk::BufferUsageFlags::STORAGE_BUFFER,
-            MemoryLocation::GpuOnly,
-            reservoir_buffer_size,
-            None,
-        )
-        .unwrap();
-    let lights_buffer = ctx
-        .create_buffer(
-            vk::BufferUsageFlags::STORAGE_BUFFER,
-            MemoryLocation::GpuOnly,
-            48 * model.lights as u64,
-            None,
-        )
-        .unwrap();
-    let ris_lights_buffer = ctx
-        .create_buffer(
-            vk::BufferUsageFlags::STORAGE_BUFFER,
-            MemoryLocation::GpuOnly,
-            size_of::<u32>() as u64 * 8 * WINDOW_SIZE.x as u64 * WINDOW_SIZE.y as u64,
-            None,
-        )
-        .unwrap();
-
-    let ris_buffer = ctx
-        .create_buffer(
-            vk::BufferUsageFlags::STORAGE_BUFFER,
-            MemoryLocation::GpuOnly,
-            size_of::<u32>() as u64 * 2 * WINDOW_SIZE.x as u64 * WINDOW_SIZE.y as u64,
-            None,
-        )
         .unwrap();
 
     let mut sampler_create_info: vk::SamplerCreateInfo = vk::SamplerCreateInfo {
