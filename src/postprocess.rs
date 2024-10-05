@@ -1,9 +1,11 @@
 use anyhow::Result;
-use ash::vk::{self, PipelineCache, ShaderStageFlags};
+use ash::vk::{self, ImageLayout, PipelineCache, ShaderStageFlags};
 
 use crate::{
-    allocate_descriptor_sets, calculate_pool_sizes, render_recources::GBuffer,
-    update_descriptor_sets, ImageBarrier, Renderer, WriteDescriptorSet, WINDOW_SIZE,
+    allocate_descriptor_sets, calculate_pool_sizes,
+    render_resources::{GBuffer, RenderResources},
+    update_descriptor_sets, Buffer, CalculatePoolSizesDesc, ImageBarrier, Renderer,
+    WriteDescriptorSet, WINDOW_SIZE,
 };
 
 pub struct PostProcessPass {
@@ -14,25 +16,66 @@ pub struct PostProcessPass {
 }
 
 impl PostProcessPass {
-    pub fn new(ctx: &mut Renderer, g_buffers: &[GBuffer; 2]) -> Result<Self> {
+    pub fn new(
+        ctx: &mut Renderer,
+        g_buffers: &[GBuffer; 2],
+        resources: &RenderResources,
+        uniform_buffer: &Buffer,
+        skybox: &vk::ImageView,
+        skybox_sampler: &vk::Sampler,
+    ) -> Result<Self> {
         let source_bindings = [
             vk::DescriptorSetLayoutBinding::default()
+                .descriptor_count(1)
                 .binding(0)
+                .stage_flags(vk::ShaderStageFlags::COMPUTE)
+                .descriptor_type(vk::DescriptorType::STORAGE_IMAGE), // Depth
+            vk::DescriptorSetLayoutBinding::default()
+                .descriptor_count(1)
+                .binding(1)
                 .stage_flags(vk::ShaderStageFlags::COMPUTE)
                 .descriptor_type(vk::DescriptorType::STORAGE_IMAGE), // Albedo
             vk::DescriptorSetLayoutBinding::default()
-                .binding(1)
+                .descriptor_count(1)
+                .binding(2)
                 .stage_flags(vk::ShaderStageFlags::COMPUTE)
                 .descriptor_type(vk::DescriptorType::STORAGE_IMAGE), // Specular
             vk::DescriptorSetLayoutBinding::default()
-                .binding(2)
+                .descriptor_count(1)
+                .binding(3)
                 .stage_flags(vk::ShaderStageFlags::COMPUTE)
                 .descriptor_type(vk::DescriptorType::STORAGE_IMAGE), // Emissiv
+            vk::DescriptorSetLayoutBinding::default()
+                .descriptor_count(1)
+                .binding(4)
+                .stage_flags(vk::ShaderStageFlags::COMPUTE)
+                .descriptor_type(vk::DescriptorType::STORAGE_IMAGE), // Diffuse
+            vk::DescriptorSetLayoutBinding::default()
+                .descriptor_count(1)
+                .binding(5)
+                .stage_flags(vk::ShaderStageFlags::COMPUTE)
+                .descriptor_type(vk::DescriptorType::STORAGE_IMAGE), // Specular
+            vk::DescriptorSetLayoutBinding::default()
+                .descriptor_count(1)
+                .binding(6)
+                .stage_flags(vk::ShaderStageFlags::COMPUTE)
+                .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER), // Uniform
+            vk::DescriptorSetLayoutBinding::default()
+                .descriptor_count(1)
+                .binding(7)
+                .stage_flags(vk::ShaderStageFlags::COMPUTE)
+                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER), // Skybox
+            vk::DescriptorSetLayoutBinding::default()
+                .descriptor_count(1)
+                .binding(8)
+                .stage_flags(vk::ShaderStageFlags::COMPUTE)
+                .descriptor_type(vk::DescriptorType::STORAGE_IMAGE), // Motion Vectors
         ];
 
         let target_bindings = [
             vk::DescriptorSetLayoutBinding::default()
                 .binding(0)
+                .descriptor_count(1)
                 .stage_flags(vk::ShaderStageFlags::COMPUTE)
                 .descriptor_type(vk::DescriptorType::STORAGE_IMAGE), // Output
         ];
@@ -50,8 +93,9 @@ impl PostProcessPass {
             .stage(
                 ctx.create_shader_stage(
                     ShaderStageFlags::COMPUTE,
-                    "./src/shaders/post_processing.comp.spv",
+                    "./src/shaders/bin/post_processing.spv",
                 )
+                .unwrap()
                 .0,
             );
         let handel = unsafe {
@@ -62,7 +106,16 @@ impl PostProcessPass {
 
         let pool = ctx.create_descriptor_pool(
             2 + ctx.swapchain.images.len() as u32,
-            &calculate_pool_sizes(&[&source_bindings, &target_bindings]),
+            &calculate_pool_sizes(&[
+                CalculatePoolSizesDesc {
+                    bindings: &source_bindings,
+                    num_sets: 2,
+                },
+                CalculatePoolSizesDesc {
+                    bindings: &target_bindings,
+                    num_sets: ctx.swapchain.images.len() as u32,
+                },
+            ]),
         )?;
 
         let source_descriptors = allocate_descriptor_sets(&ctx.device, &pool, &source_layout, 2)?;
@@ -78,23 +131,62 @@ impl PostProcessPass {
                 WriteDescriptorSet {
                     binding: 0,
                     kind: crate::WriteDescriptorSetKind::StorageImage {
-                        view: g_buffers[i].diffuse_albedo.view,
+                        view: g_buffers[i].depth.view,
                         layout: vk::ImageLayout::GENERAL,
                     },
                 },
                 WriteDescriptorSet {
                     binding: 1,
                     kind: crate::WriteDescriptorSetKind::StorageImage {
-                        view: g_buffers[i].specular_rough.view,
+                        view: g_buffers[i].diffuse_albedo.view,
                         layout: vk::ImageLayout::GENERAL,
                     },
                 },
                 WriteDescriptorSet {
                     binding: 2,
                     kind: crate::WriteDescriptorSetKind::StorageImage {
+                        view: g_buffers[i].specular_rough.view,
+                        layout: vk::ImageLayout::GENERAL,
+                    },
+                },
+                WriteDescriptorSet {
+                    binding: 3,
+                    kind: crate::WriteDescriptorSetKind::StorageImage {
                         view: g_buffers[i].emissive.view,
                         layout: vk::ImageLayout::GENERAL,
                     },
+                },
+                WriteDescriptorSet {
+                    binding: 4,
+                    kind: crate::WriteDescriptorSetKind::StorageImage {
+                        view: resources.diffuse_lighting.view,
+                        layout: vk::ImageLayout::GENERAL,
+                    },
+                },
+                WriteDescriptorSet {
+                    binding: 5,
+                    kind: crate::WriteDescriptorSetKind::StorageImage {
+                        view: resources.specular_lighting.view,
+                        layout: vk::ImageLayout::GENERAL,
+                    },
+                },
+                WriteDescriptorSet {
+                    binding: 6,
+                    kind: crate::WriteDescriptorSetKind::UniformBuffer {
+                        buffer: uniform_buffer.inner,
+                    },
+                },
+                WriteDescriptorSet {
+                    binding: 7,
+                    kind: crate::WriteDescriptorSetKind::CombinedImageSampler {
+                        view: *skybox,
+                        sampler: *skybox_sampler,
+                        layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                    },
+                },                
+                WriteDescriptorSet {
+                    binding: 8,
+                    kind: crate::WriteDescriptorSetKind::StorageImage { view: resources.motion_vectors.view, layout: vk::ImageLayout::GENERAL },
                 },
             ];
             update_descriptor_sets(ctx, &source_descriptors[i], &writes);
@@ -105,7 +197,7 @@ impl PostProcessPass {
                 binding: 0,
                 kind: crate::WriteDescriptorSetKind::StorageImage {
                     view: ctx.swapchain.images[i].view,
-                    layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                    layout: vk::ImageLayout::GENERAL,
                 },
             }];
             update_descriptor_sets(ctx, &target_descriptors[i], &writes);
@@ -125,8 +217,8 @@ impl PostProcessPass {
                 cmd,
                 &[ImageBarrier {
                     image: &ctx.swapchain.images[i as usize].image,
-                    old_layout: vk::ImageLayout::PRESENT_SRC_KHR,
-                    new_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                    old_layout: vk::ImageLayout::UNDEFINED,
+                    new_layout: vk::ImageLayout::GENERAL,
                     src_access_mask: vk::AccessFlags2::NONE,
                     dst_access_mask: vk::AccessFlags2::SHADER_WRITE,
                     src_stage_mask: vk::PipelineStageFlags2::NONE,
@@ -152,7 +244,7 @@ impl PostProcessPass {
                 cmd,
                 &[ImageBarrier {
                     image: &ctx.swapchain.images[i as usize].image,
-                    old_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                    old_layout: vk::ImageLayout::GENERAL,
                     new_layout: vk::ImageLayout::PRESENT_SRC_KHR,
                     src_access_mask: vk::AccessFlags2::SHADER_WRITE,
                     dst_access_mask: vk::AccessFlags2::NONE,

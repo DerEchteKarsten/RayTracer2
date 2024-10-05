@@ -201,25 +201,6 @@ vec3 Schlick_Fresnel(vec3 F0, float VdotH)
     return F0 + (1 - F0) * pow(max(1 - VdotH, 0), 5);
 }
 
-vec3 octToNdirSigned(vec2 p)
-{
-    // https://twitter.com/Stubbesaurus/status/937994790553227264
-    vec3 n = vec3(p.x, p.y, 1.0 - abs(p.x) - abs(p.y));
-    float t = max(0, -n.z);
-
-    n.xy += (n.x >= 0.0 || n.y >= 0.0) ? -t : t;
-    return normalize(n);
-}
-
-vec3 octToNdirUnorm32(uint pUnorm)
-{
-    vec2 p;
-    p.x = clamp(float(pUnorm & 0xffff) / float(0xfffel), 0, 1);
-    p.y = clamp(float(pUnorm >> 16) / float(0xfffel), 0, 1);
-    p = p * 2.0 - 1.0;
-    return octToNdirSigned(p);
-}
-
 
 float G_Smith_over_NdotV(float roughness, float NdotV, float NdotL)
 {

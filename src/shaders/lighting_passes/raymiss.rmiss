@@ -3,7 +3,7 @@
 #extension GL_GOOGLE_include_directive : enable
 #extension GL_EXT_ray_tracing : require
 
-#include "../common.glsl"
+#include "common.glsl"
 
 layout(location = 0) rayPayloadInEXT Payload p;
 
@@ -11,11 +11,7 @@ layout(location = 0) rayPayloadInEXT Payload p;
 
 void main()
 {   
-	vec3 d = gl_WorldRayDirectionEXT;
-	float u = (0.5 + atan2(d.z, d.x)/(2*PI));
-    float v = (0.5 - asin(d.y)/PI);
-	vec4 tex =  texture(SkyBox, vec2(u,v));
-	p.color = tex;
-    p.missed = true;
-	p.emission = vec3(0.0);
+	p.uv = vec2(0.0, 0.0);
+	p.geometryIndex = ~0u;
+	p.primitiveId = ~0u;
 }

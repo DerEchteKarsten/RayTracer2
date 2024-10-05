@@ -94,4 +94,5 @@ vec3 convertMotionVectorToPixelSpace(
     motionVector.xy = previousPosition - curerntPixelCenter;
     return motionVector;
 }
+
 #endif

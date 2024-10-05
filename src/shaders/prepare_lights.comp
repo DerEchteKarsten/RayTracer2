@@ -16,7 +16,7 @@
 #include "ShaderParameters.glsl"
 #include "common.glsl"
 #include "packing.glsl"
-layout(binding = 5, set = 0) uniform sampler2D skyBox;
+layout(binding = 5, set = 0) uniform sampler2D SkyBox;
 #include "PolymorphicLight.glsl"
 
 struct PrepareLightsTask {

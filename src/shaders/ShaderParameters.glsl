@@ -18,6 +18,10 @@ const uint kPolymorphicLightIesProfileEnableBit = 1 << 29;
 const float kPolymorphicLightMinLog2Radiance = -8.f;
 const float kPolymorphicLightMaxLog2Radiance = 40.f;
 
+const uint kSecondaryGBuffer_IsSpecularRay = 1;
+const uint kSecondaryGBuffer_IsDeltaSurface = 2;
+const uint kSecondaryGBuffer_IsEnvironmentMap = 4;
+
 struct PlanarViewConstants
 {
     mat4    matWorldToView;

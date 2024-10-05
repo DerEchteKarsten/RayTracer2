@@ -1,7 +1,8 @@
 #version 460
 
 #extension GL_GOOGLE_include_directive : enable
-
+#define COMPUTE 1
+#include "./common.glsl"
 #include "RtxdiApplicationBridge.glsl"
 #include "rtxdi/PresamplingFunctions.hlsli"
 
@@ -15,7 +16,7 @@ void main()
 
     RTXDI_PresampleEnvironmentMap(
         rng,
-        t_EnvironmentPdfTexture,
+        EnvironmentPdfTexture,
         g_Const.environmentPdfTextureSize,
         gl_GlobalInvocationID.y,
         gl_GlobalInvocationID.x,

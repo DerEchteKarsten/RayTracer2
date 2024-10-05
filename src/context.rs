@@ -15,6 +15,7 @@ use log::debug;
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 use std::{
     borrow::BorrowMut,
+    collections::{HashMap, HashSet},
     ffi::{c_char, CStr, CString},
     mem::{align_of, size_of, size_of_val},
     os::raw::c_void,
@@ -579,27 +580,27 @@ impl<'a> Renderer<'a> {
         create_descriptor_pool(&self.device, max_sets, pool_sizes)
     }
 
-    pub fn create_shader_module(&self, code_path: &str) -> vk::ShaderModule {
-        let mut code = std::fs::File::open(code_path).unwrap();
-        let decoded_code = ash::util::read_spv(&mut code).unwrap();
+    pub fn create_shader_module(&self, code_path: &str) -> Result<vk::ShaderModule> {
+        let mut code = std::fs::File::open(code_path)?;
+        let decoded_code = ash::util::read_spv(&mut code)?;
         let create_info = vk::ShaderModuleCreateInfo::default().code(&decoded_code);
 
-        unsafe { self.device.create_shader_module(&create_info, None) }.unwrap()
+        Ok(unsafe { self.device.create_shader_module(&create_info, None) }?)
     }
 
     pub fn create_shader_stage(
         &self,
         stage: vk::ShaderStageFlags,
         path: &str,
-    ) -> (vk::PipelineShaderStageCreateInfo, vk::ShaderModule) {
-        let module = self.create_shader_module(path);
-        (
+    ) -> Result<(vk::PipelineShaderStageCreateInfo, vk::ShaderModule)> {
+        let module = self.create_shader_module(path)?;
+        Ok((
             vk::PipelineShaderStageCreateInfo::default()
                 .stage(stage)
                 .module(module)
-                .name(CStr::from_bytes_with_nul("main\0".as_bytes()).unwrap()),
+                .name(CStr::from_bytes_with_nul("main\0".as_bytes())?),
             module,
-        )
+        ))
     }
 
     pub fn render<F>(&mut self, func: F) -> Result<()>
@@ -611,7 +612,7 @@ impl<'a> Renderer<'a> {
             let frame = &self.frames_in_flight[frame_index as usize];
             frame.fence.wait(&self.device, None)?;
             frame.fence.reset(&self.device)?;
-
+            unsafe { self.device.queue_wait_idle(self.graphics_queue).unwrap() };
             let image_index = match unsafe {
                 self.swapchain.ash_swapchain.acquire_next_image(
                     self.swapchain.vk_swapchain,
@@ -1846,7 +1847,7 @@ impl Swapchain {
                 .image_extent(extent)
                 .image_array_layers(1)
                 .image_usage(
-                    vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::TRANSFER_DST,
+                    vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::TRANSFER_DST,
                 );
 
             builder = if graphics_queue_family.index != present_queue_family.index {
@@ -2166,75 +2167,31 @@ fn new_device(
     Ok(device)
 }
 
-pub fn calculate_pool_sizes(
-    bindings: &[&[vk::DescriptorSetLayoutBinding]],
-) -> Vec<vk::DescriptorPoolSize> {
-    let mut sizes = vec![
-        vk::DescriptorPoolSize {
-            descriptor_count: 0,
-            ty: vk::DescriptorType::UNIFORM_BUFFER,
-        },
-        vk::DescriptorPoolSize {
-            descriptor_count: 0,
-            ty: vk::DescriptorType::ACCELERATION_STRUCTURE_KHR,
-        },
-        vk::DescriptorPoolSize {
-            descriptor_count: 0,
-            ty: vk::DescriptorType::STORAGE_BUFFER,
-        },
-        vk::DescriptorPoolSize {
-            descriptor_count: 0,
-            ty: vk::DescriptorType::STORAGE_IMAGE,
-        },
-        vk::DescriptorPoolSize {
-            descriptor_count: 0,
-            ty: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
-        },
-        vk::DescriptorPoolSize {
-            descriptor_count: 0,
-            ty: vk::DescriptorType::INPUT_ATTACHMENT,
-        },
-        vk::DescriptorPoolSize {
-            descriptor_count: 0,
-            ty: vk::DescriptorType::SAMPLED_IMAGE,
-        },
-        vk::DescriptorPoolSize {
-            descriptor_count: 0,
-            ty: vk::DescriptorType::SAMPLER,
-        },
-    ];
+pub struct CalculatePoolSizesDesc<'a> {
+    pub bindings: &'a [vk::DescriptorSetLayoutBinding<'a>],
+    pub num_sets: u32,
+}
 
-    for b in bindings.concat().iter() {
-        match b.descriptor_type {
-            vk::DescriptorType::UNIFORM_BUFFER => {
-                sizes[0].descriptor_count += 1;
+pub fn calculate_pool_sizes(bindings: &[CalculatePoolSizesDesc]) -> Vec<vk::DescriptorPoolSize> {
+    let mut sizes: HashMap<vk::DescriptorType, u32> = HashMap::new();
+
+    for binding_set in bindings {
+        for binding in binding_set.bindings {
+            if let Some(count) = sizes.get_mut(&binding.descriptor_type) {
+                *count += binding_set.num_sets * binding.descriptor_count;
+            } else {
+                sizes.insert(binding.descriptor_type, binding_set.num_sets * binding.descriptor_count);
             }
-            vk::DescriptorType::ACCELERATION_STRUCTURE_KHR => {
-                sizes[1].descriptor_count += 1;
-            }
-            vk::DescriptorType::STORAGE_BUFFER => {
-                sizes[2].descriptor_count += 1;
-            }
-            vk::DescriptorType::STORAGE_IMAGE => {
-                sizes[3].descriptor_count += 1;
-            }
-            vk::DescriptorType::COMBINED_IMAGE_SAMPLER => {
-                sizes[4].descriptor_count += 1;
-            }
-            vk::DescriptorType::INPUT_ATTACHMENT => {
-                sizes[5].descriptor_count += 1;
-            }
-            vk::DescriptorType::SAMPLED_IMAGE => {
-                sizes[6].descriptor_count += 1;
-            }
-            vk::DescriptorType::SAMPLER => {
-                sizes[7].descriptor_count += 1;
-            }
-            _ => (),
         }
     }
 
     sizes
+        .into_iter()
+        .map(|(k, v)| vk::DescriptorPoolSize {
+            ty: k,
+            descriptor_count: v,
+        })
+        .collect()
 }
 
 fn enumerate_physical_devices(

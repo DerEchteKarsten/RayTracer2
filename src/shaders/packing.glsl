@@ -1,4 +1,5 @@
-
+#define RTXDI_GLSL
+#include "rtxdi/RtxdiTypes.h"
 #define PACK_UFLOAT_TEMPLATE(size)                      \
 uint Pack_R ## size ## _UFLOAT(float r) \
 {                                                       \
@@ -85,4 +86,48 @@ uint Pack_R8G8B8A8_Gamma_UFLOAT(vec4 rgba, float gamma, vec4 d)
     uint b = Pack_R8_UFLOAT(rgba.b, d.b) << 16;
     uint a = Pack_R8_UFLOAT(rgba.a, d.a) << 24;
     return r | g | b | a;
+}
+
+
+uint Pack_R16G16_FLOAT(vec2 rg)
+{
+    uint r = f32tof16(rg.r);
+    uint g = f32tof16(rg.g) << 16;
+    return r | g;
+}
+
+uvec2 Pack_R16G16B16A16_FLOAT(vec4 rgba)
+{
+    return uvec2(Pack_R16G16_FLOAT(rgba.rg), Pack_R16G16_FLOAT(rgba.ba));
+}
+
+vec2 Unpack_R16G16_FLOAT(uint rg)
+{
+    uvec2 d = uvec2(rg, rg >> 16);
+    return unpackHalf2x16(d.x);
+}
+
+vec4 Unpack_R16G16B16A16_FLOAT(uvec2 rgba)
+{
+    return vec4(Unpack_R16G16_FLOAT(rgba.x), Unpack_R16G16_FLOAT(rgba.y));
+}
+
+
+vec3 octToNdirSigned(vec2 p)
+{
+    // https://twitter.com/Stubbesaurus/status/937994790553227264
+    vec3 n = vec3(p.x, p.y, 1.0 - abs(p.x) - abs(p.y));
+    float t = max(0, -n.z);
+
+    n.xy += (n.x >= 0.0 || n.y >= 0.0) ? -t : t;
+    return normalize(n);
+}
+
+vec3 octToNdirUnorm32(uint pUnorm)
+{
+    vec2 p;
+    p.x = clamp(float(pUnorm & 0xffff) / float(0xfffel), 0, 1);
+    p.y = clamp(float(pUnorm >> 16) / float(0xfffel), 0, 1);
+    p = p * 2.0 - 1.0;
+    return octToNdirSigned(p);
 }

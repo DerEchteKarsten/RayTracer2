@@ -1,7 +1,7 @@
 use std::ffi::CString;
 
 use crate::{
-    allocate_descriptor_set, render_recources::RenderResources, update_descriptor_sets, Buffer,
+    allocate_descriptor_set, render_resources::RenderResources, update_descriptor_sets, Buffer,
     Model, Renderer, WriteDescriptorSet, WriteDescriptorSetKind,
 };
 use anyhow::Result;
@@ -85,7 +85,10 @@ impl PrepareLightsTasks {
             .layout(layout)
             .stage(
                 vk::PipelineShaderStageCreateInfo::default()
-                    .module(ctx.create_shader_module("./src/shaders/prepare_lights.comp.spv"))
+                    .module(
+                        ctx.create_shader_module("./src/shaders/bin/prepare_lights.spv")
+                            .unwrap(),
+                    )
                     .stage(vk::ShaderStageFlags::COMPUTE)
                     .name(&entry_point_name),
             );

@@ -3,7 +3,7 @@
 #extension GL_GOOGLE_include_directive : enable
 #extension GL_EXT_ray_tracing : require
 
-#include "../common.glsl"
+#include "common.glsl"
 
 layout(location = 0) rayPayloadEXT Payload p;
 
@@ -12,184 +12,171 @@ layout(location = 0) rayPayloadEXT Payload p;
 #include "rtxdi/DIResamplingFunctions.hlsli"
 #include "rtxdi/GIResamplingFunctions.hlsli"
 #include "ShadingHelpers.glsl"
-
-const uint numPrimaryLocalLightSamples = 1;
-const uint numPrimaryInfiniteLightSamples = 1;
-const uint numPrimaryEnvironmentSamples = 1;
-
-const float SKYBOX = 1.0;
-const float c_MaxIndirectRadiance = 100.0;
-
+#include "ShaderParameters.glsl"
+#include "Hit.glsl"
 
 void main() 
 {	
-	
+    uint2 pixelPosition = RTXDI_ReservoirPosToPixelPos(gl_LaunchIDEXT.xy, g_Const.runtimeParams.activeCheckerboardField);
 
-    RTXDI_GIReservoir reservoir;
+    RAB_Surface surface = RAB_GetGBufferSurface(ivec2(pixelPosition), false);
 
-    vec3 p_emission = p.emission;
+    if (!RAB_IsSurfaceValid(surface))
+        return;
 
-    if (RAB_IsSurfaceValid(primary.surface))
+    RAB_RandomSamplerState rng = RAB_InitRandomSampler(gl_LaunchIDEXT.xy, 5);
+    
+    float3 tangent, bitangent;
+    branchlessONB(surface.normal, tangent, bitangent);
+
+    float depth = max(1, 0.1 * length(surface.worldPos - g_Const.view.cameraDirectionOrPosition.xyz));
+
+    RayDesc ray;
+    ray.TMin = 0.001 * depth;
+    ray.TMax = 1000;
+
+    float2 Rand;
+    Rand.x = RAB_GetNextRandom(rng);
+    Rand.y = RAB_GetNextRandom(rng);
+
+    float3 V = normalize(g_Const.view.cameraDirectionOrPosition.xyz - surface.worldPos);
+
+    bool isSpecularRay = false;
+    bool isDeltaSurface = surface.roughness == 0;
+    float specular_PDF;
+    float3 BRDF_over_PDF;
+    float overall_PDF;
+
     {
-        RAB_RandomSamplerState rng = RAB_InitRandomSampler(pixelCord, 1);
-        
-        float dist = max(1, 0.1 * length(primary.surface.worldPos - g_Const.view.cameraDirectionOrPosition.xyz));
-
-        RayDesc ray;
-        ray.TMin = 0.001f * dist;
-        ray.TMax = 1000;
-
-        float3 tangent, bitangent;
-        branchlessONB(primary.surface.normal, tangent, bitangent);
-
-        float2 Rand;
-        Rand.x = RAB_GetNextRandom(rng);
-        Rand.y = RAB_GetNextRandom(rng);
-
-        float3 V = normalize(g_Const.view.cameraDirectionOrPosition.xyz - primary.surface.worldPos);
-
-        bool isSpecularRay = false;
-        bool isDeltaSurface = primary.surface.roughness == 0.0;
-        float specular_PDF;
-        float3 BRDF_over_PDF;
-        float overall_PDF;
-
+        float3 specularDirection;
+        float3 specular_BRDF_over_PDF;
         {
-            float3 specularDirection;
-            float3 specular_BRDF_over_PDF;
-            {
-                float3 Ve = float3(dot(V, tangent), dot(V, bitangent), dot(V, primary.surface.normal));
-                float3 He = sampleGGX_VNDF(Ve, primary.surface.roughness, Rand);
-                float3 H = isDeltaSurface ? primary.surface.normal : normalize(He.x * tangent + He.y * bitangent + He.z * primary.surface.normal);
-                specularDirection = reflect(-V, H);
+            float3 Ve = float3(dot(V, tangent), dot(V, bitangent), dot(V, surface.normal));
+            float3 He = sampleGGX_VNDF(Ve, surface.roughness, Rand);
+            float3 H = isDeltaSurface ? surface.normal : normalize(He.x * tangent + He.y * bitangent + He.z * surface.normal);
+            specularDirection = reflect(-V, H);
 
-                float HoV = saturate(dot(H, V));
-                float NoV = saturate(dot(primary.surface.normal, V));
-                float3 F = Schlick_Fresnel(primary.surface.specularF0, HoV);
-                float G1 = isDeltaSurface ? 1.0 : (NoV > 0) ? G1_Smith(primary.surface.roughness, NoV) : 0;
-                specular_BRDF_over_PDF = F * G1;
-            }
-
-            float3 diffuseDirection;
-            float diffuse_BRDF_over_PDF;
-            {
-                float solidAnglePdf;
-                float3 localDirection = SampleCosHemisphere(Rand, solidAnglePdf);
-                diffuseDirection = tangent * localDirection.x + bitangent * localDirection.y + primary.surface.normal * localDirection.z;
-                diffuse_BRDF_over_PDF = 1.0;
-            }
-
-            specular_PDF = saturate(calcLuminance(specular_BRDF_over_PDF) /
-                calcLuminance(specular_BRDF_over_PDF + diffuse_BRDF_over_PDF * primary.surface.diffuseAlbedo));
-
-            isSpecularRay = RAB_GetNextRandom(rng) < specular_PDF;
-
-            if (isSpecularRay)
-            {
-                ray.Direction = specularDirection;
-                BRDF_over_PDF = specular_BRDF_over_PDF / specular_PDF;
-            }
-            else
-            {
-                ray.Direction = diffuseDirection;
-                BRDF_over_PDF = vec3(diffuse_BRDF_over_PDF / (1.0 - specular_PDF));
-            }
-
-            const float specularLobe_PDF = ImportanceSampleGGX_VNDF_PDF(primary.surface.roughness, primary.surface.normal, V, ray.Direction);
-            const float diffuseLobe_PDF = saturate(dot(ray.Direction, primary.surface.normal)) / RTXDI_PI;
-
-            // For delta surfaces, we only pass the diffuse lobe to ReSTIR GI, and this pdf is for that.
-            overall_PDF = isDeltaSurface ? diffuseLobe_PDF : mix(diffuseLobe_PDF, specularLobe_PDF, specular_PDF);
+            float HoV = saturate(dot(H, V));
+            float NoV = saturate(dot(surface.normal, V));
+            float3 F = Schlick_Fresnel(surface.specularF0, HoV);
+            float G1 = isDeltaSurface ? 1.0 : (NoV > 0) ? G1_Smith(surface.roughness, NoV) : 0;
+            specular_BRDF_over_PDF = F * G1;
         }
 
-        if (dot(primary.surface.geoNormal, ray.Direction) <= 0.0)
+        float3 diffuseDirection;
+        float diffuse_BRDF_over_PDF;
         {
-            BRDF_over_PDF = vec3(0.0);
-            ray.TMax = 0;
+            float solidAnglePdf;
+            float3 localDirection = SampleCosHemisphere(Rand, solidAnglePdf);
+            diffuseDirection = tangent * localDirection.x + bitangent * localDirection.y + surface.normal * localDirection.z;
+            diffuse_BRDF_over_PDF = 1.0;
         }
 
-        ray.Origin = primary.surface.worldPos;
+        specular_PDF = saturate(calcLuminance(specular_BRDF_over_PDF) /
+            calcLuminance(specular_BRDF_over_PDF + diffuse_BRDF_over_PDF * surface.diffuseAlbedo));
 
-        RAB_Surface secondarySurface = TraceRayToSurface(ray);
-        float3 radiance = p.emission;
+        isSpecularRay = RAB_GetNextRandom(rng) < specular_PDF;
 
-        if(RAB_IsSurfaceValid(secondarySurface)) {
-
-            RTXDI_SampleParameters sampleParams = RTXDI_InitSampleParameters(
-                numPrimaryLocalLightSamples,
-                numPrimaryInfiniteLightSamples,
-                numPrimaryEnvironmentSamples,
-                0,      // numBrdfSamples
-                0.f,    // brdfCutoff 
-                0.f     // brdfMinRayT
-            );   
-
-            RAB_RandomSamplerState tileRng = RAB_InitRandomSampler(pixelCord / RTXDI_TILE_SIZE_IN_PIXELS, 1);
-
-            RAB_LightSample lightSample;
-            RTXDI_DIReservoir DIreservoir = RTXDI_SampleLightsForSurface(rng, tileRng, secondarySurface,
-                sampleParams, g_Const.lightBufferParams, g_Const.restirDI.initialSamplingParams.localLightSamplingMode,
-                    g_Const.localLightsRISBufferSegmentParams, g_Const.environmentLightRISBufferSegmentParams,
-            lightSample);
-
-            // Try to find this secondary surface in the G-buffer. If found, resample the lights
-            // from that G-buffer surface into the reservoir using the spatial resampling function.
-
-            float4 secondaryClipPos = mul(float4(secondarySurface.worldPos, 1.0), g_Const.view.matWorldToClip);
-            secondaryClipPos.xyz /= secondaryClipPos.w;
-
-            // if ((abs(secondaryClipPos.x) < 1.0 && abs(secondaryClipPos.y) < 1.0) && secondaryClipPos.w > 0)
-            // {
-            //     int2 secondaryPixelPos = int2(secondaryClipPos.xy * g_Const.view.clipToWindowScale + g_Const.view.clipToWindowBias);
-            //     secondarySurface.viewDepth = secondaryClipPos.w;
-
-            //     RTXDI_DISpatialResamplingParameters sparams;
-            //     sparams.sourceBufferIndex = g_Const.restirDI.bufferIndices.shadingInputBufferIndex;
-            //     sparams.numSamples = g_Const.restirDI.spatialResamplingParams.numSpatialSamples;
-            //     sparams.numDisocclusionBoostSamples = 0;
-            //     sparams.targetHistoryLength = 0;
-            //     sparams.biasCorrectionMode = g_Const.restirDI.spatialResamplingParams.spatialBiasCorrection;
-            //     sparams.samplingRadius = g_Const.restirDI.spatialResamplingParams.spatialSamplingRadius;
-            //     sparams.depthThreshold = g_Const.restirDI.spatialResamplingParams.spatialDepthThreshold;
-            //     sparams.normalThreshold = g_Const.restirDI.spatialResamplingParams.spatialNormalThreshold;
-            //     sparams.enableMaterialSimilarityTest = false;
-            //     sparams.discountNaiveSamples = false;
-
-            //     DIreservoir = RTXDI_DISpatialResampling(secondaryPixelPos, secondarySurface, DIreservoir,
-            //         rng, g_Const.runtimeParams, g_Const.restirDI.reservoirBufferParams, sparams, lightSample);
-            // }
-
-            float3 indirectDiffuse = vec3(0);
-            float3 indirectSpecular = vec3(0);
-            float lightDistance = 0;
-            ShadeSurfaceWithLightSample(DIreservoir, secondarySurface, lightSample, /* previousFrameTLAS = */ false,
-                /* enableVisibilityReuse = */ false, indirectDiffuse, indirectSpecular, lightDistance);
-
-            radiance += indirectDiffuse * secondarySurface.diffuseAlbedo + indirectSpecular;
-
-            // Firefly suppression
-            float indirectLuminance = calcLuminance(radiance);
-            if (indirectLuminance > c_MaxIndirectRadiance)
-                radiance *= c_MaxIndirectRadiance / indirectLuminance;
-
-            // outputShadingResult = isSpecularRay && isDeltaSurface;
-
-            // if (isValidSecondarySurface && !outputShadingResult)
-            // {
-            //     // This pixel has a valid indirect sample so it stores information as an initial GI reservoir.
-            // }
-            //texture(t_LocalLightPdfTexture, vec2(pixelCord) / vec2(size)).rrr
-            reservoir = RTXDI_MakeGIReservoir(secondarySurface.worldPos,
-                secondarySurface.normal, radiance, overall_PDF);
-
-        }else {
-            reservoir = RTXDI_MakeGIReservoir(ray.Origin + ray.Direction * BACKGROUND_DEPTH,
-                -ray.Direction, (p.color.rgb * SKYBOX + p_emission), overall_PDF);
+        if (isSpecularRay)
+        {
+            ray.Direction = specularDirection;
+            BRDF_over_PDF = specular_BRDF_over_PDF / specular_PDF;
         }
+        else
+        {
+            ray.Direction = diffuseDirection;
+            BRDF_over_PDF = vec3(diffuse_BRDF_over_PDF / (1.0 - specular_PDF));
+        }
+
+        const float specularLobe_PDF = ImportanceSampleGGX_VNDF_PDF(surface.roughness, surface.normal, V, ray.Direction);
+        const float diffuseLobe_PDF = saturate(dot(ray.Direction, surface.normal)) / RTXDI_PI;
+
+        // For delta surfaces, we only pass the diffuse lobe to ReSTIR GI, and this pdf is for that.
+        overall_PDF = isDeltaSurface ? diffuseLobe_PDF : mix(diffuseLobe_PDF, specularLobe_PDF, specular_PDF);
+    }
+
+    if (dot(surface.geoNormal, ray.Direction) <= 0.0)
+    {
+        BRDF_over_PDF = vec3(0.0);
+        ray.TMax = 0;
+    }
+
+    ray.Origin = surface.worldPos;
+
+    float3 radiance = vec3(0);
+    
+    trace(ray);
+    
+    struct 
+    {
+        float3 position;
+        float3 normal;
+        float3 diffuseAlbedo;
+        float3 specularF0;
+        float roughness;
+        bool isEnvironmentMap;
+    } secondarySurface;
+
+    // Include the emissive component of surfaces seen with BRDF rays if requested (i.e. when Direct Lighting mode
+    // is set to BRDF) or on delta reflection rays because those bypass ReSTIR GI and direct specular lighting,
+    // and we need to see reflections of lamps and the sky in mirrors.
+    const bool includeEmissiveComponent = isSpecularRay && isDeltaSurface;
+
+    if (p.geometryIndex != ~0u)
+    {
+        vec3 normal, specularF0, color, emission;
+        float roughness;
+        GetGeometryFromHit(p.primitiveId, p.geometryIndex, p.uv, normal, specularF0, roughness, color, emission);
+
+        if (includeEmissiveComponent)
+            radiance += emission;
+
+        RayDesc primary_ray = setupPrimaryRay(pixelPosition, g_Const.view);
+        trace(primary_ray);
+        color = vec3(p.depth - surface.viewDepth);
+
+        secondarySurface.position = ray.Origin + ray.Direction * 0.5;
+        secondarySurface.normal = (dot(normal, ray.Direction) < 0) ? normal : -normal;
+        secondarySurface.diffuseAlbedo = color;
+        secondarySurface.specularF0 = specularF0;
+        secondarySurface.roughness = roughness;
+        secondarySurface.isEnvironmentMap = false;
     }
     else
     {
-        reservoir = RTXDI_EmptyGIReservoir();
+        if (includeEmissiveComponent)
+        {
+            vec3 environmentRadiance = GetEnvironmentRadiance(ray.Direction);
+            radiance += environmentRadiance;
+        }
+
+        secondarySurface.position = ray.Origin + ray.Direction * DISTANT_LIGHT_DISTANCE;
+        secondarySurface.normal = -ray.Direction;
+        secondarySurface.diffuseAlbedo = vec3(0);
+        secondarySurface.specularF0 = vec3(0);
+        secondarySurface.roughness = 0.0;
+        secondarySurface.isEnvironmentMap = true;
     }
-    RTXDI_StoreGIReservoir(reservoir, g_Const.restirGI.reservoirBufferParams, pixelCord, g_Const.restirGI.bufferIndices.secondarySurfaceReSTIRDIOutputBufferIndex);
+
+    if(length(surface.worldPos - secondarySurface.position) < 0.001) {
+        debugPrintfEXT("%i", rng.seed);
+    }
+
+    SecondaryGBufferData secondaryGBufferData;
+    secondaryGBufferData.worldPos = secondarySurface.position;
+    secondaryGBufferData.normal = ndirToOctUnorm32(secondarySurface.normal);
+    secondaryGBufferData.throughputAndFlags = Pack_R16G16B16A16_FLOAT(float4(BRDF_over_PDF, 0));
+    secondaryGBufferData.diffuseAlbedo = Pack_R11G11B10_UFLOAT(secondarySurface.diffuseAlbedo);
+    secondaryGBufferData.specularAndRoughness = Pack_R8G8B8A8_Gamma_UFLOAT(float4(secondarySurface.specularF0, secondarySurface.roughness));
+    secondaryGBufferData.emission = radiance;
+    secondaryGBufferData.pdf = overall_PDF;
+    
+    uint flags = 0;
+    if (isSpecularRay) flags |= kSecondaryGBuffer_IsSpecularRay;
+    if (isDeltaSurface) flags |= kSecondaryGBuffer_IsDeltaSurface;
+    if (secondarySurface.isEnvironmentMap) flags |= kSecondaryGBuffer_IsEnvironmentMap;
+    secondaryGBufferData.throughputAndFlags.y |= flags << 16;
+
+    uint gbufferIndex = RTXDI_ReservoirPositionToPointer(g_Const.restirGI.reservoirBufferParams, gl_LaunchIDEXT.xy, 0);
+    SecondaryGBuffer[gbufferIndex] = secondaryGBufferData;
 }

@@ -54,9 +54,9 @@ impl GenerateMipsPass {
         let layout = unsafe { ctx.device.create_pipeline_layout(&layout_info, None)? };
 
         let path = if environment.is_some() {
-            "./src/shaders/env_mip_levels.comp.spv"
+            "./src/shaders/bin/env_mip_levels.spv"
         } else {
-            "./src/shaders/mip_levels.comp.spv"
+            "./src/shaders/bin/mip_levels.spv"
         };
 
         let entry_point_name: CString = CString::new("main").unwrap();
@@ -64,7 +64,7 @@ impl GenerateMipsPass {
             .layout(layout)
             .stage(
                 vk::PipelineShaderStageCreateInfo::default()
-                    .module(ctx.create_shader_module(path))
+                    .module(ctx.create_shader_module(path).unwrap())
                     .stage(vk::ShaderStageFlags::COMPUTE)
                     .name(&entry_point_name),
             );
@@ -76,7 +76,13 @@ impl GenerateMipsPass {
         };
 
         let pool = ctx
-            .create_descriptor_pool(1, &calculate_pool_sizes(&[bindings.as_slice()]))
+            .create_descriptor_pool(
+                1,
+                &calculate_pool_sizes(&[CalculatePoolSizesDesc {
+                    bindings: bindings.as_slice(),
+                    num_sets: 1,
+                }]),
+            )
             .unwrap();
 
         let descriptor_set0 =

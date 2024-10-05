@@ -3,23 +3,46 @@
 #extension GL_GOOGLE_include_directive : enable
 #extension GL_EXT_ray_tracing : require
 
-#include "../common.glsl"
+#include "common.glsl"
 
 layout(location = 0) rayPayloadEXT Payload p;
 
 #include "RtxdiApplicationBridge.glsl"
-#include "../PrimaryRays.glsl"
+#include "Hit.glsl"
+#include "GBufferHelpers.glsl"
 
 void main() {
     ivec2 size = ivec2(gl_LaunchSizeEXT.xy);
     ivec2 pixelCord = ivec2(gl_LaunchIDEXT.xy);
 
-    PrimarySurfaceOutput primary = TracePrimaryRay(pixelCord);
+    RayDesc ray = setupPrimaryRay(pixelCord, g_Const.view);
 
-    imageStore(u_GBufferDepth, pixelCord, vec4(primary.surface.viewDepth)); 
-    imageStore(u_GBufferNormals, pixelCord, uvec4(ndirToOctUnorm32(primary.surface.normal))); 
-    imageStore(u_GBufferGeoNormals, pixelCord, uvec4(ndirToOctUnorm32(primary.surface.geoNormal))); 
-    imageStore(u_GBufferDiffuseAlbedo, pixelCord, uvec4(Pack_R11G11B10_UFLOAT(primary.surface.diffuseAlbedo))); 
-    imageStore(u_GBufferSpecularRough, pixelCord, uvec4(Pack_R8G8B8A8_Gamma_UFLOAT(vec4(primary.surface.specularF0, primary.surface.roughness)))); 
-    imageStore(u_MotionVectors, pixelCord, vec4(primary.motionVector, 0.0));
+    trace(ray);
+
+    if(p.geometryIndex != ~0u) {
+        vec3 normal, specularF0, color, emission;
+        float roughness, viewDepth, viewDepth2;
+        GetGeometryFromHit(p.primitiveId, p.geometryIndex, p.uv, normal, specularF0, roughness, color, emission);
+
+        vec3 worldPos = ray.Origin + ray.Direction * p.depth;
+
+        vec3 motionVector = getMotionVector(g_Const.view, g_Const.prevView, 
+            worldPos, worldPos, viewDepth, viewDepth2);
+        
+        imageStore(GBufferDepth, pixelCord, vec4(p.depth)); 
+        imageStore(GBufferNormals, pixelCord, uvec4(ndirToOctUnorm32(normal))); 
+        imageStore(GBufferGeoNormals, pixelCord, uvec4(ndirToOctUnorm32(normal))); 
+        imageStore(GBufferDiffuseAlbedo, pixelCord, uvec4(Pack_R11G11B10_UFLOAT(color))); 
+        imageStore(GBufferSpecularRough, pixelCord, uvec4(Pack_R8G8B8A8_Gamma_UFLOAT(vec4(specularF0, roughness)))); 
+        imageStore(MotionVectors, pixelCord, vec4(motionVector, 0.0));
+        imageStore(GBufferEmissive, pixelCord, vec4(emission, 0.0));
+    }else {
+        imageStore(GBufferDepth, pixelCord, vec4(BACKGROUND_DEPTH)); 
+        imageStore(GBufferNormals, pixelCord, uvec4(0)); 
+        imageStore(GBufferGeoNormals, pixelCord, uvec4(0)); 
+        imageStore(GBufferDiffuseAlbedo, pixelCord, uvec4(0)); 
+        imageStore(GBufferSpecularRough, pixelCord, uvec4(0)); 
+        imageStore(MotionVectors, pixelCord, vec4(0));
+        imageStore(GBufferEmissive, pixelCord, vec4(0));
+    }
 }

@@ -109,7 +109,7 @@ impl RenderResources {
         let task_buffer = ctx
             .create_buffer(
                 BufferUsageFlags::STORAGE_BUFFER | BufferUsageFlags::TRANSFER_DST,
-                MemoryLocation::GpuToCpu,
+                MemoryLocation::CpuToGpu,
                 16 * 500,
                 None,
             )
@@ -133,7 +133,7 @@ impl RenderResources {
         let geometry_instance_to_light_buffer_staging = ctx
             .create_buffer(
                 BufferUsageFlags::STORAGE_BUFFER | BufferUsageFlags::TRANSFER_SRC,
-                MemoryLocation::GpuToCpu,
+                MemoryLocation::CpuToGpu,
                 model.geometry_infos.len() as u64,
                 None,
             )

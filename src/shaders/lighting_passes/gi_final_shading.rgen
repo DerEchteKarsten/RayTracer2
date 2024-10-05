@@ -3,11 +3,17 @@
 #extension GL_GOOGLE_include_directive : enable
 #extension GL_EXT_ray_tracing : require
 
-#include "../common.glsl"
+#include "common.glsl"
 
 layout(location = 0) rayPayloadEXT Payload p;
 
 #include "RtxdiApplicationBridge.glsl"
+#include "rtxdi/GIResamplingFunctions.hlsli"
+#include "rtxdi/DIReservoir.hlsli"
+#include "ShadingHelpers.glsl"
+
+const float kMaxBrdfValue = 1e4;
+const float kMISRoughness = 0.3;
 
 float GetMISWeight(const SplitBrdf roughBrdf, const SplitBrdf trueBrdf, const float3 diffuseAlbedo)
 {
@@ -24,7 +30,7 @@ float GetMISWeight(const SplitBrdf roughBrdf, const SplitBrdf trueBrdf, const fl
 RTXDI_GIReservoir LoadInitialSampleReservoir(int2 reservoirPosition, RAB_Surface primarySurface)
 {
     const uint gbufferIndex = RTXDI_ReservoirPositionToPointer(g_Const.restirGI.reservoirBufferParams, reservoirPosition, 0);
-    const SecondaryGBufferData secondaryGBufferData = u_SecondaryGBuffer[gbufferIndex];
+    const SecondaryGBufferData secondaryGBufferData = SecondaryGBuffer[gbufferIndex];
 
     const float3 normal = octToNdirUnorm32(secondaryGBufferData.normal);
     const float3 throughput = Unpack_R16G16B16A16_FLOAT(secondaryGBufferData.throughputAndFlags).rgb;
@@ -34,47 +40,35 @@ RTXDI_GIReservoir LoadInitialSampleReservoir(int2 reservoirPosition, RAB_Surface
         normal, secondaryGBufferData.emission * throughput, secondaryGBufferData.pdf);
 }
 
-#if USE_RAY_QUERY
-[numthreads(RTXDI_SCREEN_SPACE_GROUP_SIZE, RTXDI_SCREEN_SPACE_GROUP_SIZE, 1)]
-void main(uint2 GlobalIndex : SV_DispatchThreadID)
-#else
-[shader("raygeneration")]
-void RayGen()
-#endif
-{
-#if !USE_RAY_QUERY
-    uint2 GlobalIndex = DispatchRaysIndex().xy;
-#endif
+void main() {
+    uint2 GlobalIndex = gl_LaunchIDEXT.xy;
     uint2 pixelPosition = RTXDI_ReservoirPosToPixelPos(GlobalIndex, g_Const.runtimeParams.activeCheckerboardField);
 
-    if (any(pixelPosition > int2(g_Const.view.viewportSize)))
-        return;
-
-    const RAB_Surface primarySurface = RAB_GetGBufferSurface(pixelPosition, false);
+    const RAB_Surface primarySurface = RAB_GetGBufferSurface(ivec2(pixelPosition), false);
     
     const uint2 reservoirPosition = RTXDI_PixelPosToReservoirPos(pixelPosition, g_Const.runtimeParams.activeCheckerboardField);
     const RTXDI_GIReservoir reservoir = RTXDI_LoadGIReservoir(g_Const.restirGI.reservoirBufferParams, reservoirPosition, g_Const.restirGI.bufferIndices.secondarySurfaceReSTIRDIOutputBufferIndex);
     
-    float3 diffuse = 0;
-    float3 specular = 0;
+    float3 diffuse = vec3(0);
+    float3 specular = vec3(0);
 
     if (RTXDI_IsValidGIReservoir(reservoir))
     {
         float3 radiance = reservoir.radiance * reservoir.weightSum;
 
-        float3 visibility = 1.0;
-        if (g_Const.restirGI.finalShadingParams.enableFinalVisibility)
+        float3 visibility = vec3(1.0);
+        if (g_Const.restirGI.finalShadingParams.enableFinalVisibility == 1)
         {
-            visibility = GetFinalVisibility(SceneBVH, primarySurface, reservoir.position);
+            visibility = vec3(GetConservativeVisibility(primarySurface, reservoir.position));
         }
 
         radiance *= visibility;
 
         const SplitBrdf brdf = EvaluateBrdf(primarySurface, reservoir.position);
 
-        if (g_Const.restirGI.finalShadingParams.enableFinalMIS)
+        if (g_Const.restirGI.finalShadingParams.enableFinalMIS == 1)
         {
-            const RTXDI_GIReservoir initialReservoir = LoadInitialSampleReservoir(reservoirPosition, primarySurface);
+            const RTXDI_GIReservoir initialReservoir = LoadInitialSampleReservoir(ivec2(reservoirPosition), primarySurface);
             const SplitBrdf brdf0 = EvaluateBrdf(primarySurface, initialReservoir.position);
 
             RAB_Surface roughenedSurface = primarySurface;
@@ -100,10 +94,10 @@ void RayGen()
             specular = brdf.specular * radiance;
         }
 
-
         specular = DemodulateSpecular(primarySurface.specularF0, specular);
     }
 
-    StoreShadingOutput(GlobalIndex, pixelPosition, 
-        primarySurface.viewDepth, primarySurface.roughness, diffuse, specular, 0, false, true);
+
+    StoreShadingOutput(ivec2(pixelPosition), 
+        primarySurface.viewDepth, primarySurface.roughness, diffuse, specular, 0.0, false);
 }

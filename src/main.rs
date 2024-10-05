@@ -11,7 +11,7 @@ mod light_passes;
 mod mip_pass;
 mod postprocess;
 mod prepare_lights;
-mod render_recources;
+mod render_resources;
 mod shader_params;
 
 use light_passes::{calculate_reservoir_buffer_parameters, LightPasses};
@@ -26,7 +26,7 @@ use ash::vk::{self, AccelerationStructureTypeKHR, ImageLayout, KHR_SPIRV_1_4_NAM
 use glam::{uvec2, vec3, IVec2, Mat4};
 use postprocess::PostProcessPass;
 use prepare_lights::PrepareLightsTasks;
-use render_recources::RenderResources;
+use render_resources::RenderResources;
 use shader_params::{
     GConst, RTXDI_EnvironmentLightBufferParameters, RTXDI_LightBufferParameters,
     RTXDI_LightBufferRegion, RTXDI_RISBufferSegmentParameters, RTXDI_RuntimeParameters,
@@ -114,12 +114,11 @@ fn main() {
     let mut sampler_info = vk::SamplerCreateInfo {
         mag_filter: vk::Filter::LINEAR,
         min_filter: vk::Filter::LINEAR,
-        mipmap_mode: vk::SamplerMipmapMode::LINEAR,
-        address_mode_u: vk::SamplerAddressMode::MIRRORED_REPEAT,
-        address_mode_v: vk::SamplerAddressMode::MIRRORED_REPEAT,
-        address_mode_w: vk::SamplerAddressMode::MIRRORED_REPEAT,
+        address_mode_u: vk::SamplerAddressMode::CLAMP_TO_BORDER,
+        address_mode_v: vk::SamplerAddressMode::CLAMP_TO_BORDER,
+        address_mode_w: vk::SamplerAddressMode::CLAMP_TO_BORDER,
         max_anisotropy: 1.0,
-        border_color: vk::BorderColor::FLOAT_OPAQUE_WHITE,
+        border_color: vk::BorderColor::FLOAT_OPAQUE_BLACK,
         compare_op: vk::CompareOp::NEVER,
         unnormalized_coordinates: 1,
         ..Default::default()
@@ -190,8 +189,24 @@ fn main() {
         &model,
         uvec2(sky_box.image.extent.width, sky_box.image.extent.height),
     );
-    let light_passes = LightPasses::new(&mut ctx, &model, &tlas, &resources, &sky_box.view);
-    let post_process = PostProcessPass::new(&mut ctx, &resources.g_buffers).unwrap();
+
+    let light_passes = LightPasses::new(
+        &mut ctx,
+        &model,
+        &tlas,
+        &resources,
+        &sky_box.view,
+        &skybox_sampler,
+    );
+    let post_process = PostProcessPass::new(
+        &mut ctx,
+        &resources.g_buffers,
+        &resources,
+        &light_passes.uniform_buffer,
+        &sky_box.view,
+        &skybox_sampler,
+    )
+    .unwrap();
 
     let mip_environment = GenerateMipsPass::new(
         &mut ctx,
@@ -415,6 +430,9 @@ fn main() {
                         if let Err(e) = light_passes.update_uniform(&g_const) {
                             log::error!("{}", e);
                         }
+                        if frame_time.as_millis() > 16 {
+                            log::error!("Over Frame Budget!!!!");
+                        }
 
                         ctx.render(|ctx, i| {
                             let cmd = &ctx.cmd_buffs[i as usize];
@@ -422,7 +440,7 @@ fn main() {
                                 prepare_lights.execute(
                                     ctx,
                                     cmd,
-                                    &resources.light_buffer,
+                                    &resources.task_buffer,
                                     (
                                         &resources.geometry_instance_to_light_buffer,
                                         &resources.geometry_instance_to_light_buffer_staging,
@@ -452,18 +470,6 @@ fn main() {
 
                             light_passes.execute(ctx, cmd, frame);
                             post_process.execute(ctx, cmd, frame, i);
-                            ctx.pipeline_image_barriers(
-                                cmd,
-                                &[ImageBarrier {
-                                    image: &ctx.swapchain.images[i as usize].image,
-                                    old_layout: vk::ImageLayout::UNDEFINED,
-                                    new_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-                                    src_access_mask: vk::AccessFlags2::NONE,
-                                    dst_access_mask: vk::AccessFlags2::SHADER_WRITE,
-                                    src_stage_mask: vk::PipelineStageFlags2::NONE,
-                                    dst_stage_mask: vk::PipelineStageFlags2::COMPUTE_SHADER,
-                                }],
-                            );
                         })
                         .unwrap();
                         window.request_redraw();

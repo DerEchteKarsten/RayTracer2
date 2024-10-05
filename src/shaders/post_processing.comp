@@ -1,20 +1,22 @@
-layout(location = 0) out vec4 outColor;
 #extension GL_GOOGLE_include_directive : enable
 #extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
 #extension GL_EXT_debug_printf: enable
-#define RTXDI_GLSL
-#include "rtxdi/ReSTIRGIParameters.h"
-#include "./ShaderParameters.glsl"
 
+#include "packing.glsl"
+#include "ShaderParameters.glsl"
+layout(binding = 0, set = 0, r32f) uniform readonly image2D GBufferDepth;
+layout(binding = 1, set = 0, r32ui) uniform readonly uimage2D GBufferDiffuseAlbedo;
+layout(binding = 2, set = 0, r32ui) uniform readonly uimage2D GBufferSpecularRough;
+layout(binding = 3, set = 0, rgba16f) uniform image2D GBufferEmissive;
+layout(binding = 4, set = 0, rgba16f) uniform image2D Diffuse;
+layout(binding = 5, set = 0, rgba16f) uniform image2D Specular;
+layout(binding = 6, set = 0) uniform Uniform {ResamplingConstants g_Const;};
+layout(binding = 7, set = 0) uniform sampler2D SkyBox;
+layout(binding = 8, set = 0, rgba32f) uniform image2D MotionVectors;
+
+layout(binding = 0, set = 1, rgba8) uniform image2D outputImage;
 
 #define square(x) x*x
-const float kMinRoughness = 0.05f;
-#define FINAL_SHADING 1
-#define PREPROSSES 0
-#include "RtxdiApplicationBridge.glsl"
-#include "rtxdi/GIReservoir.hlsli"
-#include "rtxdi/DIReservoir.hlsli"
-
 
 #define PI 3.1415926
 
@@ -100,58 +102,59 @@ vec3 agxLook(vec3 val) {
   return luma + sat * (val - luma);
 }
 
-const float gamma = 2.2;
 
-const float kMaxBrdfValue = 1e4;
-const float kMISRoughness = 0.3;
-#include "ShadingHelpers.glsl"
-
-float GetMISWeight(const SplitBrdf roughBrdf, const SplitBrdf trueBrdf, const float3 diffuseAlbedo)
+vec2 getEnvironmentMotionVector(
+    PlanarViewConstants view,
+    PlanarViewConstants viewPrev,
+    vec2 windowPos)
 {
-    float3 combinedRoughBrdf = roughBrdf.demodulatedDiffuse * diffuseAlbedo + roughBrdf.specular;
-    float3 combinedTrueBrdf = trueBrdf.demodulatedDiffuse * diffuseAlbedo + trueBrdf.specular;
+    vec4 clipPos;
+    clipPos.xy = view.windowToClipScale * windowPos + view.windowToClipBias;
+    clipPos.z = 0.0;
+    clipPos.w = 1.0;
 
-    combinedRoughBrdf = clamp(combinedRoughBrdf, 1e-4, kMaxBrdfValue);
-    combinedTrueBrdf = clamp(combinedTrueBrdf, 0, kMaxBrdfValue);
+    float4 worldPos = view.matClipToWorld * clipPos;
+    float4 prevClipPos = viewPrev.matWorldToClip * worldPos;
 
-    const float initWeight = saturate(calcLuminance(combinedTrueBrdf) / calcLuminance(combinedTrueBrdf + combinedRoughBrdf));
-    return initWeight * initWeight * initWeight;
+    prevClipPos.xyz /= prevClipPos.w;
+
+    float2 motion = view.clipToWindowScale * (prevClipPos.xy - clipPos.xy);
+    motion += view.pixelOffset - viewPrev.pixelOffset;
+
+    return motion;
 }
 
+const float gamma = 2.2;
+const bool enableTextures = false;
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;  
+
 void main() {
-    vec3 col = vec3(0.0);
-    ivec2 pixelPosition = ivec2(gl_FragCoord.xy);
-    const RAB_Surface primarySurface = GetGBufferSurface(pixelPosition, g_Const.view);
-    const uvec2 reservoirPosition = RTXDI_PixelPosToReservoirPos(pixelPosition, g_Const.runtimeParams.activeCheckerboardField);
- 
-    float3 diffuse = vec3(0);
-    float3 specular = vec3(0);
-    float lightDistance = 0;
-    float2 currLuminance = vec2(0);
+    vec3 col = vec3(0);
+    ivec2 globalIdx = ivec2(gl_GlobalInvocationID.xy);
 
-    RTXDI_DIReservoir reservoir = RTXDI_LoadDIReservoir(g_Const.restirDI.reservoirBufferParams, pixelPosition, 0);
-
-    if (RTXDI_IsValidDIReservoir(reservoir))
+    float depth = imageLoad(GBufferDepth, globalIdx).r;
+    if (depth != BACKGROUND_DEPTH)
     {
-        RAB_LightInfo lightInfo = RAB_LoadLightInfo(RTXDI_GetDIReservoirLightIndex(reservoir), false);
+        vec3 diffuseAlbedo = Unpack_R11G11B10_UFLOAT(imageLoad(GBufferDiffuseAlbedo, globalIdx).r).rgb;
+        vec3 specularF0 = Unpack_R8G8B8A8_Gamma_UFLOAT(imageLoad(GBufferSpecularRough, globalIdx).r).rgb;
+        vec3 emissive = imageLoad(GBufferEmissive, globalIdx).rgb;
 
-        RAB_LightSample lightSample = RAB_SamplePolymorphicLight(lightInfo,
-            primarySurface, RTXDI_GetDIReservoirSampleUV(reservoir));
-
-        bool needToStore = ShadeSurfaceWithLightSample(reservoir, primarySurface, lightSample,
-            /* previousFrameTLAS = */ false, /* enableVisibilityReuse = */ true, diffuse, specular, lightDistance);
-    
-        currLuminance = float2(calcLuminance(diffuse * primarySurface.diffuseAlbedo), calcLuminance(specular));
-    
-        specular = DemodulateSpecular(primarySurface.specularF0, specular);
-
-        if (needToStore)
+        vec4 diffuse_illumination = imageLoad(Diffuse, globalIdx).rgba;
+        vec4 specular_illumination = imageLoad(Specular, globalIdx).rgba;
+        if (enableTextures)
         {
-            RTXDI_StoreDIReservoir(reservoir, g_Const.restirDI.reservoirBufferParams, pixelPosition, 0);
+            diffuse_illumination.rgb *= diffuseAlbedo;
+            specular_illumination.rgb *= max(vec3(0.01), specularF0);
         }
-        col = diffuse + specular;
+
+        col = diffuse_illumination.rgb;
+        col += specular_illumination.rgb;
+        col += emissive.rgb; 
+        imageStore(Diffuse, globalIdx, vec4(0.0));
+        imageStore(Specular, globalIdx, vec4(0.0));
     } else {
-        const vec2 pixelCenter = vec2(pixelPosition.xy) + vec2(0.5);
+        const vec2 pixelCenter = vec2(globalIdx.xy) + vec2(0.5);
         const vec2 inUV = pixelCenter/vec2(g_Const.view.viewportSize);
         vec2 d = inUV * 2.0 - 1.0;
         vec2 dir = inUV * 2.0 - 1.0;
@@ -160,12 +163,18 @@ void main() {
 
         float u = (0.5 + atan2(direction.z, direction.x)/(2*PI));
         float v = (0.5 - asin(direction.y)/PI);
-		    col = texture(skyBox, vec2(u,v)).rgb;
-    }
 
+        imageStore(MotionVectors, globalIdx, vec4(getEnvironmentMotionVector(g_Const.view, g_Const.prevView, vec2(globalIdx) + vec2(0.5)), 0.0, 0.0));
+		    col = texture(SkyBox, vec2(u,v)).rgb;
+    }
+    
     col = agx(col);
     col = agxLook(col);
     col = agxEotf(col);
+    col = max(col, 0.000001);
     vec3 gamma_cor = pow(col, vec3(1.0 / gamma));
-    outColor = vec4(col, 1.0);
+
+    if(any(isnan(col)))
+      col = vec3(1, 0, 0);
+    imageStore(outputImage, globalIdx, vec4(col, 1.0));
 }

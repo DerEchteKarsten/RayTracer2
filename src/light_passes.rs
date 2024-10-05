@@ -1,4 +1,4 @@
-use std::ffi::CString;
+use std::{ffi::CString, sync::LazyLock};
 
 use anyhow::Result;
 use ash::vk::{
@@ -9,7 +9,7 @@ use gpu_allocator::MemoryLocation;
 
 use crate::{
     context::*,
-    render_recources::RenderResources,
+    render_resources::RenderResources,
     shader_params::{GConst, RTXDI_ReservoirBufferParameters},
     Model, RTXDI_RESERVOIR_BLOCK_SIZE, WINDOW_SIZE,
 };
@@ -19,37 +19,28 @@ struct RayTracingPass {
     handle: vk::Pipeline,
 }
 
+static RAYMISS_BYTES: LazyLock<Vec<u8>> = LazyLock::new(|| {std::fs::read("./src/shaders/bin/raymiss.spv").unwrap()});
+static RAYHIT_BYTES: LazyLock<Vec<u8>> = LazyLock::new(|| {std::fs::read("./src/shaders/bin/rayhit.spv").unwrap()});
 impl RayTracingPass {
     fn new(
         ctx: &mut Renderer,
         layout: vk::PipelineLayout,
         path: &str,
-        visibility_check: bool,
     ) -> Result<Self> {
         let raygen_bytes = std::fs::read(path)?;
+
         let shaders_create_info = [
             RayTracingShaderCreateInfo {
                 source: &[(raygen_bytes.as_slice(), vk::ShaderStageFlags::RAYGEN_KHR)],
                 group: RayTracingShaderGroup::RayGen,
             },
             RayTracingShaderCreateInfo {
-                source: &[(
-                    if !visibility_check {
-                        &include_bytes!("./shaders/raymiss.rmiss.spv")[..]
-                    } else {
-                        &include_bytes!("./shaders/visibility.rmiss.spv")[..]
-                    },
-                    vk::ShaderStageFlags::MISS_KHR,
-                )],
+                source: &[(RAYMISS_BYTES.as_slice(), vk::ShaderStageFlags::MISS_KHR)],
                 group: RayTracingShaderGroup::Miss,
             },
             RayTracingShaderCreateInfo {
                 source: &[(
-                    if !visibility_check {
-                        &include_bytes!("./shaders/rayhit.rchit.spv")[..]
-                    } else {
-                        &include_bytes!("./shaders/visibility.rchit.spv")[..]
-                    },
+                    RAYHIT_BYTES.as_slice(),
                     vk::ShaderStageFlags::CLOSEST_HIT_KHR,
                 )],
                 group: RayTracingShaderGroup::Hit,
@@ -95,7 +86,7 @@ impl ComputePass {
             .layout(layout)
             .stage(
                 vk::PipelineShaderStageCreateInfo::default()
-                    .module(ctx.create_shader_module(path))
+                    .module(ctx.create_shader_module(path)?)
                     .stage(vk::ShaderStageFlags::COMPUTE)
                     .name(&entry_point_name),
             );
@@ -152,6 +143,8 @@ impl LightPasses {
             vk::DescriptorSetLayoutBinding::default()
                 .descriptor_type(DescriptorType::STORAGE_IMAGE), // Specular Rough
             vk::DescriptorSetLayoutBinding::default()
+                .descriptor_type(DescriptorType::STORAGE_IMAGE), // Emission
+            vk::DescriptorSetLayoutBinding::default()
                 .descriptor_type(DescriptorType::STORAGE_IMAGE), // Prev Depth
             vk::DescriptorSetLayoutBinding::default()
                 .descriptor_type(DescriptorType::STORAGE_IMAGE), // Prev Normal
@@ -161,11 +154,17 @@ impl LightPasses {
                 .descriptor_type(DescriptorType::STORAGE_IMAGE), // Prev Diffuse Albedo
             vk::DescriptorSetLayoutBinding::default()
                 .descriptor_type(DescriptorType::STORAGE_IMAGE), // Prev Specular Rough
+            vk::DescriptorSetLayoutBinding::default()
+                .descriptor_type(DescriptorType::STORAGE_IMAGE), // Prev Emission
         ];
         bindings = bindings
             .iter_mut()
             .enumerate()
-            .map(|(i, b)| b.binding(i as u32).stage_flags(ShaderStageFlags::ALL))
+            .map(|(i, b)| {
+                b.binding(i as u32)
+                    .stage_flags(ShaderStageFlags::ALL)
+                    .descriptor_count(1)
+            })
             .collect();
         bindings
     }
@@ -186,9 +185,6 @@ impl LightPasses {
                 .descriptor_type(DescriptorType::STORAGE_BUFFER), // Vertex Buffer
             vk::DescriptorSetLayoutBinding::default()
                 .descriptor_type(DescriptorType::STORAGE_BUFFER), // Index Buffer
-            vk::DescriptorSetLayoutBinding::default()
-                .descriptor_type(DescriptorType::COMBINED_IMAGE_SAMPLER) // Textures
-                .descriptor_count(num_textures),
             vk::DescriptorSetLayoutBinding::default()
                 .descriptor_type(DescriptorType::COMBINED_IMAGE_SAMPLER), // Skybox
             vk::DescriptorSetLayoutBinding::default()
@@ -217,11 +213,18 @@ impl LightPasses {
                 .descriptor_type(DescriptorType::STORAGE_BUFFER), // RIS Light Data
             vk::DescriptorSetLayoutBinding::default()
                 .descriptor_type(DescriptorType::STORAGE_BUFFER), // Secondary GBuffer
+            vk::DescriptorSetLayoutBinding::default()
+                .descriptor_type(DescriptorType::COMBINED_IMAGE_SAMPLER) // Textures
+                .descriptor_count(num_textures),
         ];
         bindings = bindings
             .iter_mut()
             .enumerate()
-            .map(|(i, b)| b.binding(i as u32).stage_flags(ShaderStageFlags::ALL))
+            .map(|(i, b)| {
+                b.binding(i as u32)
+                    .stage_flags(ShaderStageFlags::ALL)
+                    .descriptor_count(1)
+            })
             .collect();
         bindings
     }
@@ -232,26 +235,9 @@ impl LightPasses {
         top_as: &AccelerationStructure,
         resources: &RenderResources,
         skybox_view: &ImageView,
+        skybox_sampler: &vk::Sampler,
     ) -> Self {
         unsafe {
-            let sampler_create_info: vk::SamplerCreateInfo = vk::SamplerCreateInfo {
-                mag_filter: vk::Filter::NEAREST,
-                min_filter: vk::Filter::NEAREST,
-                mipmap_mode: vk::SamplerMipmapMode::NEAREST,
-                address_mode_u: vk::SamplerAddressMode::MIRRORED_REPEAT,
-                address_mode_v: vk::SamplerAddressMode::MIRRORED_REPEAT,
-                address_mode_w: vk::SamplerAddressMode::MIRRORED_REPEAT,
-                max_anisotropy: 1.0,
-                border_color: vk::BorderColor::FLOAT_OPAQUE_WHITE,
-                compare_op: vk::CompareOp::NEVER,
-                ..Default::default()
-            };
-
-            let skybox_sampler = ctx
-                .device
-                .create_sampler(&sampler_create_info, None)
-                .unwrap();
-
             let static_bindings = Self::get_static_descriptor_bindings(model.textures.len() as u32);
             let static_set_layout = ctx.create_descriptor_set_layout(&static_bindings).unwrap();
 
@@ -273,8 +259,16 @@ impl LightPasses {
                 .create_pipeline_layout(&layout_info, None)
                 .unwrap();
 
-            let pool_sizes =
-                &calculate_pool_sizes(&[static_bindings.as_slice(), dynamic_bindings.as_slice()]);
+            let pool_sizes = &calculate_pool_sizes(&[
+                CalculatePoolSizesDesc {
+                    bindings: static_bindings.as_slice(),
+                    num_sets: 1,
+                },
+                CalculatePoolSizesDesc {
+                    bindings: dynamic_bindings.as_slice(),
+                    num_sets: 2,
+                },
+            ]);
 
             let descriptor_pool = ctx.create_descriptor_pool(3, pool_sizes).unwrap();
 
@@ -285,11 +279,12 @@ impl LightPasses {
                     .unwrap();
 
             let uniform_buffer = ctx
-                .create_buffer(
+                .create_aligned_buffer(
                     vk::BufferUsageFlags::UNIFORM_BUFFER,
                     MemoryLocation::CpuToGpu,
                     size_of::<GConst>() as u64,
                     None,
+                    16,
                 )
                 .unwrap();
 
@@ -315,7 +310,7 @@ impl LightPasses {
                 },
                 WriteDescriptorSetKind::CombinedImageSampler {
                     view: *skybox_view,
-                    sampler: skybox_sampler,
+                    sampler: *skybox_sampler,
                     layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
                 },
                 WriteDescriptorSetKind::StorageBuffer {
@@ -399,6 +394,10 @@ impl LightPasses {
                         layout: vk::ImageLayout::GENERAL,
                     },
                     WriteDescriptorSetKind::StorageImage {
+                        view: resources.g_buffers[i].emissive.view,
+                        layout: vk::ImageLayout::GENERAL,
+                    },
+                    WriteDescriptorSetKind::StorageImage {
                         view: resources.g_buffers[1 - i].depth.view,
                         layout: vk::ImageLayout::GENERAL,
                     },
@@ -416,6 +415,10 @@ impl LightPasses {
                     },
                     WriteDescriptorSetKind::StorageImage {
                         view: resources.g_buffers[1 - i].specular_rough.view,
+                        layout: vk::ImageLayout::GENERAL,
+                    },
+                    WriteDescriptorSetKind::StorageImage {
+                        view: resources.g_buffers[1 - i].emissive.view,
                         layout: vk::ImageLayout::GENERAL,
                     },
                 ];
@@ -444,7 +447,7 @@ impl LightPasses {
                     &[vk::WriteDescriptorSet::default()
                         .dst_array_element(i as u32)
                         .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                        .dst_binding(6)
+                        .dst_binding(20)
                         .dst_set(static_set.clone())
                         .image_info(&[img_info])],
                     &[],
@@ -455,57 +458,55 @@ impl LightPasses {
                 presample_lights_pass: ComputePass::new(
                     ctx,
                     layout,
-                    "./src/presample_lights.comp.spv",
+                    "./src/shaders/bin/presample_locallights.spv",
                 )
                 .unwrap(),
                 presample_environment_map_pass: ComputePass::new(
                     ctx,
                     layout,
-                    "./src/presample_environment.comp.spv",
+                    "./src/shaders/bin/presample_environment.spv",
                 )
                 .unwrap(),
-                g_buffer_pass: RayTracingPass::new(ctx, layout, "./src/g_buffer.rgen.spv", false)
-                    .unwrap(),
+                g_buffer_pass: RayTracingPass::new(
+                    ctx,
+                    layout,
+                    "./src/shaders/bin/g_buffer.spv",
+                )
+                .unwrap(),
                 di_fused_resampling_pass: RayTracingPass::new(
                     ctx,
                     layout,
-                    "./src/di_fused_resampling.rgen.spv",
-                    true,
+                    "./src/shaders/bin/di_fused_resampling.spv",
                 )
                 .unwrap(),
                 brdf_ray_tracing_pass: RayTracingPass::new(
                     ctx,
                     layout,
-                    "./src/raygen.comp.spv",
-                    false,
+                    "./src/shaders/bin/brdf_rays.spv",
                 )
                 .unwrap(),
                 shade_secondary_surfaces_pass: RayTracingPass::new(
                     ctx,
                     layout,
-                    "./src/shade_secondary_surfaces.comp.spv",
-                    false,
+                    "./src/shaders/bin/shade_secondary_surfaces.spv",
                 )
                 .unwrap(),
                 gi_temporal_resampling_pass: RayTracingPass::new(
                     ctx,
                     layout,
-                    "./src/temporal_resampling.comp.spv",
-                    false,
+                    "./src/shaders/bin/temporal_resampling.spv",
                 )
                 .unwrap(),
                 gi_spatial_resampling_pass: RayTracingPass::new(
                     ctx,
                     layout,
-                    "./src/spatial_resampling.comp.spv",
-                    false,
+                    "./src/shaders/bin/spatial_resampling.spv",
                 )
                 .unwrap(),
                 gi_final_shading_pass: RayTracingPass::new(
                     ctx,
                     layout,
-                    "./src/final_shading.comp.spv",
-                    false,
+                    "./src/shaders/bin/gi_final_shading.spv",
                 )
                 .unwrap(),
                 layout,
@@ -521,7 +522,7 @@ impl LightPasses {
         &self,
         ctx: &Renderer,
         cmd: &vk::CommandBuffer,
-        i: u64,
+        frame: u64,
         skybox_changed: bool,
     ) -> bool {
         unsafe {
@@ -532,12 +533,12 @@ impl LightPasses {
                 0,
                 &[
                     self.static_set,
-                    if i % 2 == 0 {
+                    if frame % 2 == 0 {
                         self.current_set
                     } else {
                         self.prev_set
                     },
-                    if i % 2 == 0 {
+                    if frame % 2 == 0 {
                         self.prev_set
                     } else {
                         self.current_set
@@ -557,15 +558,16 @@ impl LightPasses {
         }
     }
 
-    pub fn execute(&self, ctx: &Renderer, cmd: &vk::CommandBuffer, i: u64) {
+    pub fn execute(&self, ctx: &Renderer, cmd: &vk::CommandBuffer, frame: u64) {
         unsafe {
             ctx.memory_barrier(
                 cmd,
                 PipelineStageFlags::ALL_COMMANDS,
-                PipelineStageFlags::RAY_TRACING_SHADER_KHR,
-                AccessFlags::SHADER_WRITE,
-                AccessFlags::SHADER_READ,
+                PipelineStageFlags::ALL_COMMANDS,
+                AccessFlags::MEMORY_WRITE | AccessFlags::MEMORY_READ,
+                AccessFlags::MEMORY_READ | AccessFlags::MEMORY_WRITE,
             );
+
             ctx.device.cmd_bind_descriptor_sets(
                 *cmd,
                 vk::PipelineBindPoint::RAY_TRACING_KHR,
@@ -573,12 +575,12 @@ impl LightPasses {
                 0,
                 &[
                     self.static_set,
-                    if i % 2 == 0 {
+                    if frame % 2 == 0 {
                         self.current_set
                     } else {
                         self.prev_set
                     },
-                    if i % 2 == 0 {
+                    if frame % 2 == 0 {
                         self.prev_set
                     } else {
                         self.current_set
@@ -588,12 +590,12 @@ impl LightPasses {
             );
 
             let frame_c =
-                std::slice::from_raw_parts(&i as *const u64 as *const u8, size_of::<u32>());
+                std::slice::from_raw_parts(&frame as *const u64 as *const u8, size_of::<u32>());
 
             ctx.device.cmd_push_constants(
                 *cmd,
                 self.layout,
-                vk::ShaderStageFlags::RAYGEN_KHR,
+                vk::ShaderStageFlags::ALL,
                 0,
                 frame_c,
             );
@@ -602,42 +604,51 @@ impl LightPasses {
 
             ctx.memory_barrier(
                 cmd,
-                PipelineStageFlags::RAY_TRACING_SHADER_KHR,
-                PipelineStageFlags::RAY_TRACING_SHADER_KHR,
-                AccessFlags::SHADER_WRITE,
-                AccessFlags::SHADER_READ,
+                PipelineStageFlags::ALL_COMMANDS,
+                PipelineStageFlags::ALL_COMMANDS,
+                AccessFlags::MEMORY_WRITE | AccessFlags::MEMORY_READ,
+                AccessFlags::MEMORY_READ | AccessFlags::MEMORY_WRITE,
             );
 
-            self.di_fused_resampling_pass.execute(ctx, cmd);
+            // self.di_fused_resampling_pass.execute(ctx, cmd);
             self.brdf_ray_tracing_pass.execute(ctx, cmd);
 
             ctx.memory_barrier(
                 cmd,
-                PipelineStageFlags::RAY_TRACING_SHADER_KHR,
-                PipelineStageFlags::RAY_TRACING_SHADER_KHR,
-                AccessFlags::SHADER_WRITE,
-                AccessFlags::SHADER_READ,
+                PipelineStageFlags::ALL_COMMANDS,
+                PipelineStageFlags::ALL_COMMANDS,
+                AccessFlags::MEMORY_WRITE | AccessFlags::MEMORY_READ,
+                AccessFlags::MEMORY_READ | AccessFlags::MEMORY_WRITE,
             );
 
             self.shade_secondary_surfaces_pass.execute(ctx, cmd);
-            self.gi_temporal_resampling_pass.execute(ctx, cmd);
-            self.gi_spatial_resampling_pass.execute(ctx, cmd);
+
+            // ctx.memory_barrier(
+            //     cmd,
+            //     PipelineStageFlags::RAY_TRACING_SHADER_KHR,
+            //     PipelineStageFlags::RAY_TRACING_SHADER_KHR,
+            //     AccessFlags::SHADER_WRITE,
+            //     AccessFlags::SHADER_READ,
+            // );
+
+            // self.gi_temporal_resampling_pass.execute(ctx, cmd);
+            // self.gi_spatial_resampling_pass.execute(ctx, cmd);
 
             ctx.memory_barrier(
                 cmd,
-                PipelineStageFlags::RAY_TRACING_SHADER_KHR,
-                PipelineStageFlags::RAY_TRACING_SHADER_KHR,
-                AccessFlags::SHADER_WRITE,
-                AccessFlags::SHADER_READ,
+                PipelineStageFlags::ALL_COMMANDS,
+                PipelineStageFlags::ALL_COMMANDS,
+                AccessFlags::MEMORY_WRITE | AccessFlags::MEMORY_READ,
+                AccessFlags::MEMORY_READ | AccessFlags::MEMORY_WRITE,
             );
-
+            
             self.gi_final_shading_pass.execute(ctx, cmd);
         }
     }
 
     pub fn update_uniform(&self, g_const: &GConst) -> Result<()> {
         self.uniform_buffer
-            .copy_data_to_aligned_buffer(std::slice::from_ref(&g_const), 16)
+            .copy_data_to_aligned_buffer(std::slice::from_ref(g_const), 16)
     }
 }
 

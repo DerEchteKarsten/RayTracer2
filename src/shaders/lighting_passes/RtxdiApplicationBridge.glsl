@@ -10,10 +10,10 @@
 
 // #define RTXDI_GI_ALLOWED_BIAS_CORRECTION RTXDI_BIAS_CORRECTION_RAY_TRACED
 
-#include "../ShaderParameters.glsl"
-#include "../GBufferHelpers.glsl"
-#include "../packing.glsl"
-#include "../rtxdi/ReSTIRGIParameters.h"
+#include "ShaderParameters.glsl"
+#include "packing.glsl"
+#include "GBufferHelpers.glsl"
+#include "rtxdi/ReSTIRGIParameters.h"
 
 layout( push_constant ) uniform Frame {
 	uint frame;
@@ -24,36 +24,40 @@ layout(binding = 1, set = 2, r32ui) uniform readonly uimage2D PrevGBufferNormals
 layout(binding = 2, set = 2, r32ui) uniform readonly uimage2D PrevGBufferGeoNormals;
 layout(binding = 3, set = 2, r32ui) uniform readonly uimage2D PrevGBufferDiffuseAlbedo;
 layout(binding = 4, set = 2, r32ui) uniform readonly uimage2D PrevGBufferSpecularRough;
+layout(binding = 5, set = 2, rgba16f) uniform  image2D PrevGBufferEmissive;
 
-layout(binding = 0, set = 1, r32f) uniform  image2D GBufferDepth;
-layout(binding = 1, set = 1, r32ui) uniform  uimage2D GBufferNormals;
-layout(binding = 2, set = 1, r32ui) uniform  uimage2D GBufferGeoNormals;
-layout(binding = 3, set = 1, r32ui) uniform  uimage2D GBufferDiffuseAlbedo;
-layout(binding = 4, set = 1, r32ui) uniform  uimage2D GBufferSpecularRough;
+layout(binding = 0, set = 1, r32f) uniform image2D GBufferDepth;
+layout(binding = 1, set = 1, r32ui) uniform uimage2D GBufferNormals;
+layout(binding = 2, set = 1, r32ui) uniform uimage2D GBufferGeoNormals;
+layout(binding = 3, set = 1, r32ui) uniform uimage2D GBufferDiffuseAlbedo;
+layout(binding = 4, set = 1, r32ui) uniform uimage2D GBufferSpecularRough;
+layout(binding = 5, set = 1, rgba16f) uniform image2D GBufferEmissive;
 
 
 layout(binding = 0, set = 0, rgba32f) uniform  image2D MotionVectors;
+#if !COMPUTE
 layout(binding = 1, set = 0) uniform accelerationStructureEXT SceneBVH;
+#endif
 layout(binding = 2, set = 0) uniform Uniform {ResamplingConstants g_Const;};
-layout(binding = 3, set = 0) readonly buffer Vertices { Vertex v[]; } vertices;
-layout(binding = 4, set = 0) readonly buffer Indices { uint i[]; } indices;
-layout(binding = 5, set = 0) readonly buffer GeometryInfos { GeometryInfo g[]; } geometryInfos;
-layout(binding = 6, set = 0) uniform sampler2D textures[];
-layout(binding = 7, set = 0) uniform sampler2D SkyBox;
-#include "../PolymorphicLight.glsl"
-layout(binding = 8, set = 0) buffer LightInfoBuffer {RAB_LightInfo LightDataBuffer[];};
-layout(binding = 9, set = 0) buffer NeighborsBuffer {vec2 Neighbors[];};
-layout(binding = 10, set = 0) uniform sampler2D EnvironmentPdfTexture;
-layout(binding = 11, set = 0) uniform sampler2D LocalLightPdfTexture;
-layout(binding = 12, set = 0) buffer GeomToLight {uint GeometryInstanceToLight[];};
-layout(binding = 13, set = 0) buffer DIReservoirBuffer {RTXDI_PackedDIReservoir DIReservoirs[];};
-layout(binding = 14, set = 0, rgba16f) uniform image2D DiffuseLighting;
-layout(binding = 15, set = 0, rgba16f) uniform image2D SpecularLighting;
-layout(binding = 16, set = 0, rg16i) uniform iimage2D TemporalSamplePositions;
-layout(binding = 17, set = 0) buffer ReservoirBuffer {RTXDI_PackedGIReservoir GIReservoirs[];};
-layout(binding = 18, set = 0) buffer risBuffer {uvec2 RisBuffer[];};
-layout(binding = 19, set = 0) buffer risLightDataBuffer {uvec4 RisLightDataBuffer[];};
-layout(binding = 20, set = 0) buffer secondaryGBuffer {SecondaryGBufferData SecondaryGBuffer[];};
+layout(binding = 3, set = 0) readonly buffer geometryInfos { GeometryInfo GeometryInfos[]; };
+layout(binding = 4, set = 0) readonly buffer vertices { Vertex Vertices[]; };
+layout(binding = 5, set = 0) readonly buffer indices { uint Indices[]; };
+layout(binding = 6, set = 0) uniform sampler2D SkyBox;
+#include "PolymorphicLight.glsl"
+layout(binding = 7, set = 0) buffer LightInfoBuffer {RAB_LightInfo LightDataBuffer[];};
+layout(binding = 8, set = 0) buffer NeighborsBuffer {vec2 Neighbors[];};
+layout(binding = 9, set = 0) uniform sampler2D EnvironmentPdfTexture;
+layout(binding = 10, set = 0) uniform sampler2D LocalLightPdfTexture;
+layout(binding = 11, set = 0) buffer GeomToLight {uint GeometryInstanceToLight[];};
+layout(binding = 12, set = 0) buffer DIReservoirBuffer {RTXDI_PackedDIReservoir DIReservoirs[];};
+layout(binding = 13, set = 0, rgba16f) uniform image2D DiffuseLighting;
+layout(binding = 14, set = 0, rgba16f) uniform image2D SpecularLighting;
+layout(binding = 15, set = 0, rg16i) uniform iimage2D TemporalSamplePositions;
+layout(binding = 16, set = 0) buffer ReservoirBuffer {RTXDI_PackedGIReservoir GIReservoirs[];};
+layout(binding = 17, set = 0) buffer risBuffer {uvec2 RisBuffer[];};
+layout(binding = 18, set = 0) buffer risLightDataBuffer {uvec4 RisLightDataBuffer[];};
+layout(binding = 19, set = 0) buffer secondaryGBuffer {SecondaryGBufferData SecondaryGBuffer[];};
+layout(binding = 20, set = 0) uniform sampler2D textures[];
 
 #define RTXDI_RIS_BUFFER RisBuffer 
 #define RTXDI_GI_RESERVOIR_BUFFER GIReservoirs
@@ -63,8 +67,8 @@ layout(binding = 20, set = 0) buffer secondaryGBuffer {SecondaryGBufferData Seco
 #define PolymorphicLightInfo RAB_LightInfo;
 #define RandomSamplerState RAB_RandomSamplerState;
 
-#include "../rtxdi/GIReservoir.hlsli"
-#include "../Helpers.glsl"
+#include "rtxdi/GIReservoir.hlsli"
+#include "Helpers.glsl"
 
 const bool environmentMapImportanceSampling = true;
 const bool kSpecularOnly = false;
@@ -209,14 +213,13 @@ RayDesc setupVisibilityRay(RAB_Surface surface, float3 samplePosition, float off
 
     return ray;
 }
-#if !FINAL_SHADING
 bool GetConservativeVisibility(RAB_Surface surface, float3 samplePosition)
 {
     RayDesc ray = setupVisibilityRay(surface, samplePosition);
     trace(ray);
 
-    #if !PREPROSSES
-    return p.missed;
+    #if !COMPUTE
+    return p.geometryIndex == ~0u;
     #else
     return false;
     #endif
@@ -238,7 +241,6 @@ bool RAB_GetTemporalConservativeVisibility(RAB_Surface currentSurface, RAB_Surfa
 {
     return GetConservativeVisibility(previousSurface, lightSample.position);
 }
-#endif
 
 
 // This function is called in the spatial resampling passes to make sure that 
@@ -323,7 +325,6 @@ RAB_Surface GetGBufferSurface(
 // should indicate that it's invalid when RAB_IsSurfaceValid is called on it.
 RAB_Surface RAB_GetGBufferSurface(int2 pixelPosition, bool previousFrame)
 {
-    #if !FINAL_SHADING
     if(previousFrame)
     {
         return GetPrevGBufferSurface(
@@ -332,7 +333,6 @@ RAB_Surface RAB_GetGBufferSurface(int2 pixelPosition, bool previousFrame)
         );
     }
     else
-    #endif
     {
         return GetGBufferSurface(
             pixelPosition, 
@@ -648,8 +648,10 @@ bool RAB_TraceRayForLocalLight(float3 origin, float3 direction, float tMin, floa
     bool hitAnything;
 
     trace(ray);
+    #if !COMPUTE
     hitUV = p.uv;
     o_lightIndex = getLightIndex(p.geometryIndex, p.primitiveId);
+    #endif
 
     if (o_lightIndex != RTXDI_InvalidLightIndex)
     {

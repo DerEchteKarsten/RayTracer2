@@ -17,7 +17,6 @@ bool ShadeSurfaceWithLightSample(
         return false;
 
     bool needToStore = false;
-    #if !FINAL_SHADING
     if (g_Const.restirDI.shadingParams.enableFinalVisibility == 1)
     {
         float3 visibility = vec3(0);
@@ -36,14 +35,13 @@ bool ShadeSurfaceWithLightSample(
         {
             RayDesc ray = setupVisibilityRay(surface, lightSample.position, 0.01);
             trace(ray);
-            visibility = vec3(p.missed);
+            visibility = vec3(p.geometryIndex == ~0u);
             RTXDI_StoreVisibilityInDIReservoir(reservoir, visibility, g_Const.restirDI.temporalResamplingParams.discardInvisibleSamples == 1);
             needToStore = true;
         }
 
         lightSample.radiance *= visibility;
     }
-    #endif
     lightSample.radiance *= RTXDI_GetDIReservoirInvPdf(reservoir) / lightSample.solidAnglePdf;
 
     if (lightSample.radiance.x > 0.0 || lightSample.radiance.y > 0.0 || lightSample.radiance.z > 0.0)
@@ -57,4 +55,37 @@ bool ShadeSurfaceWithLightSample(
     }
 
     return needToStore;
+}
+
+
+void StoreShadingOutput(
+    ivec2 pixelPosition,
+    float viewDepth,
+    float roughness,
+    vec3 diffuse,
+    vec3 specular,
+    float lightDistance,
+    bool isFirstPass
+    )
+{
+    float diffuseHitT = lightDistance;
+    float specularHitT = lightDistance;
+
+    if (!isFirstPass)
+    {
+        vec4 priorDiffuse = imageLoad(DiffuseLighting, pixelPosition);
+        vec4 priorSpecular = imageLoad(SpecularLighting, pixelPosition);
+
+        if (calcLuminance(diffuse) > calcLuminance(priorDiffuse.rgb) || lightDistance == 0)
+            diffuseHitT = priorDiffuse.w;
+
+        if (calcLuminance(specular) > calcLuminance(priorSpecular.rgb) || lightDistance == 0)
+            specularHitT = priorSpecular.w;
+        
+        diffuse += priorDiffuse.rgb;
+        specular += priorSpecular.rgb;
+    }
+
+    imageStore(DiffuseLighting, pixelPosition, vec4(diffuse, diffuseHitT));
+    imageStore(SpecularLighting, pixelPosition, vec4(specular, specularHitT));
 }

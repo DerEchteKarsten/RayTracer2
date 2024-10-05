@@ -3,8 +3,97 @@
 #extension GL_GOOGLE_include_directive : enable
 #extension GL_EXT_ray_tracing : require
 
-#include "../common.glsl"
+#include "common.glsl"
 
 layout(location = 0) rayPayloadEXT Payload p;
 
 #include "RtxdiApplicationBridge.glsl"
+#include "rtxdi/InitialSamplingFunctions.hlsli"
+#include "rtxdi/DIReservoir.hlsli"
+#include "rtxdi/DIResamplingFunctions.hlsli"
+#include "ShadingHelpers.glsl"
+
+void main() {
+    const RTXDI_RuntimeParameters params = g_Const.runtimeParams;
+
+    uint2 pixelPosition = RTXDI_ReservoirPosToPixelPos(gl_LaunchIDEXT.xy, params.activeCheckerboardField);
+
+    RAB_RandomSamplerState rng = RAB_InitRandomSampler(pixelPosition, 1);
+    RAB_RandomSamplerState tileRng = RAB_InitRandomSampler(pixelPosition / RTXDI_TILE_SIZE_IN_PIXELS, 1);
+
+    RAB_Surface surface = RAB_GetGBufferSurface(ivec2(pixelPosition), false);
+
+    RTXDI_SampleParameters sampleParams = RTXDI_InitSampleParameters(
+        g_Const.restirDI.initialSamplingParams.numPrimaryLocalLightSamples,
+        g_Const.restirDI.initialSamplingParams.numPrimaryInfiniteLightSamples,
+        g_Const.restirDI.initialSamplingParams.numPrimaryEnvironmentSamples,
+        g_Const.restirDI.initialSamplingParams.numPrimaryBrdfSamples,
+        g_Const.restirDI.initialSamplingParams.brdfCutoff,
+        0.001f);
+
+    RAB_LightSample lightSample;
+    RTXDI_DIReservoir reservoir = RTXDI_SampleLightsForSurface(rng, tileRng, surface,
+        sampleParams, g_Const.lightBufferParams, g_Const.restirDI.initialSamplingParams.localLightSamplingMode,
+        g_Const.localLightsRISBufferSegmentParams, g_Const.environmentLightRISBufferSegmentParams,
+    lightSample);
+
+    if (g_Const.restirDI.initialSamplingParams.enableInitialVisibility == 1 && RTXDI_IsValidDIReservoir(reservoir))
+    {
+        if (!RAB_GetConservativeVisibility(surface, lightSample))
+        {
+            RTXDI_StoreVisibilityInDIReservoir(reservoir, vec3(0), true);
+        }
+    }
+
+    ivec2 temporalSamplePixelPos = ivec2(-1);
+
+    float3 motionVector = imageLoad(MotionVectors, ivec2(pixelPosition)).xyz;
+    motionVector = convertMotionVectorToPixelSpace(g_Const.view, g_Const.prevView, ivec2(pixelPosition), motionVector);
+
+    RTXDI_DISpatioTemporalResamplingParameters stparams;
+    stparams.screenSpaceMotion = motionVector;
+    stparams.sourceBufferIndex = g_Const.restirDI.bufferIndices.temporalResamplingInputBufferIndex;
+    stparams.maxHistoryLength = g_Const.restirDI.temporalResamplingParams.maxHistoryLength;
+    stparams.biasCorrectionMode = g_Const.restirDI.temporalResamplingParams.temporalBiasCorrection;
+    stparams.depthThreshold = g_Const.restirDI.temporalResamplingParams.temporalDepthThreshold;
+    stparams.normalThreshold = g_Const.restirDI.temporalResamplingParams.temporalNormalThreshold;
+    stparams.numSamples = g_Const.restirDI.spatialResamplingParams.numSpatialSamples + 1;
+    stparams.numDisocclusionBoostSamples = g_Const.restirDI.spatialResamplingParams.numDisocclusionBoostSamples;
+    stparams.samplingRadius = g_Const.restirDI.spatialResamplingParams.spatialSamplingRadius;
+    stparams.enableVisibilityShortcut = g_Const.restirDI.temporalResamplingParams.discardInvisibleSamples == 1;
+    stparams.enablePermutationSampling = false;
+    stparams.enableMaterialSimilarityTest = true;
+    stparams.uniformRandomNumber = g_Const.restirDI.temporalResamplingParams.uniformRandomNumber;
+    stparams.discountNaiveSamples = false;
+
+    reservoir = RTXDI_DISpatioTemporalResampling(pixelPosition, surface, reservoir,
+            rng, params, g_Const.restirDI.reservoirBufferParams, stparams, temporalSamplePixelPos, lightSample);
+
+    imageStore(TemporalSamplePositions, ivec2(gl_LaunchIDEXT.xy), ivec4(temporalSamplePixelPos, 0, 0));
+
+    vec3 diffuse = vec3(0);
+    vec3 specular = vec3(0);
+    float lightDistance = 0;
+
+    if (RTXDI_IsValidDIReservoir(reservoir))
+    {
+        // lightSample is produced by the RTXDI_SampleLightsForSurface and RTXDI_SpatioTemporalResampling calls above
+        ShadeSurfaceWithLightSample(reservoir, surface, lightSample,
+            /* previousFrameTLAS = */ false, /* enableVisibilityReuse = */ true, diffuse, specular, lightDistance);
+
+        
+        specular = DemodulateSpecular(surface.specularF0, specular);
+    }
+
+    RTXDI_StoreDIReservoir(reservoir, g_Const.restirDI.reservoirBufferParams, gl_LaunchIDEXT.xy, g_Const.restirDI.bufferIndices.shadingInputBufferIndex);
+
+    StoreShadingOutput(
+        ivec2(gl_LaunchIDEXT.xy), 
+        surface.viewDepth, 
+        surface.roughness,  
+        diffuse, 
+        specular, 
+        lightDistance, 
+        true
+    );
+}
