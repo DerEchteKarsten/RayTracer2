@@ -89,7 +89,7 @@ fn render(
                     &data.frame as *const u32 as *const u8,
                     size_of::<u32>(),
                 );
-                
+
                 // renderer.device.cmd_fill_buffer(*cmd, main_pass.hash_map_buffer.inner, 0, main_pass.hash_map_buffer.size, 0);
 
                 // renderer.device.cmd_pipeline_barrier(
@@ -299,8 +299,8 @@ fn init(world: &mut World) {
     let windows = world.get_non_send_resource::<WinitWindows>().unwrap();
     let window = windows.windows.values().into_iter().last().unwrap();
     let mut renderer = Renderer::new(
-        window.raw_window_handle().unwrap(),
-        window.raw_display_handle().unwrap(),
+        &window,
+        &window,
         &device_features,
         WINDOW_SIZE.0,
         WINDOW_SIZE.1,
@@ -308,7 +308,7 @@ fn init(world: &mut World) {
     .unwrap();
     let game_world = world.get_resource::<GameWorld>().unwrap();
 
-    let image_thread = std::thread::spawn(|| image::open("./src/models/skybox.exr").unwrap());
+    let image_thread = std::thread::spawn(|| image::open("./models/skybox.exr").unwrap());
     let default_sampler: vk::SamplerCreateInfo = vk::SamplerCreateInfo {
         mag_filter: vk::Filter::LINEAR,
         min_filter: vk::Filter::LINEAR,

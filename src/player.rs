@@ -1,6 +1,10 @@
 use std::f32::consts::PI;
 
-use bevy::{app::{App, DynEq, Update}, prelude::{Query, Res, ResMut, With}, time::Time};
+use bevy::{
+    app::{App, DynEq, Update},
+    prelude::{Query, Res, ResMut, With},
+    time::Time,
+};
 use glam::*;
 
 use crate::{
@@ -213,7 +217,6 @@ pub fn velocity(
     }
 }
 
-
 pub fn god_mode_movement(
     mut query: Query<&mut Position, With<Player>>,
     controls: Res<Controls>,
@@ -340,5 +343,5 @@ pub fn movement(
 }
 
 pub fn PlayerPlugin(app: &mut App) {
-    app.add_systems(Update, god_mode_movement);//(movement, velocity.after(movement)));
+    app.add_systems(Update, god_mode_movement); //(movement, velocity.after(movement)));
 }

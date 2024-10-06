@@ -23,8 +23,8 @@ pub fn create_compute_pipeline(
         ..Default::default()
     }];
 
-    let descriptor_set_layout = renderer.create_descriptor_set_layout(&bindings, &[])?;
-    let descriptor_set_layout2 = renderer.create_descriptor_set_layout(&bindings, &[])?;
+    let descriptor_set_layout = renderer.create_descriptor_set_layout(&bindings)?;
+    let descriptor_set_layout2 = renderer.create_descriptor_set_layout(&bindings)?;
 
     let set_layouts = [descriptor_set_layout, descriptor_set_layout2];
     let layout_info = vk::PipelineLayoutCreateInfo::default().set_layouts(&set_layouts);
@@ -36,8 +36,9 @@ pub fn create_compute_pipeline(
             renderer
                 .create_shader_stage(
                     vk::ShaderStageFlags::COMPUTE,
-                    "./src/shaders/temp_reuse.comp.spv".to_owned(),
+                    "./src/shaders/temp_reuse.comp.spv",
                 )
+                .unwrap()
                 .0,
         );
 
@@ -103,6 +104,7 @@ pub fn create_frame_buffers<'a>(
                 vk::Format::R32_UINT,
                 WINDOW_SIZE.0,
                 WINDOW_SIZE.1,
+                1,
             )
             .unwrap();
             let image_view = ctx.create_image_view(&image).unwrap();
@@ -186,9 +188,8 @@ pub fn create_post_proccesing_pipeline(
         .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
         .stage_flags(vk::ShaderStageFlags::FRAGMENT)];
 
-    let descriptor_layout = ctx.create_descriptor_set_layout(&descriptor_bindings, &[])?;
-    let static_descriptor_layout =
-        ctx.create_descriptor_set_layout(&static_descriptor_bindings, &[])?;
+    let descriptor_layout = ctx.create_descriptor_set_layout(&descriptor_bindings)?;
+    let static_descriptor_layout = ctx.create_descriptor_set_layout(&static_descriptor_bindings)?;
 
     let descriptor_layouts = [static_descriptor_layout, descriptor_layout];
     let layout_info = vk::PipelineLayoutCreateInfo::default()
@@ -241,11 +242,17 @@ pub fn create_post_proccesing_pipeline(
     let entry_point_name: CString = CString::new("main").unwrap();
     let stages = [
         vk::PipelineShaderStageCreateInfo::default()
-            .module(ctx.create_shader_module("./src/shaders/post_processing.frag.spv".to_string()))
+            .module(
+                ctx.create_shader_module("./src/shaders/post_processing.frag.spv")
+                    .unwrap(),
+            )
             .stage(vk::ShaderStageFlags::FRAGMENT)
             .name(&entry_point_name),
         vk::PipelineShaderStageCreateInfo::default()
-            .module(ctx.create_shader_module("./src/shaders/post_processing.vert.spv".to_string()))
+            .module(
+                ctx.create_shader_module("./src/shaders/post_processing.vert.spv")
+                    .unwrap(),
+            )
             .stage(vk::ShaderStageFlags::VERTEX)
             .name(&entry_point_name),
     ];
@@ -391,7 +398,7 @@ pub fn create_raytracing_pipeline(
 
     descriptor_bindings.extend_from_slice(bindings);
 
-    let descriptor_layout = renderer.create_descriptor_set_layout(&descriptor_bindings, &[])?;
+    let descriptor_layout = renderer.create_descriptor_set_layout(&descriptor_bindings)?;
 
     let set_layouts = [descriptor_layout];
     let layout_info = vk::PipelineLayoutCreateInfo::default()
@@ -451,11 +458,19 @@ pub fn create_raytracing_pipeline(
     let entry_point_name: CString = CString::new("main").unwrap();
     let stages = [
         vk::PipelineShaderStageCreateInfo::default()
-            .module(renderer.create_shader_module("./src/shaders/default.frag.spv".to_string()))
+            .module(
+                renderer
+                    .create_shader_module("./src/shaders/default.frag.spv")
+                    .unwrap(),
+            )
             .stage(vk::ShaderStageFlags::FRAGMENT)
             .name(&entry_point_name),
         vk::PipelineShaderStageCreateInfo::default()
-            .module(renderer.create_shader_module("./src/shaders/default.vert.spv".to_string()))
+            .module(
+                renderer
+                    .create_shader_module("./src/shaders/default.vert.spv")
+                    .unwrap(),
+            )
             .stage(vk::ShaderStageFlags::VERTEX)
             .name(&entry_point_name),
     ];
@@ -636,7 +651,7 @@ pub fn create_main_render_pass(
 
     let (frame_buffers, voxel_index_buffers) = create_frame_buffers(renderer, &render_pass)?;
 
-    let mut hash_map_buffer = renderer.create_buffer(
+    let hash_map_buffer = renderer.create_buffer(
         vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
         MemoryLocation::GpuOnly,
         1000000 * 1000,
