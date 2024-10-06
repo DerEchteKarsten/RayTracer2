@@ -12,6 +12,7 @@ pub struct Octant {
 #[derive(Resource)]
 pub struct GameWorld {
     pub tree: Octant,
+    pub tree_level: u32,
     pub level_dim: u32,
     pub build_tree: Vec<u32>,
 }
@@ -189,7 +190,23 @@ impl Octant {
         //     size = m.size.z
         // }
         // size = 2_u32.pow(((size as f32).log2()).ceil() as u32);
+        
         return Ok((octree, size));
+    }
+
+    pub fn depth(&self, current_depth: u32) -> u32 {
+        if let Some(children) = &self.children {
+            let mut maxdepth = 0;
+            for i in children.as_ref() {
+                let depth = i.depth(current_depth + 1);
+                if depth > maxdepth {
+                    maxdepth = depth;
+                }
+            }
+            return maxdepth;
+        }else {
+            return current_depth;
+        }
     }
 
     pub fn trace(

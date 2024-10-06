@@ -3,7 +3,7 @@
 #include "./oct_tree.glsl"
 
 #define INFINITY 1.0 / 0.0
-
+#define khashmapCapacity 2073600
 // float RandomValue(inout uint state) {
 // 	float res = fract(sin(dot(vec2(state, state), vec2(12.9898, 78.233))) * 43758.5453);
 // 	state = uint(res);
@@ -117,7 +117,7 @@ struct HitInfo {
 	float depth;
 };
 
-bool ray_cast(in vec3 org, in vec3 dir, out HitInfo hit_info) {
+bool ray_cast(vec3 org, vec3 dir, out HitInfo hit_info) {
 	vec3 o_pos, o_color, o_normal;
 	uint o_voxel_id;
 	bool hit = Octree_RayMarchLeaf(org, dir, o_pos, o_color, o_normal, o_voxel_id);

@@ -84,7 +84,7 @@ fn render(cam: Res<CameraUniformData>, world: Res<GameWorld>) {
 }
 
 fn fps(time: Res<Time>) {
-    info!("{:?}", time.delta());
+    info!("{:?}", 1.0/time.delta_seconds());
 }
 
 fn main() {
@@ -103,6 +103,7 @@ fn main() {
         .init_resource::<Controls>()
         .init_resource::<CameraUniformData>()
         .insert_resource(GameWorld {
+            tree_level: model.0.depth(0),
             tree: model.0.clone(),
             level_dim: model.1,
             build_tree: model.0.build(),

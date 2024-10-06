@@ -681,8 +681,7 @@ impl<'a> Renderer<'a> {
             }
             Ok(_) => {}
         };
-
-        Ok(())
+        Ok(frame_index)
     }
 
     pub fn pipeline_image_barriers(&self, cmd: &vk::CommandBuffer, barriers: &[ImageBarrier]) {
@@ -2143,10 +2142,8 @@ fn new_device(
     let mut features = vk::PhysicalDeviceFeatures2::default()
         .features(features)
         .push_next(&mut vulkan_12_features)
-        .push_next(&mut vulkan_13_features)
-        .push_next(&mut ray_tracing_feature)
-        .push_next(&mut acceleration_struct_feature);
-    // .push_next(&mut atomics);
+        .push_next(&mut vulkan_13_features);
+        // .push_next(&mut atomics);
 
     let device_extensions_as_ptr = required_extensions
         .into_iter()

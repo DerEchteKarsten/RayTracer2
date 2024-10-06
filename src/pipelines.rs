@@ -1,5 +1,5 @@
 use anyhow::{Ok, Result};
-use ash::vk::{self};
+use ash::vk::{self, ImageLayout};
 use bevy::prelude::*;
 use gpu_allocator::MemoryLocation;
 
@@ -7,9 +7,7 @@ use std::default::Default;
 use std::ffi::CString;
 
 use crate::{
-    allocate_descriptor_set, allocate_descriptor_sets, create_descriptor_pool,
-    create_descriptor_set_layout, update_descriptor_sets, Buffer, Image, ImageAndView, Renderer,
-    WriteDescriptorSet, WriteDescriptorSetKind, WINDOW_SIZE,
+    allocate_descriptor_set, allocate_descriptor_sets, create_descriptor_pool, create_descriptor_set_layout, update_descriptor_sets, Buffer, Image, ImageAndView, Renderer, WriteDescriptorSet, WriteDescriptorSetKind, FRAMES_IN_FLIGHT, WINDOW_SIZE
 };
 
 pub fn create_compute_pipeline(
@@ -71,7 +69,7 @@ pub fn create_compute_pipeline(
         let writes = [WriteDescriptorSet {
             binding: 0,
             kind: WriteDescriptorSetKind::StorageBuffer {
-                buffer: hash_map_buffers[i].inner,
+                buffer: hash_map_buffers[i as usize].inner,
             },
         }];
 
@@ -90,7 +88,7 @@ pub fn create_compute_pipeline(
 pub fn create_frame_buffers<'a>(
     ctx: &mut Renderer,
     render_pass: &vk::RenderPass,
-) -> Result<(Vec<vk::Framebuffer>, Vec<ImageAndView>)> {
+) -> Result<(Vec<vk::Framebuffer>, Vec<ImageAndView>, Vec<ImageAndView>)> {
     let size = ctx.swapchain.images.len();
     let voxel_index_buffers = (0..size)
         .map(|_| {
@@ -116,7 +114,7 @@ pub fn create_frame_buffers<'a>(
         .collect::<Vec<ImageAndView>>();
     let frame_buffers = (0..size)
         .map(|i| {
-            let attachments = [voxel_index_buffers[i].view, ctx.swapchain.images[i].view];
+            let attachments = [voxel_index_buffers[i].view, ctx.swapchain.images[i].view, beam_image[i].view];
             let create_info = vk::FramebufferCreateInfo::default()
                 .attachment_count(2)
                 .attachments(&attachments)
@@ -128,7 +126,7 @@ pub fn create_frame_buffers<'a>(
         })
         .collect::<Vec<vk::Framebuffer>>();
 
-    Ok((frame_buffers, voxel_index_buffers))
+    Ok((frame_buffers, voxel_index_buffers, beam_image))
 }
 
 pub struct Pipeline {
@@ -140,13 +138,15 @@ pub struct Pipeline {
 
 #[derive(Resource)]
 pub struct MainPass {
+    pub beam_trace: Pipeline,
     pub ray_tracing: Pipeline,
     pub post_proccesing: Pipeline,
-    // pub temporal_reuse: Pipeline,
     pub render_pass: vk::RenderPass,
     pub voxel_index_buffers: Vec<ImageAndView>,
+    pub beam_image: Vec<ImageAndView>,
     pub frame_buffers: Vec<vk::Framebuffer>,
     pub hash_map_buffer: Buffer,
+    // pub ui_pipeline: Pipeline,
 }
 
 pub fn create_post_proccesing_pipeline(
@@ -280,7 +280,7 @@ pub fn create_post_proccesing_pipeline(
         .render_pass(*render_pass)
         .stages(&stages)
         .viewport_state(&viewport_state)
-        .subpass(1);
+        .subpass(2);
     let pipeline = unsafe {
         ctx.device
             .create_graphics_pipelines(vk::PipelineCache::null(), &[pipeline_create_info], None)
@@ -367,6 +367,7 @@ pub fn create_raytracing_pipeline(
     hash_map_buffers: &Buffer,
     oct_tree_buffer: &Buffer,
     uniform_buffer: &Buffer,
+    beam_images: &Vec<ImageAndView>,
     sky_box: &ImageAndView,
     sky_box_sampler: &vk::Sampler,
     bindings: &[vk::DescriptorSetLayoutBinding],
@@ -501,7 +502,7 @@ pub fn create_raytracing_pipeline(
 
     let mut static_sizes = vec![
         vk::DescriptorPoolSize::default()
-            .descriptor_count(renderer.swapchain.images.len() as u32 + 1)
+            .descriptor_count(1)
             .ty(vk::DescriptorType::STORAGE_BUFFER),
         vk::DescriptorPoolSize::default()
             .descriptor_count(1)
@@ -510,10 +511,9 @@ pub fn create_raytracing_pipeline(
             .descriptor_count(1)
             .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER),
     ];
-    static_sizes.extend_from_slice(&sizes);
 
     let descriptor_pool = renderer
-        .create_descriptor_pool(renderer.swapchain.images.len() as u32 + 1, &static_sizes)?;
+        .create_descriptor_pool(1, &static_sizes)?;
     let descriptors =
         allocate_descriptor_set(&renderer.device, &descriptor_pool, &descriptor_layout)?;
 
@@ -557,6 +557,10 @@ pub fn create_raytracing_pipeline(
     })
 }
 
+// fn create_ui_pipeline(renderer: &mut Renderer, font_texture: &ImageAndView, textures: &Vec<ImageAndView>, texture_fields: ) {
+
+// }
+
 pub fn create_main_render_pass(
     renderer: &mut Renderer,
     oct_tree_buffer: &Buffer,
@@ -586,19 +590,32 @@ pub fn create_main_render_pass(
             .store_op(vk::AttachmentStoreOp::STORE)
             .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
             .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE),
+        vk::AttachmentDescription::default()
+            .samples(vk::SampleCountFlags::TYPE_1)
+            .final_layout(vk::ImageLayout::GENERAL)
+            .initial_layout(vk::ImageLayout::UNDEFINED)
+            .format(vk::Format::R32_SFLOAT)
+            .load_op(vk::AttachmentLoadOp::CLEAR)
+            .store_op(vk::AttachmentStoreOp::STORE)
+            .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
+            .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE),
     ];
-
     let attachments1 = [vk::AttachmentReference::default()
-        .attachment(0)
+        .attachment(2)
         .layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)];
     let attachments2 = [vk::AttachmentReference::default()
+        .attachment(0)
+        .layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)];
+    let attachments3 = [vk::AttachmentReference::default()
         .attachment(1)
         .layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)];
 
     let input_attachments = [vk::AttachmentReference::default()
+        .attachment(2)
+        .layout(vk::ImageLayout::GENERAL)];
+    let input_attachments2 = [vk::AttachmentReference::default()
         .attachment(0)
         .layout(vk::ImageLayout::GENERAL)];
-
     let subpasses = [
         vk::SubpassDescription::default()
             .color_attachments(&attachments1)
@@ -606,6 +623,10 @@ pub fn create_main_render_pass(
         vk::SubpassDescription::default()
             .input_attachments(&input_attachments)
             .color_attachments(&attachments2)
+            .pipeline_bind_point(vk::PipelineBindPoint::GRAPHICS),
+        vk::SubpassDescription::default()
+            .input_attachments(&input_attachments2)
+            .color_attachments(&attachments3)
             .pipeline_bind_point(vk::PipelineBindPoint::GRAPHICS),
     ];
 
@@ -628,7 +649,20 @@ pub fn create_main_render_pass(
             .dst_subpass(1)
             .src_stage_mask(
                 vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
+                    | vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS,
+            )
+            .dst_stage_mask(
+                vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
                     | vk::PipelineStageFlags::LATE_FRAGMENT_TESTS,
+            )
+            .src_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_READ)
+            .dst_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE),
+        vk::SubpassDependency::default()
+            .src_subpass(1)
+            .dst_subpass(2)
+            .src_stage_mask(
+                vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
+                    | vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS,
             )
             .dst_stage_mask(
                 vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
@@ -649,12 +683,12 @@ pub fn create_main_render_pass(
             .create_render_pass(&render_pass_create_info, None)?
     };
 
-    let (frame_buffers, voxel_index_buffers) = create_frame_buffers(renderer, &render_pass)?;
+    let (frame_buffers, voxel_index_buffers, beam_image) = create_frame_buffers(renderer, &render_pass)?;
 
     let hash_map_buffer = renderer.create_buffer(
         vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
         MemoryLocation::GpuOnly,
-        1000000 * 1000,
+        2073600 * 22,
         Some("hashmap_buffer"),
     )?;
 
@@ -664,6 +698,7 @@ pub fn create_main_render_pass(
         &hash_map_buffer,
         oct_tree_buffer,
         unifrom_buffer,
+        &beam_image,
         sky_box,
         sky_box_sampler,
         bindings,
@@ -680,7 +715,12 @@ pub fn create_main_render_pass(
         sky_box,
         sky_box_sampler,
     )?;
+
+    let beam_trace = create_beam_pipeline(renderer, &render_pass, oct_tree_buffer, unifrom_buffer)?;
+
     Ok(MainPass {
+        beam_image,
+        beam_trace,
         hash_map_buffer,
         ray_tracing: ray_tracing_pipeline,
         post_proccesing: post_proccesing_pipeline,

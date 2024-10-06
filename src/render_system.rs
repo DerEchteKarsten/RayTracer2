@@ -83,34 +83,39 @@ fn render(
     renderer
         .render(|renderer, i| {
             let cmd = &renderer.cmd_buffs[i as usize];
-
+            let current_frame = renderer.frame;
             unsafe {
                 let frame_c = std::slice::from_raw_parts(
                     &data.frame as *const u32 as *const u8,
                     size_of::<u32>(),
                 );
+                
+                renderer.device.cmd_fill_buffer(*cmd, main_pass.hash_map_buffer.inner, 0, main_pass.hash_map_buffer.size, 0);
 
-                // renderer.device.cmd_fill_buffer(*cmd, main_pass.hash_map_buffer.inner, 0, main_pass.hash_map_buffer.size, 0);
-
-                // renderer.device.cmd_pipeline_barrier(
-                //     *cmd,
-                //     vk::PipelineStageFlags::TRANSFER,
-                //     vk::PipelineStageFlags::TOP_OF_PIPE,
-                //     vk::DependencyFlags::DEVICE_GROUP,
-                //     &[],
-                //     &[vk::BufferMemoryBarrier::default()
-                //         .buffer(main_pass.hash_map_buffer.inner)
-                //         .src_access_mask(vk::AccessFlags::MEMORY_WRITE)
-                //         .dst_access_mask(vk::AccessFlags::MEMORY_READ)
-                //         .offset(0)
-                //         .size(main_pass.hash_map_buffer.size)],
-                //     &[],
-                // );
+                renderer.device.cmd_pipeline_barrier(
+                    *cmd,
+                    vk::PipelineStageFlags::TRANSFER,
+                    vk::PipelineStageFlags::TOP_OF_PIPE,
+                    vk::DependencyFlags::DEVICE_GROUP,
+                    &[],
+                    &[vk::BufferMemoryBarrier::default()
+                        .buffer(main_pass.hash_map_buffer.inner)
+                        .src_access_mask(vk::AccessFlags::MEMORY_WRITE)
+                        .dst_access_mask(vk::AccessFlags::MEMORY_READ)
+                        .offset(0)
+                        .size(main_pass.hash_map_buffer.size)],
+                    &[],
+                );
                 let begin_info = vk::RenderPassBeginInfo::default()
                     .clear_values(&[
                         vk::ClearValue {
                             color: vk::ClearColorValue {
                                 uint32: [0, 0, 0, 0],
+                            },
+                        },
+                        vk::ClearValue {
+                            color: vk::ClearColorValue {
+                                float32: [0.0, 0.0, 0.0, 1.0],
                             },
                         },
                         vk::ClearValue {
@@ -131,17 +136,64 @@ fn render(
 
                 renderer
                     .device
-                    .cmd_set_viewport(*cmd, 0, &[FULL_SCREEN_VIEW_PORT]);
+                    .cmd_set_viewport(*cmd, 0, &[vk::Viewport {
+                        width: WINDOW_SIZE.0 as f32 / 8.0,
+                        height: WINDOW_SIZE.1 as f32 / 8.0,
+                        x: 0.0,
+                        y: 0.0,
+                        max_depth: 1.0,
+                        min_depth: 0.0,
+                    }]);
                 renderer
                     .device
-                    .cmd_set_scissor(*cmd, 0, &[FULL_SCREEN_SCISSOR]);
+                    .cmd_set_scissor(*cmd, 0, &[vk::Rect2D {
+                        extent: vk::Extent2D { width: WINDOW_SIZE.0 /8, height: WINDOW_SIZE.0 /8 },
+                        offset: vk::Offset2D {
+                            x: 0,
+                            y: 0
+                        }
+                    }]);
 
                 renderer.device.cmd_begin_render_pass(
                     *cmd,
                     &begin_info,
                     vk::SubpassContents::INLINE,
                 );
+                renderer.device.cmd_bind_pipeline(
+                    *cmd,
+                    vk::PipelineBindPoint::GRAPHICS,
+                    main_pass.beam_trace.pipeline,
+                );
 
+                renderer.device.cmd_bind_descriptor_sets(
+                    *cmd,
+                    vk::PipelineBindPoint::GRAPHICS,
+                    main_pass.beam_trace.layout,
+                    0,
+                    &[main_pass.beam_trace.descriptors[0]],
+                    &[],
+                );
+
+                renderer.device.cmd_push_constants(
+                    *cmd,
+                    main_pass.beam_trace.layout,
+                    vk::ShaderStageFlags::FRAGMENT,
+                    0,
+                    &(1.0 - data.oct_tree_level as f32).exp2().to_ne_bytes(),
+                );
+
+                renderer.device.cmd_draw(*cmd, 6, 1, 0, 0);
+
+                renderer
+                    .device
+                    .cmd_next_subpass(*cmd, vk::SubpassContents::INLINE);
+
+                renderer
+                    .device
+                    .cmd_set_viewport(*cmd, 0, &[FULL_SCREEN_VIEW_PORT]);
+                renderer
+                    .device
+                    .cmd_set_scissor(*cmd, 0, &[FULL_SCREEN_SCISSOR]);
                 renderer.device.cmd_bind_pipeline(
                     *cmd,
                     vk::PipelineBindPoint::GRAPHICS,
@@ -153,7 +205,7 @@ fn render(
                     vk::PipelineBindPoint::GRAPHICS,
                     main_pass.ray_tracing.layout,
                     0,
-                    &[main_pass.ray_tracing.descriptors[0]],
+                    &[main_pass.ray_tracing.descriptors[0], main_pass.ray_tracing.descriptors2[i as usize]],
                     &[],
                 );
 
@@ -206,6 +258,7 @@ fn render(
 
 #[derive(Resource)]
 struct FrameData {
+    pub oct_tree_level: u32,
     pub uniform_buffer: Buffer,
     pub frame: u32,
 }
@@ -330,17 +383,18 @@ fn init(world: &mut World) {
             Some("Uniform Buffer"),
         )
         .unwrap();
+    
+    let oct_tree_buffer = {
+        let oct_tree_data = &game_world.build_tree;
 
-    let oct_tree_data = &game_world.build_tree;
-
-    let oct_tree_buffer = renderer
-        .create_gpu_only_buffer_from_data(
-            vk::BufferUsageFlags::STORAGE_BUFFER,
-            oct_tree_data.as_slice(),
-            Some("OctTreeData"),
-        )
-        .unwrap();
-
+        renderer
+            .create_gpu_only_buffer_from_data(
+                vk::BufferUsageFlags::STORAGE_BUFFER,
+                oct_tree_data.as_slice(),
+                Some("OctTreeData"),
+            )
+            .unwrap()
+    };
     let gizzmo_buffer = {
         let data = [Gizzmo {
             position: glam::Vec3::ZERO,
@@ -386,7 +440,6 @@ fn init(world: &mut World) {
     };
 
     let light_dir = polar_form(ligth_rotation, light_hight);
-    info!("{}", light_dir);
     let mut light_data = vec![];
 
     for _ in 0..20 {
@@ -450,10 +503,11 @@ fn init(world: &mut World) {
         ],
     )
     .unwrap();
-
+    let oct_tree_level = game_world.tree_level.clone();
     world.insert_resource(gizzmo_buffer);
     world.insert_non_send_resource(renderer);
     world.insert_resource(FrameData {
+        oct_tree_level,
         uniform_buffer,
         frame: 0,
     });
