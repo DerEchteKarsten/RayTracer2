@@ -190,7 +190,7 @@ impl Octant {
         //     size = m.size.z
         // }
         // size = 2_u32.pow(((size as f32).log2()).ceil() as u32);
-        
+
         return Ok((octree, size));
     }
 
@@ -204,7 +204,7 @@ impl Octant {
                 }
             }
             return maxdepth;
-        }else {
+        } else {
             return current_depth;
         }
     }

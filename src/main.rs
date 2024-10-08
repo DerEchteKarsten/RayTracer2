@@ -1,15 +1,13 @@
-mod render_system;
-mod renderer;
 use bevy::log::LogPlugin;
 use components::{PhysicsBody, Player, Position};
-use oct_tree::{ray_voxel, GameWorld};
-use render_system::RenderPlugin;
-use renderer::*;
 mod camera;
 use camera::*;
 mod components;
-mod oct_tree;
-mod pipelines;
+mod renderer;
+use oct_tree::{GameWorld, Octant};
+use renderer::renderer::DeviceFeatures;
+use renderer::RenderPlugin;
+use renderer::*;
 mod player;
 use player::PlayerPlugin;
 
@@ -50,45 +48,45 @@ fn setup(mut commands: Commands) {
     ));
 }
 
-fn render(cam: Res<CameraUniformData>, world: Res<GameWorld>) {
-    let mut imgbuf = image::ImageBuffer::new(WINDOW_SIZE.0, WINDOW_SIZE.1);
+// fn render(cam: Res<CameraUniformData>, world: Res<GameWorld>) {
+//     let mut imgbuf = image::ImageBuffer::new(WINDOW_SIZE.0, WINDOW_SIZE.1);
 
-    for (x, y, pixel) in imgbuf.enumerate_pixels_mut() {
-        let pixelCenter = glam::vec2(x as f32, y as f32) + glam::Vec2::splat(0.5);
-        let inUV = pixelCenter / vec2(WINDOW_SIZE.0 as f32, WINDOW_SIZE.1 as f32);
-        let d = inUV * 2.0 - 1.0;
-        let origin = cam.view_inverse * glam::vec4(0.0, 0.0, 0.0, 1.0);
-        let target = (cam.proj_inverse * glam::vec4(d.x, d.y, 1.0, 1.0))
-            .xyz()
-            .normalize();
-        let direction = cam.view_inverse * glam::vec4(target.x, target.y, target.z, 0.0);
+//     for (x, y, pixel) in imgbuf.enumerate_pixels_mut() {
+//         let pixelCenter = glam::vec2(x as f32, y as f32) + glam::Vec2::splat(0.5);
+//         let inUV = pixelCenter / vec2(WINDOW_SIZE.0 as f32, WINDOW_SIZE.1 as f32);
+//         let d = inUV * 2.0 - 1.0;
+//         let origin = cam.view_inverse * glam::vec4(0.0, 0.0, 0.0, 1.0);
+//         let target = (cam.proj_inverse * glam::vec4(d.x, d.y, 1.0, 1.0))
+//             .xyz()
+//             .normalize();
+//         let direction = cam.view_inverse * glam::vec4(target.x, target.y, target.z, 0.0);
 
-        let mut depth = f32::INFINITY;
-        world.tree.trace(
-            origin.xyz(),
-            direction.xyz(),
-            world.level_dim,
-            vec3(1.5, 1.5, 1.5),
-            &mut depth,
-        );
+//         let mut depth = f32::INFINITY;
+//         world.tree.trace(
+//             origin.xyz(),
+//             direction.xyz(),
+//             world.level_dim,
+//             vec3(1.5, 1.5, 1.5),
+//             &mut depth,
+//         );
 
-        *pixel = image::Rgb([
-            (f32::min(depth / 10.0, 1.0) * 256.0) as u8,
-            (f32::min(depth / 10.0, 1.0) * 256.0) as u8,
-            (f32::min(depth / 10.0, 1.0) * 256.0) as u8,
-        ]);
-    }
+//         *pixel = image::Rgb([
+//             (f32::min(depth / 10.0, 1.0) * 256.0) as u8,
+//             (f32::min(depth / 10.0, 1.0) * 256.0) as u8,
+//             (f32::min(depth / 10.0, 1.0) * 256.0) as u8,
+//         ]);
+//     }
 
-    imgbuf.save("test2.png").unwrap();
-    panic!()
-}
+//     imgbuf.save("test2.png").unwrap();
+//     panic!()
+// }
 
 fn fps(time: Res<Time>) {
-    info!("{:?}", 1.0/time.delta_seconds());
+    info!("{:?}", 1.0 / time.delta_seconds());
 }
 
 fn main() {
-    let model = oct_tree::Octant::load("./models/boxes.vox").unwrap();
+    let model = Octant::load("./models/boxes.vox").unwrap();
     App::new()
         .insert_resource(AccessibilityRequested::default())
         .insert_resource(DeviceFeatures {
@@ -136,6 +134,5 @@ fn main() {
         ))
         .add_systems(Update, fps)
         .add_systems(Startup, setup)
-        // .add_systems(PostUpdate, render)
         .run();
 }

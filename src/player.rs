@@ -10,7 +10,6 @@ use glam::*;
 use crate::{
     components::{PhysicsBody, Player, Position},
     oct_tree::{ray_voxel, GameWorld, Octant},
-    render_system::GizzmoBuffer,
     Camera, CameraUniformData, Controls,
 };
 const MOVE_SPEED: f32 = 0.4; //* PLAYER_HEIGHT;
@@ -51,7 +50,6 @@ fn collide_and_slide(
     org: glam::Vec3,
     world: &Vec<u32>,
     depth: u32,
-    gizzmos: &mut GizzmoBuffer,
     gravity: bool,
     val_init: glam::Vec3,
 ) -> glam::Vec3 {
@@ -98,7 +96,6 @@ fn collide_and_slide(
                 org + snap_to_surface,
                 world,
                 depth + 1,
-                gizzmos,
                 gravity,
                 val_init,
             );
@@ -152,7 +149,6 @@ pub fn velocity(
     mut query: Query<(&mut Position, &mut PhysicsBody)>,
     time: Res<Time>,
     world: Res<GameWorld>,
-    mut gizzmos: ResMut<GizzmoBuffer>,
 ) {
     let delta_time = time.delta_seconds();
 
@@ -194,7 +190,6 @@ pub fn velocity(
             center,
             &world.build_tree,
             0,
-            &mut gizzmos,
             false,
             vel_movement,
         );
@@ -203,7 +198,6 @@ pub fn velocity(
             center,
             &world.build_tree,
             0,
-            &mut gizzmos,
             true,
             vel_and_grav,
         );

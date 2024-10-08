@@ -3,11 +3,11 @@
 base=$(dirname "$0")
 
 function compile {
-    glslangValidator --glsl-version 460 -V -o $1.spv $1 --target-env spirv1.6
+    ./glslangValidator -I$base/src/shaders --glsl-version 460 -V -o $base/src/shaders/bin/$2.spv $1 --target-env vulkan1.3
 }
 
-compile $base/src/shaders/post_processing.frag
-compile $base/src/shaders/default.frag
-compile $base/src/shaders/default.vert
-compile $base/src/shaders/temp_reuse.comp
-compile $base/src/shaders/beam.frag
+compile $base/src/shaders/g_buffer_pass/beam_coarse.comp beam_coarse
+compile $base/src/shaders/g_buffer_pass/beam_fine.comp beam_fine
+
+compile $base/src/shaders/post_processing_pass/post_processing.comp beam_fine
+

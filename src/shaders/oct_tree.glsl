@@ -1,5 +1,3 @@
-layout(std430, set = 0, binding = 0) readonly buffer uuOctree { uint uOctree[]; };
-
 #define STACK_SIZE 23
 #define EPS 3.552713678800501e-15
 struct StackItem {

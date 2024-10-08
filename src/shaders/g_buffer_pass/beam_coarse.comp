@@ -1,30 +1,6 @@
 #version 450
-#extension GL_EXT_debug_printf : enable
-#extension GL_GOOGLE_include_directive : enable
-#extension GL_EXT_nonuniform_qualifier : enable
-#extension GL_ARB_gpu_shader_int64 : enable
-#extension GL_EXT_scalar_block_layout : enable
-#extension GL_EXT_shader_explicit_arithmetic_types : enable
-// #extension GL_EXT_shader_explicit_arithmetic_types_int32 : enable
-#extension GL_EXT_shader_explicit_arithmetic_types_int64 : enable
-// #extension GL_EXT_shader_explicit_arithmetic_types_float32 : enable
-// #extension GL_EXT_shader_explicit_arithmetic_types_float64 : enable
 
-#include "./common.glsl"
-
-layout( push_constant ) uniform PushConstants {
-    float uOriginSize;
-};
-
-layout(binding = 1, set = 0) uniform CameraProperties 
-{
-	mat4 viewInverse;
-	mat4 projInverse;
-    vec4 controlls;
-} cam;
-
-layout(location = 0) out float FragColor;
-
+#include "g_buffer.glsl"
 
 vec3 GenCoarseRay(in vec2 bias) {
 	vec2 uv = (vec2(ivec2(gl_FragCoord.xy)) + bias) / vec2(cam.controlls.z / 8.0, cam.controlls.w / 8.0);
@@ -39,6 +15,7 @@ float RayTangent(in vec3 x, in vec3 y) {
 	return sqrt(1.0 - c * c) / abs(c);
 }
 
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;  
 
 void main() {
     const vec2 pixelCenter = vec2(gl_FragCoord.xy) + vec2(0.5);
@@ -57,5 +34,5 @@ void main() {
 	float t3 = RayTangent(dir, GenCoarseRay(vec2(-0.5, -0.5)));
 	float dir_sz = 2.0 * max(max(t0, t1), max(t2, t3)), t, size;
 
-    FragColor = Octree_RayMarchCoarse(o, dir, uOriginSize, dir_sz, t, size) ? max(0.0, t - size) : 1e10;
+    Octree_RayMarchCoarse(o, dir, uOriginSize, dir_sz, t, size) ? max(0.0, t - size) : 1e10;
 }
