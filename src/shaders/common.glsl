@@ -27,9 +27,6 @@ struct Payload {
   	uint primitiveId;
 };
 
-const float tmin = 0.1;
-const float tmax = 10000.0;
-
 
 #define PI 3.1415926
 

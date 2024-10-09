@@ -1,11 +1,14 @@
 use std::ffi::CString;
 
 use crate::{
-    allocate_descriptor_set, render_resources::RenderResources, update_descriptor_sets, Buffer,
-    Model, Renderer, WriteDescriptorSet, WriteDescriptorSetKind,
+    render_resources::RenderResources, Buffer, CalculatePoolSizesDesc, Model, Renderer,
+    WriteDescriptorSet, WriteDescriptorSetKind,
 };
 use anyhow::Result;
-use ash::vk::{self, AccessFlags, PipelineCache, PipelineStageFlags, Sampler, ShaderStageFlags};
+use ash::vk::{
+    self, AccessFlags, AccessFlags2, PipelineCache, PipelineStageFlags, PipelineStageFlags2,
+    Sampler, ShaderStageFlags,
+};
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -100,24 +103,15 @@ impl PrepareLightsTasks {
         };
 
         let pool = ctx
-            .create_descriptor_pool(
-                1,
-                &[
-                    vk::DescriptorPoolSize::default()
-                        .descriptor_count(1)
-                        .ty(vk::DescriptorType::STORAGE_IMAGE),
-                    vk::DescriptorPoolSize::default()
-                        .descriptor_count(5)
-                        .ty(vk::DescriptorType::STORAGE_BUFFER),
-                    vk::DescriptorPoolSize::default()
-                        .descriptor_count(1)
-                        .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER),
-                ],
-            )
+            .create_descriptor_pool(&[CalculatePoolSizesDesc {
+                bindings: &bindings,
+                num_sets: 1,
+            }])
             .unwrap();
 
-        let descriptor_set0 =
-            allocate_descriptor_set(&ctx.device, &pool, &descriptor0_layout).unwrap();
+        let descriptor_set0 = ctx
+            .allocate_descriptor_sets(&pool, &descriptor0_layout, 1)
+            .unwrap()[0];
 
         let writes = [
             WriteDescriptorSet {
@@ -166,7 +160,7 @@ impl PrepareLightsTasks {
                 },
             },
         ];
-        update_descriptor_sets(ctx, &descriptor_set0, &writes);
+        ctx.update_descriptor_sets(&descriptor_set0, &writes);
 
         Ok(Self {
             descriptor: descriptor_set0,
@@ -224,10 +218,10 @@ impl PrepareLightsTasks {
             );
             ctx.memory_barrier(
                 cmd,
-                PipelineStageFlags::TRANSFER,
-                PipelineStageFlags::COMPUTE_SHADER,
-                AccessFlags::TRANSFER_WRITE,
-                AccessFlags::SHADER_READ,
+                PipelineStageFlags2::TRANSFER,
+                PipelineStageFlags2::COMPUTE_SHADER,
+                AccessFlags2::TRANSFER_WRITE,
+                AccessFlags2::SHADER_READ,
             );
             ctx.device
                 .cmd_bind_pipeline(*cmd, vk::PipelineBindPoint::COMPUTE, self.handle);

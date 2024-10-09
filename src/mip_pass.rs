@@ -76,17 +76,15 @@ impl GenerateMipsPass {
         };
 
         let pool = ctx
-            .create_descriptor_pool(
-                1,
-                &calculate_pool_sizes(&[CalculatePoolSizesDesc {
-                    bindings: bindings.as_slice(),
-                    num_sets: 1,
-                }]),
-            )
+            .create_descriptor_pool(&[CalculatePoolSizesDesc {
+                bindings: bindings.as_slice(),
+                num_sets: 1,
+            }])
             .unwrap();
 
-        let descriptor_set0 =
-            allocate_descriptor_set(&ctx.device, &pool, &descriptor0_layout).unwrap();
+        let descriptor_set0 = ctx
+            .allocate_descriptor_sets(&pool, &descriptor0_layout, 1)
+            .unwrap()[0];
 
         for i in 0..mips {
             let image_info = [vk::DescriptorImageInfo::default()
@@ -111,7 +109,7 @@ impl GenerateMipsPass {
                     layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
                 },
             };
-            update_descriptor_sets(ctx, &descriptor_set0, &[write]);
+            ctx.update_descriptor_sets(&descriptor_set0, &[write]);
         }
 
         Ok(Self {
@@ -132,10 +130,10 @@ impl GenerateMipsPass {
         unsafe {
             ctx.memory_barrier(
                 cmd,
-                vk::PipelineStageFlags::ALL_COMMANDS,
-                vk::PipelineStageFlags::COMPUTE_SHADER,
-                vk::AccessFlags::SHADER_WRITE,
-                vk::AccessFlags::SHADER_WRITE,
+                vk::PipelineStageFlags2::ALL_COMMANDS,
+                vk::PipelineStageFlags2::COMPUTE_SHADER,
+                vk::AccessFlags2::SHADER_WRITE,
+                vk::AccessFlags2::SHADER_WRITE,
             );
             ctx.device
                 .cmd_bind_pipeline(*cmd, vk::PipelineBindPoint::COMPUTE, self.handle);

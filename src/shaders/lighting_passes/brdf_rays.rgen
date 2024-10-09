@@ -33,7 +33,7 @@ void main()
 
     RayDesc ray;
     ray.TMin = 0.001 * depth;
-    ray.TMax = 1000;
+    ray.TMax = BACKGROUND_DEPTH;
 
     float2 Rand;
     Rand.x = RAB_GetNextRandom(rng);
@@ -131,16 +131,16 @@ void main()
         if (includeEmissiveComponent)
             radiance += emission;
 
-        RayDesc primary_ray = setupPrimaryRay(pixelPosition, g_Const.view);
-        trace(primary_ray);
-        color = vec3(p.depth - surface.viewDepth);
-
-        secondarySurface.position = ray.Origin + ray.Direction * 0.5;
+        secondarySurface.position = ray.Origin + ray.Direction * p.depth;
         secondarySurface.normal = (dot(normal, ray.Direction) < 0) ? normal : -normal;
         secondarySurface.diffuseAlbedo = color;
         secondarySurface.specularF0 = specularF0;
         secondarySurface.roughness = roughness;
         secondarySurface.isEnvironmentMap = false;
+
+        RayDesc primary_ray = setupPrimaryRay(pixelPosition, g_Const.view);
+        trace(primary_ray);
+        secondarySurface.diffuseAlbedo = vec3(abs(p.depth - surface.viewDepth));
     }
     else
     {
@@ -156,10 +156,6 @@ void main()
         secondarySurface.specularF0 = vec3(0);
         secondarySurface.roughness = 0.0;
         secondarySurface.isEnvironmentMap = true;
-    }
-
-    if(length(surface.worldPos - secondarySurface.position) < 0.001) {
-        debugPrintfEXT("%i", rng.seed);
     }
 
     SecondaryGBufferData secondaryGBufferData;

@@ -1,3 +1,5 @@
+use std::cell::LazyCell;
+
 use ash::vk::{self, BufferUsageFlags, ImageLayout, ImageUsageFlags, ImageView};
 use glam::UVec2;
 use gpu_allocator::MemoryLocation;
@@ -7,7 +9,7 @@ use crate::{
         calculate_reservoir_buffer_parameters, compute_pdf_texture_size,
         fill_neighbor_offset_buffer,
     },
-    Buffer, ImageAndView, Model, Renderer, NEIGHBOR_OFFSET_COUNT, WINDOW_SIZE,
+    Buffer, ImageAndView, ImageBarrier, Model, Renderer, NEIGHBOR_OFFSET_COUNT, WINDOW_SIZE,
 };
 
 pub struct RenderResources {
@@ -97,6 +99,26 @@ impl GBuffer {
             specular_rough,
             emissive,
         }
+    }
+
+    pub fn barriers(&self, ctx: &Renderer) -> [vk::ImageMemoryBarrier; 6] {
+        let binding = [
+            &self.depth,
+            &self.diffuse_albedo,
+            &self.geo_normals,
+            &self.normal,
+            &self.specular_rough,
+            &self.emissive,
+        ];
+        let mut barriers = [vk::ImageMemoryBarrier::default(); 6];
+        binding.iter().enumerate().for_each(|(i, image)| {
+            barriers[i] = image.image.barrier(
+                ctx,
+                vk::AccessFlags::SHADER_WRITE,
+                vk::AccessFlags::SHADER_READ,
+            )
+        });
+        barriers
     }
 }
 

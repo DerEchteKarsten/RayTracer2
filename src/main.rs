@@ -1,7 +1,7 @@
 mod context;
 use ash::khr::{
     acceleration_structure, deferred_host_operations, get_memory_requirements2,
-    ray_tracing_pipeline, shader_float_controls, shader_non_semantic_info, swapchain,
+    ray_tracing_pipeline, shader_float_controls, shader_non_semantic_info, swapchain, synchronization2,
 };
 use context::*;
 mod camera;
@@ -39,6 +39,7 @@ use shader_params::{
 use simple_logger::SimpleLogger;
 use std::default::Default;
 use std::ffi::CStr;
+use std::thread::sleep;
 use std::time::{Duration, Instant};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::WindowAttributes;
@@ -60,7 +61,7 @@ fn main() {
 
     SimpleLogger::new().init().unwrap();
 
-    let device_extensions: [&CStr; 10] = [
+    let device_extensions: [&CStr; 11] = [
         swapchain::NAME,
         ray_tracing_pipeline::NAME,
         acceleration_structure::NAME,
@@ -71,6 +72,7 @@ fn main() {
         KHR_SPIRV_1_4_NAME,
         shader_float_controls::NAME,
         shader_non_semantic_info::NAME,
+        synchronization2::NAME,
     ];
 
     let device_features = DeviceFeatures {
@@ -432,44 +434,44 @@ fn main() {
                         }
                         if frame_time.as_millis() > 16 {
                             log::error!("Over Frame Budget!!!!");
+                            // panic!()
                         }
-
+                        sleep(Duration::from_millis(30));
                         ctx.render(|ctx, i| {
                             let cmd = &ctx.cmd_buffs[i as usize];
-                            if frame == 1 {
-                                prepare_lights.execute(
-                                    ctx,
-                                    cmd,
-                                    &resources.task_buffer,
-                                    (
-                                        &resources.geometry_instance_to_light_buffer,
-                                        &resources.geometry_instance_to_light_buffer_staging,
-                                    ),
-                                    &model,
-                                );
-                            }
-                            let skybox_changed =
-                                light_passes.execute_presampeling(ctx, cmd, frame, skybox_dirty);
-                            if skybox_dirty {
-                                mip_environment.execute_mip_generation(
-                                    ctx,
-                                    cmd,
-                                    resources.environment_pdf_texture.image.extent.width,
-                                    resources.environment_pdf_texture.image.extent.height,
-                                    resources.environment_pdf_texture.image.mip_levels,
-                                );
-                                skybox_dirty = skybox_changed;
-                            }
-                            mip_lights.execute_mip_generation(
-                                ctx,
-                                cmd,
-                                resources.local_light_pdf_texture.image.extent.width,
-                                resources.local_light_pdf_texture.image.extent.height,
-                                resources.local_light_pdf_texture.image.mip_levels,
-                            );
+                            // if frame == 1 {
+                            //         ctx,
+                            //         cmd,
+                            //         &resources.task_buffer,
+                            //         (
+                            //             &resources.geometry_instance_to_light_buffer,
+                            //             &resources.geometry_instance_to_light_buffer_staging,
+                            //         ),
+                            //         &model,
+                            //     );
+                            // }
+                            // let skybox_changed =
+                            //     light_passes.execute_presampeling(ctx, cmd, frame, skybox_dirty);
+                            // if skybox_dirty {
+                            //     mip_environment.execute_mip_generation(
+                            //         ctx,
+                            //         cmd,
+                            //         resources.environment_pdf_texture.image.extent.width,
+                            //         resources.environment_pdf_texture.image.extent.height,
+                            //         resources.environment_pdf_texture.image.mip_levels,
+                            //     );
+                            //     skybox_dirty = skybox_changed;
+                            // }
+                            // mip_lights.execute_mip_generation(
+                            //     ctx,
+                            //     cmd,
+                            //     resources.local_light_pdf_texture.image.extent.width,
+                            //     resources.local_light_pdf_texture.image.extent.height,
+                            //     resources.local_light_pdf_texture.image.mip_levels,
+                            // );
 
                             light_passes.execute(ctx, cmd, frame);
-                            post_process.execute(ctx, cmd, frame, i);
+                            post_process.execute(ctx, cmd, frame, i, &resources);
                         })
                         .unwrap();
                         window.request_redraw();

@@ -30,6 +30,7 @@ void main() {
     RAB_RandomSamplerState tileRng = RAB_InitRandomSampler(GlobalIndex / RTXDI_TILE_SIZE_IN_PIXELS, 1);
 
     const RTXDI_RuntimeParameters params = g_Const.runtimeParams;
+
     const uint gbufferIndex = RTXDI_ReservoirPositionToPointer(g_Const.restirDI.reservoirBufferParams, GlobalIndex, 0);
 
     RAB_Surface primarySurface = RAB_GetGBufferSurface(ivec2(pixelPosition), false);

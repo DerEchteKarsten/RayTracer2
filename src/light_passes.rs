@@ -19,14 +19,12 @@ struct RayTracingPass {
     handle: vk::Pipeline,
 }
 
-static RAYMISS_BYTES: LazyLock<Vec<u8>> = LazyLock::new(|| {std::fs::read("./src/shaders/bin/raymiss.spv").unwrap()});
-static RAYHIT_BYTES: LazyLock<Vec<u8>> = LazyLock::new(|| {std::fs::read("./src/shaders/bin/rayhit.spv").unwrap()});
+static RAYMISS_BYTES: LazyLock<Vec<u8>> =
+    LazyLock::new(|| std::fs::read("./src/shaders/bin/raymiss.spv").unwrap());
+static RAYHIT_BYTES: LazyLock<Vec<u8>> =
+    LazyLock::new(|| std::fs::read("./src/shaders/bin/rayhit.spv").unwrap());
 impl RayTracingPass {
-    fn new(
-        ctx: &mut Renderer,
-        layout: vk::PipelineLayout,
-        path: &str,
-    ) -> Result<Self> {
+    fn new(ctx: &mut Renderer, layout: vk::PipelineLayout, path: &str) -> Result<Self> {
         let raygen_bytes = std::fs::read(path)?;
 
         let shaders_create_info = [
@@ -259,24 +257,25 @@ impl LightPasses {
                 .create_pipeline_layout(&layout_info, None)
                 .unwrap();
 
-            let pool_sizes = &calculate_pool_sizes(&[
-                CalculatePoolSizesDesc {
-                    bindings: static_bindings.as_slice(),
-                    num_sets: 1,
-                },
-                CalculatePoolSizesDesc {
-                    bindings: dynamic_bindings.as_slice(),
-                    num_sets: 2,
-                },
-            ]);
+            let descriptor_pool = ctx
+                .create_descriptor_pool(&[
+                    CalculatePoolSizesDesc {
+                        bindings: static_bindings.as_slice(),
+                        num_sets: 1,
+                    },
+                    CalculatePoolSizesDesc {
+                        bindings: dynamic_bindings.as_slice(),
+                        num_sets: 2,
+                    },
+                ])
+                .unwrap();
 
-            let descriptor_pool = ctx.create_descriptor_pool(3, pool_sizes).unwrap();
-
-            let static_set =
-                allocate_descriptor_set(&ctx.device, &descriptor_pool, &static_set_layout).unwrap();
-            let dynamic_sets =
-                allocate_descriptor_sets(&ctx.device, &descriptor_pool, &dynamic_set_layout, 2)
-                    .unwrap();
+            let static_set = ctx
+                .allocate_descriptor_sets(&descriptor_pool, &static_set_layout, 1)
+                .unwrap()[0];
+            let dynamic_sets = ctx
+                .allocate_descriptor_sets(&descriptor_pool, &dynamic_set_layout, 2)
+                .unwrap();
 
             let uniform_buffer = ctx
                 .create_aligned_buffer(
@@ -369,7 +368,7 @@ impl LightPasses {
                     kind: b,
                 })
                 .collect::<Vec<WriteDescriptorSet>>();
-            update_descriptor_sets(ctx, &static_set, static_writes.as_slice());
+            ctx.update_descriptor_sets(&static_set, static_writes.as_slice());
 
             for i in 0..2 as usize {
                 let dynamic_writes = vec![
@@ -432,7 +431,7 @@ impl LightPasses {
                     })
                     .collect::<Vec<WriteDescriptorSet>>();
 
-                update_descriptor_sets(ctx, &dynamic_sets[i], dynamic_writes.as_slice());
+                ctx.update_descriptor_sets(&dynamic_sets[i], dynamic_writes.as_slice());
             }
 
             for (i, (image_index, sampler_index)) in model.textures.iter().enumerate() {
@@ -467,12 +466,8 @@ impl LightPasses {
                     "./src/shaders/bin/presample_environment.spv",
                 )
                 .unwrap(),
-                g_buffer_pass: RayTracingPass::new(
-                    ctx,
-                    layout,
-                    "./src/shaders/bin/g_buffer.spv",
-                )
-                .unwrap(),
+                g_buffer_pass: RayTracingPass::new(ctx, layout, "./src/shaders/bin/g_buffer.spv")
+                    .unwrap(),
                 di_fused_resampling_pass: RayTracingPass::new(
                     ctx,
                     layout,
@@ -558,16 +553,13 @@ impl LightPasses {
         }
     }
 
-    pub fn execute(&self, ctx: &Renderer, cmd: &vk::CommandBuffer, frame: u64) {
+    pub fn execute(
+        &self,
+        ctx: &Renderer,
+        cmd: &vk::CommandBuffer,
+        frame: u64,
+    ) {
         unsafe {
-            ctx.memory_barrier(
-                cmd,
-                PipelineStageFlags::ALL_COMMANDS,
-                PipelineStageFlags::ALL_COMMANDS,
-                AccessFlags::MEMORY_WRITE | AccessFlags::MEMORY_READ,
-                AccessFlags::MEMORY_READ | AccessFlags::MEMORY_WRITE,
-            );
-
             ctx.device.cmd_bind_descriptor_sets(
                 *cmd,
                 vk::PipelineBindPoint::RAY_TRACING_KHR,
@@ -580,10 +572,10 @@ impl LightPasses {
                     } else {
                         self.prev_set
                     },
-                    if frame % 2 == 0 {
-                        self.prev_set
-                    } else {
+                    if frame % 2 == 1 {
                         self.current_set
+                    } else {
+                        self.prev_set
                     },
                 ],
                 &[],
@@ -592,56 +584,78 @@ impl LightPasses {
             let frame_c =
                 std::slice::from_raw_parts(&frame as *const u64 as *const u8, size_of::<u32>());
 
-            ctx.device.cmd_push_constants(
-                *cmd,
-                self.layout,
-                vk::ShaderStageFlags::ALL,
-                0,
-                frame_c,
-            );
+            ctx.device
+                .cmd_push_constants(*cmd, self.layout, vk::ShaderStageFlags::ALL, 0, frame_c);
 
+            ctx.memory_barrier(
+                cmd,
+                vk::PipelineStageFlags2::ALL_COMMANDS,
+                vk::PipelineStageFlags2::ALL_COMMANDS,
+                vk::AccessFlags2::MEMORY_READ | vk::AccessFlags2::MEMORY_WRITE,
+                vk::AccessFlags2::MEMORY_READ | vk::AccessFlags2::MEMORY_WRITE,
+            );
+           
             self.g_buffer_pass.execute(ctx, cmd);
 
             ctx.memory_barrier(
                 cmd,
-                PipelineStageFlags::ALL_COMMANDS,
-                PipelineStageFlags::ALL_COMMANDS,
-                AccessFlags::MEMORY_WRITE | AccessFlags::MEMORY_READ,
-                AccessFlags::MEMORY_READ | AccessFlags::MEMORY_WRITE,
+                vk::PipelineStageFlags2::ALL_COMMANDS,
+                vk::PipelineStageFlags2::ALL_COMMANDS,
+                vk::AccessFlags2::MEMORY_READ | vk::AccessFlags2::MEMORY_WRITE,
+                vk::AccessFlags2::MEMORY_READ | vk::AccessFlags2::MEMORY_WRITE,
             );
 
             // self.di_fused_resampling_pass.execute(ctx, cmd);
             self.brdf_ray_tracing_pass.execute(ctx, cmd);
 
+            // ctx.device.cmd_pipeline_barrier(
+            //     *cmd,
+            //     vk::PipelineStageFlags::RAY_TRACING_SHADER_KHR,
+            //     vk::PipelineStageFlags::RAY_TRACING_SHADER_KHR,
+            //     vk::DependencyFlags::BY_REGION,
+            //     &[],
+            //     &[resources.secondary_gbuffer.barrier(
+            //         ctx,
+            //         vk::AccessFlags::SHADER_WRITE | vk::AccessFlags::SHADER_READ,
+            //         vk::AccessFlags::SHADER_READ | vk::AccessFlags::SHADER_WRITE,
+            //     )],
+            //     &[],
+            // );
+
             ctx.memory_barrier(
                 cmd,
-                PipelineStageFlags::ALL_COMMANDS,
-                PipelineStageFlags::ALL_COMMANDS,
-                AccessFlags::MEMORY_WRITE | AccessFlags::MEMORY_READ,
-                AccessFlags::MEMORY_READ | AccessFlags::MEMORY_WRITE,
+                vk::PipelineStageFlags2::ALL_COMMANDS,
+                vk::PipelineStageFlags2::ALL_COMMANDS,
+                vk::AccessFlags2::MEMORY_READ | vk::AccessFlags2::MEMORY_WRITE,
+                vk::AccessFlags2::MEMORY_READ | vk::AccessFlags2::MEMORY_WRITE,
             );
 
             self.shade_secondary_surfaces_pass.execute(ctx, cmd);
 
-            // ctx.memory_barrier(
-            //     cmd,
-            //     PipelineStageFlags::RAY_TRACING_SHADER_KHR,
-            //     PipelineStageFlags::RAY_TRACING_SHADER_KHR,
-            //     AccessFlags::SHADER_WRITE,
-            //     AccessFlags::SHADER_READ,
-            // );
-
             // self.gi_temporal_resampling_pass.execute(ctx, cmd);
             // self.gi_spatial_resampling_pass.execute(ctx, cmd);
 
+            // ctx.device.cmd_pipeline_barrier(
+            //     *cmd,
+            //     vk::PipelineStageFlags::RAY_TRACING_SHADER_KHR,
+            //     vk::PipelineStageFlags::RAY_TRACING_SHADER_KHR,
+            //     vk::DependencyFlags::BY_REGION,
+            //     &[],
+            //     &[resources.gi_reservoir_buffer.barrier(
+            //         ctx,
+            //         vk::AccessFlags::SHADER_WRITE | vk::AccessFlags::SHADER_READ,
+            //         vk::AccessFlags::SHADER_READ | vk::AccessFlags::SHADER_WRITE,
+            //     )],
+            //     &[],
+            // );
             ctx.memory_barrier(
                 cmd,
-                PipelineStageFlags::ALL_COMMANDS,
-                PipelineStageFlags::ALL_COMMANDS,
-                AccessFlags::MEMORY_WRITE | AccessFlags::MEMORY_READ,
-                AccessFlags::MEMORY_READ | AccessFlags::MEMORY_WRITE,
+                vk::PipelineStageFlags2::ALL_COMMANDS,
+                vk::PipelineStageFlags2::ALL_COMMANDS,
+                vk::AccessFlags2::MEMORY_READ | vk::AccessFlags2::MEMORY_WRITE,
+                vk::AccessFlags2::MEMORY_READ | vk::AccessFlags2::MEMORY_WRITE,
             );
-            
+
             self.gi_final_shading_pass.execute(ctx, cmd);
         }
     }

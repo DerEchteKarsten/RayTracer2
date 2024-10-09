@@ -2,10 +2,9 @@ use anyhow::Result;
 use ash::vk::{self, ImageLayout, PipelineCache, ShaderStageFlags};
 
 use crate::{
-    allocate_descriptor_sets, calculate_pool_sizes,
+    calculate_pool_sizes,
     render_resources::{GBuffer, RenderResources},
-    update_descriptor_sets, Buffer, CalculatePoolSizesDesc, ImageBarrier, Renderer,
-    WriteDescriptorSet, WINDOW_SIZE,
+    Buffer, CalculatePoolSizesDesc, ImageBarrier, Renderer, WriteDescriptorSet, WINDOW_SIZE,
 };
 
 pub struct PostProcessPass {
@@ -104,27 +103,20 @@ impl PostProcessPass {
         }
         .unwrap();
 
-        let pool = ctx.create_descriptor_pool(
-            2 + ctx.swapchain.images.len() as u32,
-            &calculate_pool_sizes(&[
-                CalculatePoolSizesDesc {
-                    bindings: &source_bindings,
-                    num_sets: 2,
-                },
-                CalculatePoolSizesDesc {
-                    bindings: &target_bindings,
-                    num_sets: ctx.swapchain.images.len() as u32,
-                },
-            ]),
-        )?;
+        let pool = ctx.create_descriptor_pool(&[
+            CalculatePoolSizesDesc {
+                bindings: &source_bindings,
+                num_sets: 2,
+            },
+            CalculatePoolSizesDesc {
+                bindings: &target_bindings,
+                num_sets: ctx.swapchain.images.len() as u32,
+            },
+        ])?;
 
-        let source_descriptors = allocate_descriptor_sets(&ctx.device, &pool, &source_layout, 2)?;
-        let target_descriptors = allocate_descriptor_sets(
-            &ctx.device,
-            &pool,
-            &target_layout,
-            ctx.swapchain.images.len() as u32,
-        )?;
+        let source_descriptors = ctx.allocate_descriptor_sets(&pool, &source_layout, 2)?;
+        let target_descriptors =
+            ctx.allocate_descriptor_sets(&pool, &target_layout, ctx.swapchain.images.len() as u32)?;
 
         for i in 0..2 {
             let writes = [
@@ -183,13 +175,16 @@ impl PostProcessPass {
                         sampler: *skybox_sampler,
                         layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
                     },
-                },                
+                },
                 WriteDescriptorSet {
                     binding: 8,
-                    kind: crate::WriteDescriptorSetKind::StorageImage { view: resources.motion_vectors.view, layout: vk::ImageLayout::GENERAL },
+                    kind: crate::WriteDescriptorSetKind::StorageImage {
+                        view: resources.motion_vectors.view,
+                        layout: vk::ImageLayout::GENERAL,
+                    },
                 },
             ];
-            update_descriptor_sets(ctx, &source_descriptors[i], &writes);
+            ctx.update_descriptor_sets(&source_descriptors[i], &writes);
         }
 
         for i in 0..ctx.swapchain.images.len() {
@@ -200,7 +195,7 @@ impl PostProcessPass {
                     layout: vk::ImageLayout::GENERAL,
                 },
             }];
-            update_descriptor_sets(ctx, &target_descriptors[i], &writes);
+            ctx.update_descriptor_sets(&target_descriptors[i], &writes);
         }
 
         Ok(Self {
@@ -211,19 +206,46 @@ impl PostProcessPass {
         })
     }
 
-    pub fn execute(&self, ctx: &Renderer, cmd: &vk::CommandBuffer, frame: u64, i: u32) {
+    pub fn execute(
+        &self,
+        ctx: &Renderer,
+        cmd: &vk::CommandBuffer,
+        frame: u64,
+        i: u32,
+        resources: &RenderResources,
+    ) {
         unsafe {
             ctx.pipeline_image_barriers(
                 cmd,
-                &[ImageBarrier {
-                    image: &ctx.swapchain.images[i as usize].image,
-                    old_layout: vk::ImageLayout::UNDEFINED,
-                    new_layout: vk::ImageLayout::GENERAL,
-                    src_access_mask: vk::AccessFlags2::NONE,
-                    dst_access_mask: vk::AccessFlags2::SHADER_WRITE,
-                    src_stage_mask: vk::PipelineStageFlags2::NONE,
-                    dst_stage_mask: vk::PipelineStageFlags2::COMPUTE_SHADER,
-                }],
+                &[
+                    ImageBarrier {
+                        image: &ctx.swapchain.images[i as usize].image,
+                        old_layout: vk::ImageLayout::UNDEFINED,
+                        new_layout: vk::ImageLayout::GENERAL,
+                        src_access_mask: vk::AccessFlags2::NONE,
+                        dst_access_mask: vk::AccessFlags2::SHADER_WRITE,
+                        src_stage_mask: vk::PipelineStageFlags2::NONE,
+                        dst_stage_mask: vk::PipelineStageFlags2::COMPUTE_SHADER,
+                    },
+                    ImageBarrier {
+                        image: &resources.diffuse_lighting.image,
+                        old_layout: vk::ImageLayout::UNDEFINED,
+                        new_layout: vk::ImageLayout::UNDEFINED,
+                        src_access_mask: vk::AccessFlags2::SHADER_WRITE,
+                        dst_access_mask: vk::AccessFlags2::SHADER_READ,
+                        src_stage_mask: vk::PipelineStageFlags2::RAY_TRACING_SHADER_KHR,
+                        dst_stage_mask: vk::PipelineStageFlags2::COMPUTE_SHADER,
+                    },
+                    ImageBarrier {
+                        image: &resources.specular_lighting.image,
+                        old_layout: vk::ImageLayout::UNDEFINED,
+                        new_layout: vk::ImageLayout::UNDEFINED,
+                        src_access_mask: vk::AccessFlags2::SHADER_WRITE,
+                        dst_access_mask: vk::AccessFlags2::SHADER_READ,
+                        src_stage_mask: vk::PipelineStageFlags2::RAY_TRACING_SHADER_KHR,
+                        dst_stage_mask: vk::PipelineStageFlags2::COMPUTE_SHADER,
+                    },
+                ],
             );
             ctx.device.cmd_bind_descriptor_sets(
                 *cmd,
