@@ -97,7 +97,5 @@ void main() {
         specular = DemodulateSpecular(primarySurface.specularF0, specular);
     }
 
-
-    StoreShadingOutput(ivec2(pixelPosition), 
-        primarySurface.viewDepth, primarySurface.roughness, diffuse, specular, 0.0, false);
+    StoreShadingOutput(ivec2(pixelPosition), diffuse, specular, 0.0, false);
 }

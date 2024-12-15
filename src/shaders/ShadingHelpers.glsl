@@ -60,8 +60,6 @@ bool ShadeSurfaceWithLightSample(
 
 void StoreShadingOutput(
     ivec2 pixelPosition,
-    float viewDepth,
-    float roughness,
     vec3 diffuse,
     vec3 specular,
     float lightDistance,

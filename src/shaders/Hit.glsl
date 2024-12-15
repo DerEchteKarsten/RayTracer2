@@ -40,3 +40,29 @@ void GetGeometryFromHit(
     roughness = geometryInfo.roughness;
     emission = geometryInfo.emission.xyz;
 }
+
+RAB_Surface GetSurface(RayDesc ray, out vec3 emission) {
+    trace(ray);
+
+    RAB_Surface surface = RAB_EmptySurface();
+
+    surface.viewDepth = p.depth;
+    if(surface.viewDepth == BACKGROUND_DEPTH)
+        return surface;
+
+    GetGeometryFromHit(
+        p.primitiveId, 
+        p.geometryIndex,
+        p.uv, 
+        surface.normal,
+        surface.specularF0,
+        surface.roughness,
+        surface.diffuseAlbedo,
+        emission
+    );
+
+    surface.geoNormal = surface.normal;
+    surface.worldPos = ray.Origin + ray.Direction * p.depth;
+    surface.viewDir = ray.Direction;
+    surface.diffuseProbability = getSurfaceDiffuseProbability(surface);
+}

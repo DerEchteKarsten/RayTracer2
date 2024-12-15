@@ -1,4 +1,4 @@
-use glam::UVec2;
+use glam::{UVec2, UVec4};
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
@@ -246,4 +246,6 @@ pub struct GConst {
 
     pub environment_pdf_texture_size: UVec2,
     pub local_light_pdf_texture_size: UVec2,
+
+    pub count: UVec4,
 }

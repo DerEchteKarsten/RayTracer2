@@ -1,0 +1,65 @@
+#version 460
+
+#extension GL_GOOGLE_include_directive : enable
+#extension GL_EXT_ray_tracing : require
+
+#include "common.glsl"
+
+layout(location = 0) rayPayloadEXT Payload p;
+
+#include "RtxdiApplicationBridge.glsl"
+#include "rtxdi/DIReservoir.hlsli"
+#include "rtxdi/InitialSamplingFunctions.hlsli"
+#include "ShadingHelpers.glsl"
+void main() {
+    uint2 GlobalIndex = gl_LaunchIDEXT.xy;
+
+    uint2 pixelPosition = RTXDI_ReservoirPosToPixelPos(GlobalIndex, g_Const.runtimeParams.activeCheckerboardField);
+    RAB_RandomSamplerState rng = RAB_InitRandomSampler(pixelPosition, 1);
+    RAB_RandomSamplerState tileRng = RAB_InitRandomSampler(pixelPosition / RTXDI_TILE_SIZE_IN_PIXELS, 1);
+
+    RAB_Surface surface = RAB_GetGBufferSurface(ivec2(pixelPosition), false);
+
+    RTXDI_SampleParameters sampleParams = RTXDI_InitSampleParameters(
+        g_Const.restirDI.initialSamplingParams.numPrimaryLocalLightSamples,
+        g_Const.restirDI.initialSamplingParams.numPrimaryInfiniteLightSamples,
+        g_Const.restirDI.initialSamplingParams.numPrimaryEnvironmentSamples,
+        g_Const.restirDI.initialSamplingParams.numPrimaryBrdfSamples,
+        g_Const.restirDI.initialSamplingParams.brdfCutoff,
+        0.001f);
+
+    RAB_LightSample lightSample;
+    RTXDI_DIReservoir reservoir = RTXDI_SampleLightsForSurface(rng, tileRng, surface,
+        sampleParams, g_Const.lightBufferParams, g_Const.restirDI.initialSamplingParams.localLightSamplingMode, 
+        g_Const.localLightsRISBufferSegmentParams, g_Const.environmentLightRISBufferSegmentParams, lightSample);
+
+    if (g_Const.restirDI.initialSamplingParams.enableInitialVisibility == 1 && RTXDI_IsValidDIReservoir(reservoir))
+    {
+        if (!RAB_GetConservativeVisibility(surface, lightSample))
+        {
+            RTXDI_StoreVisibilityInDIReservoir(reservoir, vec3(0), true);
+        }
+    }
+
+    RTXDI_StoreDIReservoir(reservoir, g_Const.restirDI.reservoirBufferParams, GlobalIndex, g_Const.restirDI.bufferIndices.initialSamplingOutputBufferIndex);
+
+    RayDesc ray;
+    ray.Origin = surface.worldPos + surface.normal * 0.1;
+    ray.Direction = -surface.normal;
+    ray.TMax = 1.0;
+    ray.TMin = 0.0;
+
+    trace(ray);
+
+    StoreShadingOutput(ivec2(GlobalIndex), getLightIndex(p.geometryIndex, p.primitiveId) == RTXDI_InvalidLightIndex ? vec3(0.0) : vec3(1.0), vec3(0.0), 0.0, true);
+    
+    // if(GeometryInstanceToLight[GlobalIndex.x] != RTXDI_InvalidLightIndex){
+    //     debugPrintfEXT("%u", GeometryInstanceToLight[GlobalIndex.x]);
+    // }
+
+    // if (getLightIndex(p.geometryIndex, p.primitiveId) == RTXDI_InvalidLightIndex) {
+    //     StoreShadingOutput(ivec2(GlobalIndex), vec3(1.0, 0.0, 0.0), vec3(0.0), 0.0, true);
+    // }else{
+    //     StoreShadingOutput(ivec2(GlobalIndex), vec3(0.0, 1.0, 0.0), vec3(0.0), 0.0, true);
+    // }
+}

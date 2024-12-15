@@ -89,8 +89,6 @@ void main() {
 
     StoreShadingOutput(
         ivec2(gl_LaunchIDEXT.xy), 
-        surface.viewDepth, 
-        surface.roughness,  
         diffuse, 
         specular, 
         lightDistance, 

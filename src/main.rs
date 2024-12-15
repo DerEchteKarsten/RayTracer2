@@ -1,7 +1,8 @@
 mod context;
 use ash::khr::{
     acceleration_structure, deferred_host_operations, get_memory_requirements2,
-    ray_tracing_pipeline, shader_float_controls, shader_non_semantic_info, swapchain, synchronization2,
+    ray_tracing_pipeline, shader_float_controls, shader_non_semantic_info, swapchain,
+    synchronization2,
 };
 use context::*;
 mod camera;
@@ -23,7 +24,7 @@ use model::*;
 
 use ash::vk::{self, AccelerationStructureTypeKHR, ImageLayout, KHR_SPIRV_1_4_NAME};
 
-use glam::{uvec2, vec3, IVec2, Mat4};
+use glam::{uvec2, vec3, IVec2, Mat4, UVec4};
 use postprocess::PostProcessPass;
 use prepare_lights::PrepareLightsTasks;
 use render_resources::RenderResources;
@@ -314,10 +315,10 @@ fn main() {
                 pad2: 0,
             },
             initial_sampling_params: ReSTIRDI_InitialSamplingParameters {
-                num_primary_local_light_samples: 1,
-                num_primary_infinite_light_samples: 1,
-                num_primary_environment_samples: 1,
-                num_primary_brdf_samples: 0,
+                num_primary_local_light_samples: 0,
+                num_primary_infinite_light_samples: 0,
+                num_primary_environment_samples: 0,
+                num_primary_brdf_samples: 1,
                 brdf_cutoff: 0.0,
                 enable_initial_visibility: 1,
                 environment_map_importance_sampling: 1,
@@ -378,6 +379,7 @@ fn main() {
                 pad2: 0,
             },
         },
+        count: UVec4::new(0, 0, 0, 0),
     };
 
     let prepare_lights = PrepareLightsTasks::new(
@@ -409,7 +411,6 @@ fn main() {
                     let now = Instant::now();
                     frame_time = now - last_time;
                     last_time = Instant::now();
-                    println!("{:?}", frame_time);
                 }
                 Event::WindowEvent { event, .. } => match event {
                     WindowEvent::CloseRequested => control_flow.exit(),
@@ -422,56 +423,59 @@ fn main() {
                         }
                     }
                     WindowEvent::RedrawRequested => {
+                        // sleep(Duration::from_millis(30));
+
+                        let image_index = ctx.await_next_frame().unwrap();
+                        println!("next frame --------------------------------");
+
                         frame += 1;
+
                         let new_cam = camera.update(&controles, frame_time);
                         camera = new_cam;
 
                         g_const.prev_view = g_const.view;
                         g_const.view = camera.planar_view_constants();
+                        g_const.count.x = frame as u32;
+                        println!(
+                            "{}: {:?}------------------------------------------",
+                            frame, frame_time
+                        );
 
-                        if let Err(e) = light_passes.update_uniform(&g_const) {
-                            log::error!("{}", e);
-                        }
                         if frame_time.as_millis() > 16 {
                             log::error!("Over Frame Budget!!!!");
                             // panic!()
                         }
-                        sleep(Duration::from_millis(30));
-                        ctx.render(|ctx, i| {
-                            let cmd = &ctx.cmd_buffs[i as usize];
-                            // if frame == 1 {
-                            //         ctx,
-                            //         cmd,
-                            //         &resources.task_buffer,
-                            //         (
-                            //             &resources.geometry_instance_to_light_buffer,
-                            //             &resources.geometry_instance_to_light_buffer_staging,
-                            //         ),
-                            //         &model,
-                            //     );
-                            // }
-                            // let skybox_changed =
-                            //     light_passes.execute_presampeling(ctx, cmd, frame, skybox_dirty);
-                            // if skybox_dirty {
-                            //     mip_environment.execute_mip_generation(
-                            //         ctx,
-                            //         cmd,
-                            //         resources.environment_pdf_texture.image.extent.width,
-                            //         resources.environment_pdf_texture.image.extent.height,
-                            //         resources.environment_pdf_texture.image.mip_levels,
-                            //     );
-                            //     skybox_dirty = skybox_changed;
-                            // }
-                            // mip_lights.execute_mip_generation(
-                            //     ctx,
-                            //     cmd,
-                            //     resources.local_light_pdf_texture.image.extent.width,
-                            //     resources.local_light_pdf_texture.image.extent.height,
-                            //     resources.local_light_pdf_texture.image.mip_levels,
-                            // );
+                        if let Err(e) = light_passes.update_uniform(&g_const) {
+                            log::error!("{}", e);
+                        }
+
+                        ctx.render(image_index, |ctx| {
+                            let cmd = &ctx.cmd_buffs[image_index as usize];
+                            if frame == 1 {
+                                prepare_lights.execute(ctx, cmd, &resources.task_buffer, (&resources.geometry_instance_to_light_buffer, &resources.geometry_instance_to_light_buffer_staging), &model);
+                                let skybox_changed =
+                                    light_passes.execute_presampeling(ctx, cmd, frame, skybox_dirty);
+                                if skybox_dirty {
+                                    mip_environment.execute_mip_generation(
+                                        ctx,
+                                        cmd,
+                                        resources.environment_pdf_texture.image.extent.width,
+                                        resources.environment_pdf_texture.image.extent.height,
+                                        resources.environment_pdf_texture.image.mip_levels,
+                                    );
+                                    skybox_dirty = skybox_changed;
+                                }
+                                mip_lights.execute_mip_generation(
+                                    ctx,
+                                    cmd,
+                                    resources.local_light_pdf_texture.image.extent.width,
+                                    resources.local_light_pdf_texture.image.extent.height,
+                                    resources.local_light_pdf_texture.image.mip_levels,
+                                );
+                            }
 
                             light_passes.execute(ctx, cmd, frame);
-                            post_process.execute(ctx, cmd, frame, i, &resources);
+                            post_process.execute(ctx, cmd, frame, image_index, &resources);
                         })
                         .unwrap();
                         window.request_redraw();

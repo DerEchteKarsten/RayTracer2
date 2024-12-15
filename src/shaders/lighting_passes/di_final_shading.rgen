@@ -1,0 +1,46 @@
+#version 460
+
+#extension GL_GOOGLE_include_directive : enable
+#extension GL_EXT_ray_tracing : require
+
+#include "common.glsl"
+
+layout(location = 0) rayPayloadEXT Payload p;
+
+#include "RtxdiApplicationBridge.glsl"
+#include "rtxdi/DIReservoir.hlsli"
+#include "ShadingHelpers.glsl"
+
+void main() {
+    const RTXDI_RuntimeParameters params = g_Const.runtimeParams;
+    uint2 GlobalIndex = gl_LaunchIDEXT.xy;
+    uint2 pixelPosition = RTXDI_ReservoirPosToPixelPos(GlobalIndex, params.activeCheckerboardField);
+
+    RAB_Surface surface = RAB_GetGBufferSurface(ivec2(pixelPosition), false);
+
+    RTXDI_DIReservoir reservoir = RTXDI_LoadDIReservoir(g_Const.restirDI.reservoirBufferParams, GlobalIndex, g_Const.restirDI.bufferIndices.shadingInputBufferIndex);
+
+    vec3 diffuse = vec3(0);
+    vec3 specular = vec3(0);
+    float lightDistance = 0;
+
+    if (RTXDI_IsValidDIReservoir(reservoir))
+    {
+        RAB_LightInfo lightInfo = RAB_LoadLightInfo(RTXDI_GetDIReservoirLightIndex(reservoir), false);
+
+        RAB_LightSample lightSample = RAB_SamplePolymorphicLight(lightInfo,
+            surface, RTXDI_GetDIReservoirSampleUV(reservoir));
+
+        bool needToStore = ShadeSurfaceWithLightSample(reservoir, surface, lightSample,
+            /* previousFrameTLAS = */ false, /* enableVisibilityReuse = */ true, diffuse, specular, lightDistance);
+    
+        specular = DemodulateSpecular(surface.specularF0, specular);
+
+        if (needToStore)
+        {
+            RTXDI_StoreDIReservoir(reservoir, g_Const.restirDI.reservoirBufferParams, GlobalIndex, g_Const.restirDI.bufferIndices.shadingInputBufferIndex);
+        }
+    }
+
+    StoreShadingOutput(ivec2(pixelPosition), diffuse, specular, lightDistance, false);
+}

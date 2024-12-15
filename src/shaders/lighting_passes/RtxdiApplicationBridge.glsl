@@ -19,12 +19,12 @@ layout( push_constant ) uniform Frame {
 	uint frame;
 } f;
 
-layout(binding = 0, set = 2, r32f) uniform readonly image2D PrevGBufferDepth;
-layout(binding = 1, set = 2, r32ui) uniform readonly uimage2D PrevGBufferNormals;
-layout(binding = 2, set = 2, r32ui) uniform readonly uimage2D PrevGBufferGeoNormals;
-layout(binding = 3, set = 2, r32ui) uniform readonly uimage2D PrevGBufferDiffuseAlbedo;
-layout(binding = 4, set = 2, r32ui) uniform readonly uimage2D PrevGBufferSpecularRough;
-layout(binding = 5, set = 2, rgba16f) uniform  image2D PrevGBufferEmissive;
+layout(binding = 0, set = 2, r32f) uniform image2D PrevGBufferDepth;
+layout(binding = 1, set = 2, r32ui) uniform uimage2D PrevGBufferNormals;
+layout(binding = 2, set = 2, r32ui) uniform uimage2D PrevGBufferGeoNormals;
+layout(binding = 3, set = 2, r32ui) uniform uimage2D PrevGBufferDiffuseAlbedo;
+layout(binding = 4, set = 2, r32ui) uniform uimage2D PrevGBufferSpecularRough;
+layout(binding = 5, set = 2, rgba16f) uniform image2D PrevGBufferEmissive;
 
 layout(binding = 0, set = 1, r32f) uniform image2D GBufferDepth;
 layout(binding = 1, set = 1, r32ui) uniform uimage2D GBufferNormals;
@@ -63,7 +63,7 @@ layout(binding = 20, set = 0) uniform sampler2D textures[];
 #define RTXDI_GI_RESERVOIR_BUFFER GIReservoirs
 #define RTXDI_NEIGHBOR_OFFSETS_BUFFER Neighbors
 #define RTXDI_LIGHT_RESERVOIR_BUFFER DIReservoirs
-
+#define RTXDI_ENABLE_PRESAMPLING 1
 #define PolymorphicLightInfo RAB_LightInfo;
 #define RandomSamplerState RAB_RandomSamplerState;
 
@@ -75,6 +75,9 @@ const bool kSpecularOnly = false;
 
 void trace(RayDesc ray) {
     #ifndef COMPUTE
+    #ifndef GBuffer
+    //debugPrintfEXT("RayTraced!");
+    #endif
     traceRayEXT(SceneBVH, gl_RayFlagsOpaqueEXT, 0xff, 0, 0, 0, ray.Origin, ray.TMin, ray.Direction, ray.TMax, 0);
     #endif
 }
@@ -649,6 +652,7 @@ bool RAB_TraceRayForLocalLight(float3 origin, float3 direction, float tMin, floa
 
     trace(ray);
     #if !COMPUTE
+    hitAnything = p.geometryIndex != ~0u;
     hitUV = p.uv;
     o_lightIndex = getLightIndex(p.geometryIndex, p.primitiveId);
     #endif

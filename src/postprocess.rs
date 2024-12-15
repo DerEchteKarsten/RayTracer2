@@ -12,6 +12,7 @@ pub struct PostProcessPass {
     layout: vk::PipelineLayout,
     source_descriptors: Vec<vk::DescriptorSet>,
     target_descriptors: Vec<vk::DescriptorSet>,
+    static_descriptor: vk::DescriptorSet,
 }
 
 impl PostProcessPass {
@@ -48,27 +49,30 @@ impl PostProcessPass {
                 .descriptor_count(1)
                 .binding(4)
                 .stage_flags(vk::ShaderStageFlags::COMPUTE)
+                .descriptor_type(vk::DescriptorType::STORAGE_IMAGE), // Motion Vectors
+        ];
+
+        let static_bindings = [
+            vk::DescriptorSetLayoutBinding::default()
+                .descriptor_count(1)
+                .binding(1)
+                .stage_flags(vk::ShaderStageFlags::COMPUTE)
                 .descriptor_type(vk::DescriptorType::STORAGE_IMAGE), // Diffuse
             vk::DescriptorSetLayoutBinding::default()
                 .descriptor_count(1)
-                .binding(5)
+                .binding(2)
                 .stage_flags(vk::ShaderStageFlags::COMPUTE)
                 .descriptor_type(vk::DescriptorType::STORAGE_IMAGE), // Specular
             vk::DescriptorSetLayoutBinding::default()
                 .descriptor_count(1)
-                .binding(6)
+                .binding(3)
                 .stage_flags(vk::ShaderStageFlags::COMPUTE)
                 .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER), // Uniform
             vk::DescriptorSetLayoutBinding::default()
                 .descriptor_count(1)
-                .binding(7)
+                .binding(4)
                 .stage_flags(vk::ShaderStageFlags::COMPUTE)
                 .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER), // Skybox
-            vk::DescriptorSetLayoutBinding::default()
-                .descriptor_count(1)
-                .binding(8)
-                .stage_flags(vk::ShaderStageFlags::COMPUTE)
-                .descriptor_type(vk::DescriptorType::STORAGE_IMAGE), // Motion Vectors
         ];
 
         let target_bindings = [
@@ -81,8 +85,9 @@ impl PostProcessPass {
 
         let source_layout = ctx.create_descriptor_set_layout(&source_bindings)?;
         let target_layout = ctx.create_descriptor_set_layout(&target_bindings)?;
+        let static_layout = ctx.create_descriptor_set_layout(&static_bindings)?;
 
-        let layouts = [source_layout, target_layout];
+        let layouts = [source_layout, static_layout, target_layout];
         let layout_info = vk::PipelineLayoutCreateInfo::default()
             .push_constant_ranges(&[])
             .set_layouts(&layouts);
@@ -109,6 +114,10 @@ impl PostProcessPass {
                 num_sets: 2,
             },
             CalculatePoolSizesDesc {
+                bindings: &static_bindings,
+                num_sets: 1,
+            },
+            CalculatePoolSizesDesc {
                 bindings: &target_bindings,
                 num_sets: ctx.swapchain.images.len() as u32,
             },
@@ -117,6 +126,8 @@ impl PostProcessPass {
         let source_descriptors = ctx.allocate_descriptor_sets(&pool, &source_layout, 2)?;
         let target_descriptors =
             ctx.allocate_descriptor_sets(&pool, &target_layout, ctx.swapchain.images.len() as u32)?;
+        let static_descriptor =
+            ctx.allocate_descriptor_sets(&pool, &static_layout, 1)?[0];
 
         for i in 0..2 {
             let writes = [
@@ -151,34 +162,6 @@ impl PostProcessPass {
                 WriteDescriptorSet {
                     binding: 4,
                     kind: crate::WriteDescriptorSetKind::StorageImage {
-                        view: resources.diffuse_lighting.view,
-                        layout: vk::ImageLayout::GENERAL,
-                    },
-                },
-                WriteDescriptorSet {
-                    binding: 5,
-                    kind: crate::WriteDescriptorSetKind::StorageImage {
-                        view: resources.specular_lighting.view,
-                        layout: vk::ImageLayout::GENERAL,
-                    },
-                },
-                WriteDescriptorSet {
-                    binding: 6,
-                    kind: crate::WriteDescriptorSetKind::UniformBuffer {
-                        buffer: uniform_buffer.inner,
-                    },
-                },
-                WriteDescriptorSet {
-                    binding: 7,
-                    kind: crate::WriteDescriptorSetKind::CombinedImageSampler {
-                        view: *skybox,
-                        sampler: *skybox_sampler,
-                        layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-                    },
-                },
-                WriteDescriptorSet {
-                    binding: 8,
-                    kind: crate::WriteDescriptorSetKind::StorageImage {
                         view: resources.motion_vectors.view,
                         layout: vk::ImageLayout::GENERAL,
                     },
@@ -186,6 +169,39 @@ impl PostProcessPass {
             ];
             ctx.update_descriptor_sets(&source_descriptors[i], &writes);
         }
+
+        let writes = [
+            WriteDescriptorSet {
+                binding: 1,
+                kind: crate::WriteDescriptorSetKind::StorageImage {
+                    view: resources.diffuse_lighting.view,
+                    layout: vk::ImageLayout::GENERAL,
+                },
+            },
+            WriteDescriptorSet {
+                binding: 2,
+                kind: crate::WriteDescriptorSetKind::StorageImage {
+                    view: resources.specular_lighting.view,
+                    layout: vk::ImageLayout::GENERAL,
+                },
+            },
+            WriteDescriptorSet {
+                binding: 3,
+                kind: crate::WriteDescriptorSetKind::UniformBuffer {
+                    buffer: uniform_buffer.inner,
+                },
+            },
+            WriteDescriptorSet {
+                binding: 4,
+                kind: crate::WriteDescriptorSetKind::CombinedImageSampler {
+                    view: *skybox,
+                    sampler: *skybox_sampler,
+                    layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                },
+            },
+        ];
+
+        ctx.update_descriptor_sets(&static_descriptor, &writes);
 
         for i in 0..ctx.swapchain.images.len() {
             let writes = [WriteDescriptorSet {
@@ -203,6 +219,7 @@ impl PostProcessPass {
             layout,
             source_descriptors,
             target_descriptors,
+            static_descriptor
         })
     }
 
@@ -231,22 +248,34 @@ impl PostProcessPass {
                         image: &resources.diffuse_lighting.image,
                         old_layout: vk::ImageLayout::UNDEFINED,
                         new_layout: vk::ImageLayout::UNDEFINED,
-                        src_access_mask: vk::AccessFlags2::SHADER_WRITE,
-                        dst_access_mask: vk::AccessFlags2::SHADER_READ,
-                        src_stage_mask: vk::PipelineStageFlags2::RAY_TRACING_SHADER_KHR,
-                        dst_stage_mask: vk::PipelineStageFlags2::COMPUTE_SHADER,
+                        src_access_mask: vk::AccessFlags2::MEMORY_READ
+                            | vk::AccessFlags2::MEMORY_WRITE,
+                        dst_access_mask: vk::AccessFlags2::MEMORY_READ
+                            | vk::AccessFlags2::MEMORY_WRITE,
+                        src_stage_mask: vk::PipelineStageFlags2::ALL_COMMANDS,
+                        dst_stage_mask: vk::PipelineStageFlags2::ALL_COMMANDS,
                     },
                     ImageBarrier {
                         image: &resources.specular_lighting.image,
                         old_layout: vk::ImageLayout::UNDEFINED,
                         new_layout: vk::ImageLayout::UNDEFINED,
-                        src_access_mask: vk::AccessFlags2::SHADER_WRITE,
-                        dst_access_mask: vk::AccessFlags2::SHADER_READ,
-                        src_stage_mask: vk::PipelineStageFlags2::RAY_TRACING_SHADER_KHR,
-                        dst_stage_mask: vk::PipelineStageFlags2::COMPUTE_SHADER,
+                        src_access_mask: vk::AccessFlags2::MEMORY_READ
+                            | vk::AccessFlags2::MEMORY_WRITE,
+                        dst_access_mask: vk::AccessFlags2::MEMORY_READ
+                            | vk::AccessFlags2::MEMORY_WRITE,
+                        src_stage_mask: vk::PipelineStageFlags2::ALL_COMMANDS,
+                        dst_stage_mask: vk::PipelineStageFlags2::ALL_COMMANDS,
                     },
                 ],
             );
+            ctx.memory_barrier(
+                cmd,
+                vk::PipelineStageFlags2::ALL_COMMANDS,
+                vk::PipelineStageFlags2::ALL_COMMANDS,
+                vk::AccessFlags2::MEMORY_READ | vk::AccessFlags2::MEMORY_WRITE,
+                vk::AccessFlags2::MEMORY_READ | vk::AccessFlags2::MEMORY_WRITE,
+            );
+
             ctx.device.cmd_bind_descriptor_sets(
                 *cmd,
                 vk::PipelineBindPoint::COMPUTE,
@@ -254,6 +283,7 @@ impl PostProcessPass {
                 0,
                 &[
                     self.source_descriptors[(frame % 2) as usize],
+                    self.static_descriptor,
                     self.target_descriptors[i as usize],
                 ],
                 &[],

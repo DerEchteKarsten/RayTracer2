@@ -21,6 +21,10 @@ compile $base/src/shaders/lighting_passes/temporal_resampling.rgen temporal_resa
 compile $base/src/shaders/lighting_passes/presample_environment.comp presample_environment
 compile $base/src/shaders/lighting_passes/presample_locallights.comp presample_locallights
 
+compile $base/src/shaders/lighting_passes/di_initial_sampling.rgen di_initial_sampling
+compile $base/src/shaders/lighting_passes/di_final_shading.rgen di_final_shading
+
+compile $base/src/shaders/lighting_passes/refrence.rgen refrence
 
 
 compile $base/src/shaders/post_processing.comp post_processing

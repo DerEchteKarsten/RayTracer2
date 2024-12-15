@@ -72,6 +72,7 @@ struct ResamplingConstants
     RTXDI_RISBufferSegmentParameters environmentLightRISBufferSegmentParams;
     uvec2 environmentPdfTextureSize;
     uvec2 localLightPdfTextureSize;
+    uvec4 count;
 };
 
 

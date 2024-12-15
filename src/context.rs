@@ -22,6 +22,11 @@ use std::{
     ptr, usize,
 };
 
+use crate::{
+    light_passes::{self, LightPasses},
+    shader_params::GConst,
+};
+
 pub const FRAMES_IN_FLIGHT: u32 = 1;
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -98,7 +103,7 @@ pub struct Renderer<'a> {
     pub instance: Instance,
     pub frames_in_flight: Vec<Frame>,
     pub swapchain: Swapchain,
-    pub frame: u64,
+    pub in_flight_frame_index: u64,
     pub last_swapchain_image_index: u32,
     pub cmd_buffs: Vec<vk::CommandBuffer>,
     pub last_frame: u64,
@@ -277,7 +282,7 @@ impl<'a> Renderer<'a> {
             ray_tracing,
             last_swapchain_image_index: 0,
             last_frame: 0,
-            frame: 0,
+            in_flight_frame_index: 0,
             allocator,
             command_pool,
             present_queue,
@@ -608,42 +613,45 @@ impl<'a> Renderer<'a> {
         ))
     }
 
-    pub fn render<F>(&mut self, func: F) -> Result<()>
-    where
-        F: FnOnce(&mut Renderer, u32),
-    {
-        let (image_index, frame_index) = {
-            let frame_index: u64 = (self.frame + 1) % FRAMES_IN_FLIGHT as u64;
-            let frame = &self.frames_in_flight[frame_index as usize];
-            frame.fence.wait(&self.device, None)?;
-            frame.fence.reset(&self.device)?;
+    pub fn await_next_frame(&mut self) -> Result<u32> {
+        let frame = &self.frames_in_flight[self.in_flight_frame_index as usize];
+        frame.fence.wait(&self.device, None)?;
 
-            let image_index = match unsafe {
-                self.swapchain.ash_swapchain.acquire_next_image(
-                    self.swapchain.vk_swapchain,
-                    u64::MAX,
-                    frame.image_available,
-                    vk::Fence::null(),
-                )
-            } {
-                Err(err) => {
-                    if err == vk::Result::ERROR_OUT_OF_DATE_KHR || err == vk::Result::SUBOPTIMAL_KHR
-                    {
-                        debug!("Suboptimal");
-                    }
-                    0
+        let image_index = match unsafe {
+            self.swapchain.ash_swapchain.acquire_next_image(
+                self.swapchain.vk_swapchain,
+                u64::MAX,
+                frame.image_available,
+                vk::Fence::null(),
+            )
+        } {
+            Err(err) => {
+                if err == vk::Result::ERROR_OUT_OF_DATE_KHR || err == vk::Result::SUBOPTIMAL_KHR {
+                    debug!("Suboptimal");
                 }
-                Ok(v) => v.0,
-            };
-            let cmd = &self.cmd_buffs[image_index as usize];
-            begin_command_buffer(cmd, &self.device, None)?;
-            (image_index, frame_index)
+                0
+            }
+            Ok(v) => v.0,
         };
-        self.frame = frame_index;
-        func(self, image_index);
-        self.last_frame = frame_index;
-        let frame = &self.frames_in_flight[frame_index as usize];
+        Ok(image_index)
+    }
+
+    pub fn render<F>(&mut self, image_index: u32, func: F) -> Result<()>
+    where
+        F: FnOnce(&mut Renderer),
+    {
+        let frame = &self.frames_in_flight[self.in_flight_frame_index as usize];
+        frame.fence.reset(&self.device)?;
+
         let cmd = &self.cmd_buffs[image_index as usize];
+        begin_command_buffer(cmd, &self.device, None)?;
+
+        func(self);
+        self.last_frame = self.in_flight_frame_index;
+
+        let frame = &self.frames_in_flight[self.in_flight_frame_index as usize];
+        let cmd = &self.cmd_buffs[image_index as usize];
+
         unsafe { self.device.end_command_buffer(*cmd) }.unwrap();
         let sms = [vk::SemaphoreSubmitInfo::default()
             .stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
@@ -656,14 +664,11 @@ impl<'a> Renderer<'a> {
             .wait_semaphore_infos(&sms)
             .command_buffer_infos(&cmbs)
             .signal_semaphore_infos(&sss);
-        frame.fence.reset(&self.device)?;
 
         unsafe {
             self.device
                 .queue_submit2(self.graphics_queue, &[submit_info], frame.fence.handel)?;
         };
-        // unsafe { self.device.queue_wait_idle(self.graphics_queue).unwrap() };
-        // println!("{:?}", Instant::now().duration_since(last_time));
 
         let rf = &[frame.render_finished];
         let sc = &[self.swapchain.vk_swapchain];
@@ -684,6 +689,7 @@ impl<'a> Renderer<'a> {
             }
             Ok(_) => {}
         };
+        self.in_flight_frame_index = (self.in_flight_frame_index + 1) % FRAMES_IN_FLIGHT as u64;
         Ok(())
     }
 
@@ -1020,11 +1026,11 @@ impl<'a> Renderer<'a> {
                 .dst_stage_mask(dst)
                 .src_access_mask(src_acces)
                 .dst_access_mask(dst_acces)];
-            let dependency_info = vk::DependencyInfo::default().memory_barriers(&memory_barriers);
-            self.device.cmd_pipeline_barrier2(
-                *cmd,
-                &dependency_info,
-            );
+            let dependency_info = vk::DependencyInfo::default()
+                .memory_barriers(&memory_barriers)
+                .buffer_memory_barriers(&[])
+                .image_memory_barriers(&[]);
+            self.device.cmd_pipeline_barrier2(*cmd, &dependency_info);
         }
     }
 
@@ -1555,16 +1561,19 @@ impl Image {
 
     pub fn barrier(
         &self,
-        ctx: &Renderer,
-        src_access: vk::AccessFlags,
-        dst_acces: vk::AccessFlags,
-    ) -> vk::ImageMemoryBarrier {
-        vk::ImageMemoryBarrier::default()
-            .src_queue_family_index(ctx.graphics_queue_family.index)
+        src_access: vk::AccessFlags2,
+        dst_acces: vk::AccessFlags2,
+        src_stage_mask: vk::PipelineStageFlags2,
+        dst_stage_mask: vk::PipelineStageFlags2,
+    ) -> vk::ImageMemoryBarrier2 {
+        vk::ImageMemoryBarrier2::default()
+            .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
             .image(self.inner)
-            .dst_queue_family_index(ctx.graphics_queue_family.index)
+            .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
             .dst_access_mask(src_access)
             .src_access_mask(dst_acces)
+            .src_stage_mask(src_stage_mask)
+            .dst_stage_mask(dst_stage_mask)
             .subresource_range(vk::ImageSubresourceRange {
                 aspect_mask: vk::ImageAspectFlags::COLOR,
                 base_mip_level: 0,
@@ -2137,18 +2146,21 @@ impl Buffer {
 
     pub fn barrier<'a>(
         &self,
-        ctx: &Renderer,
-        src_acces: vk::AccessFlags,
-        dst_acces: vk::AccessFlags,
-    ) -> vk::BufferMemoryBarrier<'a> {
-        vk::BufferMemoryBarrier::default()
+        src_access: vk::AccessFlags2,
+        dst_access: vk::AccessFlags2,
+        src_stage_mask: vk::PipelineStageFlags2,
+        dst_stage_mask: vk::PipelineStageFlags2,
+    ) -> vk::BufferMemoryBarrier2<'a> {
+        vk::BufferMemoryBarrier2::default()
+            .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
             .buffer(self.inner)
-            .src_queue_family_index(ctx.graphics_queue_family.index)
-            .dst_queue_family_index(ctx.graphics_queue_family.index)
+            .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+            .dst_access_mask(src_access)
+            .src_access_mask(dst_access)
+            .src_stage_mask(src_stage_mask)
+            .dst_stage_mask(dst_stage_mask)
             .offset(0)
             .size(self.size)
-            .dst_access_mask(dst_acces)
-            .src_access_mask(src_acces)
     }
 }
 
@@ -2343,13 +2355,8 @@ unsafe extern "system" fn vulkan_debug_callback(
         match flag {
             Flag::VERBOSE => log::info!("{:?} - {:?}", typ, message),
             Flag::INFO => {
-                let message = message.to_str().unwrap();
-                let index = if message.contains("DEBUG-PRINTF") {
-                    170
-                } else {
-                    0
-                };
-                log::info!("{:?} - {:?}", typ, message[index..].to_owned())
+                let message = message.to_str().unwrap_or("");
+                log::info!("{:?} - {:?}", typ, message.to_owned())
             }
             Flag::WARNING => log::warn!("{:?} - {:?}", typ, message),
             _ => log::error!("{:?} - {:?}", typ, message),

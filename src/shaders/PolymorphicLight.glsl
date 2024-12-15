@@ -40,7 +40,7 @@ struct RAB_LightInfo
 #include "./rtxdi/RtxdiHelpers.hlsli"
 
 #define LIGHT_SAMPING_EPSILON 1e-10
-#define DISTANT_LIGHT_DISTANCE 10000.0
+#define DISTANT_LIGHT_DISTANCE 1000.0
 
 #ifndef ENVIRONMENT_SAMPLER
 #define ENVIRONMENT_SAMPLER s_EnvironmentSampler

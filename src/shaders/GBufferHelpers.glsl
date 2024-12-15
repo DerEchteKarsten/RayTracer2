@@ -12,11 +12,11 @@ struct RayDesc {
 RayDesc setupPrimaryRay(uvec2 pixelPosition, PlanarViewConstants view)
 {
     const vec2 pixelCenter = vec2(pixelPosition.xy) + vec2(0.5);
-	const vec2 inUV = pixelCenter/vec2(view.viewportSize);
-	vec2 d = inUV * 2.0 - 1.0;
-	vec2 dir = inUV * 2.0 - 1.0;
-	vec4 target = view.matClipToView * vec4(dir.x, dir.y, 1, 1) ;
-	vec4 direction = view.matViewToWorld*vec4(normalize(target.xyz), 0) ;
+    const vec2 inUV = pixelCenter/vec2(view.viewportSize);
+    vec2 d = inUV * 2.0 - 1.0;
+    vec2 dir = inUV * 2.0 - 1.0;
+    vec4 target = view.matClipToView * vec4(dir.x, dir.y, 1, 1);
+    vec4 direction = view.matViewToWorld*vec4(normalize(target.xyz), 0);
 
     RayDesc ray;
     ray.Origin = view.cameraDirectionOrPosition.xyz;
@@ -45,9 +45,8 @@ vec3 getMotionVector(
     PlanarViewConstants view,
     PlanarViewConstants viewPrev,
     vec3 objectSpacePosition,
-    vec3 prevObjectSpacePosition,
-    float viewDepth,
-    float prevViewDepth)
+    vec3 prevObjectSpacePosition
+)
 {   
     vec3 worldSpacePosition = objectSpacePosition;
     vec3 prevWorldSpacePosition = prevObjectSpacePosition;
@@ -73,11 +72,11 @@ vec3 viewDepthToWorldPos(
     float viewDepth)
 {
     const vec2 pixelCenter = vec2(pixelPosition.xy) + vec2(0.5);
-	const vec2 inUV = pixelCenter/vec2(view.viewportSize);
-	vec2 d = inUV * 2.0 - 1.0;
-	vec2 dir = inUV * 2.0 - 1.0;
-	vec4 target = view.matClipToView * vec4(dir.x, dir.y, 1, 1) ;
-	vec4 direction = view.matViewToWorld*vec4(normalize(target.xyz), 0) ;
+    const vec2 inUV = pixelCenter/vec2(view.viewportSize);
+    vec2 d = inUV * 2.0 - 1.0;
+    vec2 dir = inUV * 2.0 - 1.0;
+    vec4 target = view.matClipToView * vec4(dir.x, dir.y, 1, 1);
+    vec4 direction = view.matViewToWorld*vec4(normalize(target.xyz), 0);
 
     return view.cameraDirectionOrPosition.xyz + direction.xyz * viewDepth;
 }

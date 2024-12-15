@@ -15,6 +15,8 @@ layout(location = 0) rayPayloadEXT Payload p;
 #include "ShaderParameters.glsl"
 #include "Hit.glsl"
 
+const bool enableIndirectEmissiveSurfaces = true; 
+
 void main() 
 {	
     uint2 pixelPosition = RTXDI_ReservoirPosToPixelPos(gl_LaunchIDEXT.xy, g_Const.runtimeParams.activeCheckerboardField);
@@ -120,7 +122,7 @@ void main()
     // Include the emissive component of surfaces seen with BRDF rays if requested (i.e. when Direct Lighting mode
     // is set to BRDF) or on delta reflection rays because those bypass ReSTIR GI and direct specular lighting,
     // and we need to see reflections of lamps and the sky in mirrors.
-    const bool includeEmissiveComponent = isSpecularRay && isDeltaSurface;
+    const bool includeEmissiveComponent = enableIndirectEmissiveSurfaces || (isSpecularRay && isDeltaSurface);
 
     if (p.geometryIndex != ~0u)
     {
@@ -137,10 +139,6 @@ void main()
         secondarySurface.specularF0 = specularF0;
         secondarySurface.roughness = roughness;
         secondarySurface.isEnvironmentMap = false;
-
-        RayDesc primary_ray = setupPrimaryRay(pixelPosition, g_Const.view);
-        trace(primary_ray);
-        secondarySurface.diffuseAlbedo = vec3(abs(p.depth - surface.viewDepth));
     }
     else
     {
@@ -175,4 +173,14 @@ void main()
 
     uint gbufferIndex = RTXDI_ReservoirPositionToPointer(g_Const.restirGI.reservoirBufferParams, gl_LaunchIDEXT.xy, 0);
     SecondaryGBuffer[gbufferIndex] = secondaryGBufferData;
+
+    if (radiance.x > 0.0 || radiance.y > 0.0 || radiance.z > 0.0)
+    {
+        vec3 diffuse = isSpecularRay ? vec3(0.0) : radiance * BRDF_over_PDF;
+        vec3 specular = isSpecularRay ? radiance * BRDF_over_PDF : vec3(0.0);
+
+        specular = DemodulateSpecular(surface.specularF0, specular);
+
+        StoreShadingOutput(ivec2(pixelPosition), diffuse, specular, p.depth, false);
+    }
 }

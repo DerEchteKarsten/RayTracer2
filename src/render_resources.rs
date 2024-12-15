@@ -101,7 +101,11 @@ impl GBuffer {
         }
     }
 
-    pub fn barriers(&self, ctx: &Renderer) -> [vk::ImageMemoryBarrier; 6] {
+    pub fn barriers(
+        &self,
+        src: vk::PipelineStageFlags2,
+        dst: vk::PipelineStageFlags2,
+    ) -> [vk::ImageMemoryBarrier2; 6] {
         let binding = [
             &self.depth,
             &self.diffuse_albedo,
@@ -110,12 +114,13 @@ impl GBuffer {
             &self.specular_rough,
             &self.emissive,
         ];
-        let mut barriers = [vk::ImageMemoryBarrier::default(); 6];
+        let mut barriers = [vk::ImageMemoryBarrier2::default(); 6];
         binding.iter().enumerate().for_each(|(i, image)| {
             barriers[i] = image.image.barrier(
-                ctx,
-                vk::AccessFlags::SHADER_WRITE,
-                vk::AccessFlags::SHADER_READ,
+                vk::AccessFlags2::MEMORY_WRITE,
+                vk::AccessFlags2::MEMORY_READ,
+                src,
+                dst,
             )
         });
         barriers
@@ -188,7 +193,7 @@ impl RenderResources {
             .create_buffer(
                 vk::BufferUsageFlags::STORAGE_BUFFER,
                 MemoryLocation::GpuOnly,
-                reservoir_buffer_size,
+                reservoir_buffer_params.reservoir_array_pitch as u64 * 2 * 24,
                 None,
             )
             .unwrap();
