@@ -64,15 +64,31 @@ struct ResamplingConstants
     PlanarViewConstants view;
     PlanarViewConstants prevView;
     RTXDI_RuntimeParameters runtimeParams;
-    RTXDI_LightBufferParameters lightBufferParams;
+    
+    uint enableBrdfIndirect;
+    uint enableBrdfAdditiveBlend;    
+    uint enableAccumulation;
+    uint frame;
 
     ReSTIRGI_Parameters restirGI;
     ReSTIRDI_Parameters restirDI;
+
+    uint enableRestirDI;
+    uint enableRestirGI;
+    uint refrenceMode;
+    uint textures;
+
+    float blendFactor;
+    uint enableSpacialResampling;
+    uint enableTemporalResampling;
+    uint environment;
+
+    RTXDI_LightBufferParameters lightBufferParams;
     RTXDI_RISBufferSegmentParameters localLightsRISBufferSegmentParams;
     RTXDI_RISBufferSegmentParameters environmentLightRISBufferSegmentParams;
+    
     uvec2 environmentPdfTextureSize;
     uvec2 localLightPdfTextureSize;
-    uvec4 count;
 };
 
 

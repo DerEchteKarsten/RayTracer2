@@ -8,10 +8,7 @@ use ash::vk::{
 use gpu_allocator::MemoryLocation;
 
 use crate::{
-    context::*,
-    render_resources::RenderResources,
-    shader_params::{GConst, RTXDI_ReservoirBufferParameters},
-    Model, RTXDI_RESERVOIR_BLOCK_SIZE, WINDOW_SIZE,
+    context::*, render_resources::RenderResources, shader_params::{GConst, RTXDI_ReservoirBufferParameters}, Model, RESAMPLING, RTXDI_RESERVOIR_BLOCK_SIZE, WINDOW_SIZE
 };
 
 struct RayTracingPass {
@@ -118,8 +115,6 @@ pub struct LightPasses {
     gi_temporal_resampling_pass: RayTracingPass,
     gi_spatial_resampling_pass: RayTracingPass,
     gi_final_shading_pass: RayTracingPass,
-    di_initial_sampling_pass: RayTracingPass,
-    di_final_shading_pass: RayTracingPass,
     refrence_pass: RayTracingPass,
 
     layout: vk::PipelineLayout,
@@ -457,12 +452,8 @@ impl LightPasses {
             }
 
             Self {
-                refrence_pass: RayTracingPass::new(
-                    ctx,
-                    layout,
-                    "./src/shaders/bin/refrence.spv",
-                )
-                .unwrap(),
+                refrence_pass: RayTracingPass::new(ctx, layout, "./src/shaders/bin/refrence.spv")
+                    .unwrap(),
                 presample_lights_pass: ComputePass::new(
                     ctx,
                     layout,
@@ -481,12 +472,6 @@ impl LightPasses {
                     ctx,
                     layout,
                     "./src/shaders/bin/di_fused_resampling.spv",
-                )
-                .unwrap(),
-                di_initial_sampling_pass: RayTracingPass::new(
-                    ctx,
-                    layout,
-                    "./src/shaders/bin/di_initial_sampling.spv",
                 )
                 .unwrap(),
                 brdf_ray_tracing_pass: RayTracingPass::new(
@@ -517,12 +502,6 @@ impl LightPasses {
                     ctx,
                     layout,
                     "./src/shaders/bin/gi_final_shading.spv",
-                )
-                .unwrap(),
-                di_final_shading_pass: RayTracingPass::new(
-                    ctx,
-                    layout,
-                    "./src/shaders/bin/di_final_shading.spv",
                 )
                 .unwrap(),
                 layout,
@@ -574,12 +553,7 @@ impl LightPasses {
         }
     }
 
-    pub fn execute(
-        &self,
-        ctx: &Renderer,
-        cmd: &vk::CommandBuffer,
-        frame: u64,
-    ) {
+    pub fn execute(&self, ctx: &Renderer, cmd: &vk::CommandBuffer, frame: u64, g_const: &GConst) {
         unsafe {
             ctx.memory_barrier(
                 cmd,
@@ -616,71 +590,81 @@ impl LightPasses {
             ctx.device
                 .cmd_push_constants(*cmd, self.layout, vk::ShaderStageFlags::ALL, 0, frame_c);
 
-            self.g_buffer_pass.execute(ctx, cmd);
+            if g_const.refrence_mode == 1 {
+                self.refrence_pass.execute(ctx, cmd);
 
-            ctx.memory_barrier(
-                cmd,
-                vk::PipelineStageFlags2::ALL_COMMANDS,
-                vk::PipelineStageFlags2::ALL_COMMANDS,
-                vk::AccessFlags2::MEMORY_READ | vk::AccessFlags2::MEMORY_WRITE,
-                vk::AccessFlags2::MEMORY_READ | vk::AccessFlags2::MEMORY_WRITE,
-            );
+                ctx.memory_barrier(
+                    cmd,
+                    vk::PipelineStageFlags2::ALL_COMMANDS,
+                    vk::PipelineStageFlags2::ALL_COMMANDS,
+                    vk::AccessFlags2::MEMORY_READ | vk::AccessFlags2::MEMORY_WRITE,
+                    vk::AccessFlags2::MEMORY_READ | vk::AccessFlags2::MEMORY_WRITE,
+                );
+            } else {
+                self.g_buffer_pass.execute(ctx, cmd);
 
-            self.refrence_pass.execute(ctx, cmd);
+                ctx.memory_barrier(
+                    cmd,
+                    vk::PipelineStageFlags2::ALL_COMMANDS,
+                    vk::PipelineStageFlags2::ALL_COMMANDS,
+                    vk::AccessFlags2::MEMORY_READ | vk::AccessFlags2::MEMORY_WRITE,
+                    vk::AccessFlags2::MEMORY_READ | vk::AccessFlags2::MEMORY_WRITE,
+                );
 
-            // self.di_initial_sampling_pass.execute(ctx, cmd);
+                if g_const.enable_restir_di == 1 {
+                    self.di_fused_resampling_pass.execute(ctx, cmd);
 
-            // ctx.memory_barrier(
-            //     cmd,
-            //     vk::PipelineStageFlags2::ALL_COMMANDS,
-            //     vk::PipelineStageFlags2::ALL_COMMANDS,
-            //     vk::AccessFlags2::MEMORY_READ | vk::AccessFlags2::MEMORY_WRITE,
-            //     vk::AccessFlags2::MEMORY_READ | vk::AccessFlags2::MEMORY_WRITE,
-            // );
+                    ctx.memory_barrier(
+                        cmd,
+                        vk::PipelineStageFlags2::ALL_COMMANDS,
+                        vk::PipelineStageFlags2::ALL_COMMANDS,
+                        vk::AccessFlags2::MEMORY_READ | vk::AccessFlags2::MEMORY_WRITE,
+                        vk::AccessFlags2::MEMORY_READ | vk::AccessFlags2::MEMORY_WRITE,
+                    );
 
-            // self.di_fused_resampling_pass.execute(ctx, cmd);
+                }
 
-            // ctx.memory_barrier(
-            //     cmd,
-            //     vk::PipelineStageFlags2::ALL_COMMANDS,
-            //     vk::PipelineStageFlags2::ALL_COMMANDS,
-            //     vk::AccessFlags2::MEMORY_READ | vk::AccessFlags2::MEMORY_WRITE,
-            //     vk::AccessFlags2::MEMORY_READ | vk::AccessFlags2::MEMORY_WRITE,
-            // );
+                if g_const.enable_restir_gi == 1 {
+                    self.brdf_ray_tracing_pass.execute(ctx, cmd);
 
-            // self.di_final_shading_pass.execute(ctx, cmd);
-            // self.brdf_ray_tracing_pass.execute(ctx, cmd);
+                    ctx.memory_barrier(
+                        cmd,
+                        vk::PipelineStageFlags2::ALL_COMMANDS,
+                        vk::PipelineStageFlags2::ALL_COMMANDS,
+                        vk::AccessFlags2::MEMORY_READ | vk::AccessFlags2::MEMORY_WRITE,
+                        vk::AccessFlags2::MEMORY_READ | vk::AccessFlags2::MEMORY_WRITE,
+                    );
 
-            // ctx.memory_barrier(
-            //     cmd,
-            //     vk::PipelineStageFlags2::ALL_COMMANDS,
-            //     vk::PipelineStageFlags2::ALL_COMMANDS,
-            //     vk::AccessFlags2::MEMORY_READ | vk::AccessFlags2::MEMORY_WRITE,
-            //     vk::AccessFlags2::MEMORY_READ | vk::AccessFlags2::MEMORY_WRITE,
-            // );
+                    self.shade_secondary_surfaces_pass.execute(ctx, cmd);
 
-            // self.shade_secondary_surfaces_pass.execute(ctx, cmd);
+                    ctx.memory_barrier(
+                        cmd,
+                        vk::PipelineStageFlags2::ALL_COMMANDS,
+                        vk::PipelineStageFlags2::ALL_COMMANDS,
+                        vk::AccessFlags2::MEMORY_READ | vk::AccessFlags2::MEMORY_WRITE,
+                        vk::AccessFlags2::MEMORY_READ | vk::AccessFlags2::MEMORY_WRITE,
+                    );
 
-            // ctx.memory_barrier(
-            //     cmd,
-            //     vk::PipelineStageFlags2::ALL_COMMANDS,
-            //     vk::PipelineStageFlags2::ALL_COMMANDS,
-            //     vk::AccessFlags2::MEMORY_READ | vk::AccessFlags2::MEMORY_WRITE,
-            //     vk::AccessFlags2::MEMORY_READ | vk::AccessFlags2::MEMORY_WRITE,
-            // );
+                    if g_const.enable_temporal_resampling == 1 {
+                        self.gi_temporal_resampling_pass.execute(ctx, cmd);
+                    }
+                    if g_const.enable_spatial_resampling == 1 {
+                        self.gi_spatial_resampling_pass.execute(ctx, cmd);
+                    }
+                        
+                    if g_const.enable_spatial_resampling == 1 || g_const.enable_temporal_resampling == 1 {
+                        ctx.memory_barrier(
+                            cmd,
+                            vk::PipelineStageFlags2::ALL_COMMANDS,
+                            vk::PipelineStageFlags2::ALL_COMMANDS,
+                            vk::AccessFlags2::MEMORY_READ | vk::AccessFlags2::MEMORY_WRITE,
+                            vk::AccessFlags2::MEMORY_READ | vk::AccessFlags2::MEMORY_WRITE,
+                        );
+                    }
 
-            // self.gi_temporal_resampling_pass.execute(ctx, cmd);
-            // self.gi_spatial_resampling_pass.execute(ctx, cmd);
-
-            // ctx.memory_barrier(
-            //     cmd,
-            //     vk::PipelineStageFlags2::ALL_COMMANDS,
-            //     vk::PipelineStageFlags2::ALL_COMMANDS,
-            //     vk::AccessFlags2::MEMORY_READ | vk::AccessFlags2::MEMORY_WRITE,
-            //     vk::AccessFlags2::MEMORY_READ | vk::AccessFlags2::MEMORY_WRITE,
-            // );
-
-            // self.gi_final_shading_pass.execute(ctx, cmd);
+                    self.gi_final_shading_pass.execute(ctx, cmd);
+                }
+            }
         }
     }
 

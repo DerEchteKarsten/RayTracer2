@@ -15,6 +15,8 @@ mod prepare_lights;
 mod render_resources;
 mod shader_params;
 
+use imgui::{Condition, TreeNodeFlags};
+use imgui_winit_support::{HiDpiMode, WinitPlatform};
 use light_passes::{calculate_reservoir_buffer_parameters, LightPasses};
 
 mod model;
@@ -22,7 +24,7 @@ use log;
 use mip_pass::GenerateMipsPass;
 use model::*;
 
-use ash::vk::{self, AccelerationStructureTypeKHR, ImageLayout, KHR_SPIRV_1_4_NAME};
+use ash::vk::{self, AccelerationStructureTypeKHR, ImageLayout, Offset2D, KHR_SPIRV_1_4_NAME};
 
 use glam::{uvec2, vec3, IVec2, Mat4, UVec4};
 use postprocess::PostProcessPass;
@@ -379,7 +381,18 @@ fn main() {
                 pad2: 0,
             },
         },
-        count: UVec4::new(0, 0, 0, 0),
+        enable_accumulation: 0,
+        enable_brdf_additive_blend: 0,
+        enable_brdf_indirect: 0,
+        enable_restir_di: 0,
+        enable_restir_gi: 0,
+        frame: 0,
+        refrence_mode: 0,
+        textures: 0,
+        blend_factor: 0.1,
+        enable_spatial_resampling: 1,
+        enable_temporal_resampling: 1,
+        environment: 1,
     };
 
     let prepare_lights = PrepareLightsTasks::new(
@@ -400,17 +413,89 @@ fn main() {
     let mut frame_time = Duration::new(0, 0);
     let mut skybox_dirty = true;
 
+    let mut imgui = imgui::Context::create();
+    imgui.style_mut().anti_aliased_lines = true;
+    imgui.style_mut().anti_aliased_fill = true;
+
+    let attachments = [vk::AttachmentDescription::default()
+        .initial_layout(ImageLayout::PRESENT_SRC_KHR)
+        .final_layout(ImageLayout::PRESENT_SRC_KHR)
+        .format(ctx.swapchain.format)
+        .load_op(vk::AttachmentLoadOp::LOAD)
+        .store_op(vk::AttachmentStoreOp::STORE)
+        .samples(vk::SampleCountFlags::TYPE_1)];
+    let attachment = [vk::AttachmentReference::default()
+        .attachment(0)
+        .layout(ImageLayout::GENERAL)];
+    let subpasses = [vk::SubpassDescription::default()
+        .color_attachments(&attachment)
+        .input_attachments(&[])];
+
+    let render_pass_create_info = vk::RenderPassCreateInfo::default()
+        .attachments(&attachments)
+        .subpasses(&subpasses);
+
+    let imgui_pass = unsafe {
+        ctx.device
+            .create_render_pass(&render_pass_create_info, None)
+            .unwrap()
+    };
+
+    let mut imgui_frame_buffers = vec![];
+    for image in ctx.swapchain.images.iter() {
+        let attachment = [image.view];
+        let frame_buffer_info = vk::FramebufferCreateInfo::default()
+            .attachments(&attachment)
+            .height(WINDOW_SIZE.y as u32)
+            .width(WINDOW_SIZE.x as u32)
+            .layers(1)
+            .render_pass(imgui_pass);
+        imgui_frame_buffers.push(unsafe {
+            ctx.device
+                .create_framebuffer(&frame_buffer_info, None)
+                .unwrap()
+        })
+    }
+
+    let mut imgui_renderer = imgui_rs_vulkan_renderer::Renderer::with_default_allocator(
+        &ctx.instance,
+        ctx.physical_device.handel,
+        ctx.device.clone(),
+        ctx.graphics_queue,
+        ctx.command_pool,
+        imgui_pass,
+        &mut imgui,
+        None,
+    )
+    .unwrap();
+
+    imgui.fonts().build_alpha8_texture();
+
+    let mut platform = WinitPlatform::new(&mut imgui);
+    platform.attach_window(imgui.io_mut(), &window, HiDpiMode::Default);
+    
+    let mut override_blend_factor = false;
+    let mut accumulation_duration = Instant::now();
     #[allow(clippy::collapsible_match, clippy::single_match, deprecated)]
     event_loop
         .run(move |event, control_flow| {
             control_flow.set_control_flow(ControlFlow::Poll);
             controles = controles.handle_event(&event, &window);
+            platform.handle_event(imgui.io_mut(), &window, &event);
+
             match event {
                 Event::NewEvents(_) => {
                     controles = controles.reset();
                     let now = Instant::now();
                     frame_time = now - last_time;
                     last_time = Instant::now();
+                    imgui.io_mut().update_delta_time(frame_time);
+                }
+                Event::AboutToWait => {
+                    platform
+                        .prepare_frame(imgui.io_mut(), &window)
+                        .expect("Failed to prepare frame");
+                    window.request_redraw();
                 }
                 Event::WindowEvent { event, .. } => match event {
                     WindowEvent::CloseRequested => control_flow.exit(),
@@ -429,13 +514,70 @@ fn main() {
                         println!("next frame --------------------------------");
 
                         frame += 1;
+                        let ui = imgui.frame();
+
+                        ui.window("GConstEditor")
+                            .size([300.0, WINDOW_SIZE.y as f32], Condition::FirstUseEver)
+                            .position([0.0, 0.0], Condition::FirstUseEver)
+                            .build(|| {
+                                ui.text(format!(
+                                    "FPS: {:.0}, {:?}",
+                                    1000.0 / frame_time.as_millis() as f64,
+                                    frame_time
+                                ));
+                                ui.text(format!(
+                                    "Frame: {}, Swapchain Image: {}", frame, image_index
+                                ));
+
+                                ui.separator();
+                                ui.checkbox_flags("Refrence Mode", &mut g_const.refrence_mode, 0x1);
+                                ui.checkbox_flags("Accumulation", &mut g_const.enable_accumulation, 0x1);
+                                ui.checkbox_flags("Textures", &mut g_const.textures, 0x1);
+                                ui.checkbox_flags("RestirDI", &mut g_const.enable_restir_di, 0x1);
+                                ui.checkbox_flags("RestirGI", &mut g_const.enable_restir_gi, 0x1);
+                                
+                                ui.separator();
+                                ui.checkbox_flags("Environment", &mut g_const.environment, 0x1);
+
+                                ui.separator();
+                                ui.checkbox_flags("Spatial Resampling", &mut g_const.enable_spatial_resampling, 0x1);
+                                ui.checkbox_flags("Temporal Resampling", &mut g_const.enable_temporal_resampling, 0x1);
+
+                                ui.separator();
+                                ui.checkbox("Override Blend Factor", &mut override_blend_factor);
+                                ui.input_float("Blend Factor", &mut g_const.blend_factor).build();
+                                
+                                ui.separator();
+                                ui.checkbox_flags("Brdf Additive Blend", &mut g_const.enable_brdf_additive_blend, 0x1);
+                                ui.checkbox_flags("Brdf Indirect", &mut g_const.enable_brdf_indirect, 0x1);
+
+                                ui.separator();
+                                ui.checkbox_flags("Checker Board Field", &mut g_const.runtime_params.active_checkerboard_field, 0x1);
+                                ui.input_int("Neighbor Offset Mask", unsafe { std::mem::transmute(&mut g_const.runtime_params.neighbor_offset_mask) }).build();
+
+                                
+
+                            });
+
+                            if g_const.enable_accumulation == 0 {
+                                accumulation_duration = Instant::now();
+                            }
+
+                            if !override_blend_factor {
+                                g_const.blend_factor = 100.0 / Instant::now().duration_since(accumulation_duration).as_millis() as f32;
+                            }
+
+                        platform.prepare_render(ui, &window);
+                        let draw_data = imgui.render();
+                        
 
                         let new_cam = camera.update(&controles, frame_time);
                         camera = new_cam;
 
                         g_const.prev_view = g_const.view;
                         g_const.view = camera.planar_view_constants();
-                        g_const.count.x = frame as u32;
+                        g_const.frame = frame as u32;
+
                         println!(
                             "{}: {:?}------------------------------------------",
                             frame, frame_time
@@ -452,9 +594,22 @@ fn main() {
                         ctx.render(image_index, |ctx| {
                             let cmd = &ctx.cmd_buffs[image_index as usize];
                             if frame == 1 {
-                                prepare_lights.execute(ctx, cmd, &resources.task_buffer, (&resources.geometry_instance_to_light_buffer, &resources.geometry_instance_to_light_buffer_staging), &model);
-                                let skybox_changed =
-                                    light_passes.execute_presampeling(ctx, cmd, frame, skybox_dirty);
+                                prepare_lights.execute(
+                                    ctx,
+                                    cmd,
+                                    &resources.task_buffer,
+                                    (
+                                        &resources.geometry_instance_to_light_buffer,
+                                        &resources.geometry_instance_to_light_buffer_staging,
+                                    ),
+                                    &model,
+                                );
+                                let skybox_changed = light_passes.execute_presampeling(
+                                    ctx,
+                                    cmd,
+                                    frame,
+                                    skybox_dirty,
+                                );
                                 if skybox_dirty {
                                     mip_environment.execute_mip_generation(
                                         ctx,
@@ -474,11 +629,30 @@ fn main() {
                                 );
                             }
 
-                            light_passes.execute(ctx, cmd, frame);
+                            light_passes.execute(ctx, cmd, frame, &g_const);
                             post_process.execute(ctx, cmd, frame, image_index, &resources);
+                            unsafe {
+                                let begin_info = vk::RenderPassBeginInfo::default()
+                                    .framebuffer(imgui_frame_buffers[image_index as usize])
+                                    .render_pass(imgui_pass)
+                                    .render_area(
+                                        vk::Rect2D::default()
+                                            .extent(vk::Extent2D {
+                                                width: WINDOW_SIZE.x as u32,
+                                                height: WINDOW_SIZE.y as u32,
+                                            })
+                                            .offset(Offset2D { x: 0, y: 0 }),
+                                    );
+                                ctx.device.cmd_begin_render_pass(
+                                    *cmd,
+                                    &begin_info,
+                                    vk::SubpassContents::INLINE,
+                                );
+                                imgui_renderer.cmd_draw(*cmd, draw_data).unwrap();
+                                ctx.device.cmd_end_render_pass(*cmd);
+                            }
                         })
                         .unwrap();
-                        window.request_redraw();
                     }
                     _ => (),
                 },

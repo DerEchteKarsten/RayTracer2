@@ -47,8 +47,10 @@ RAB_Surface GetSurface(RayDesc ray, out vec3 emission) {
     RAB_Surface surface = RAB_EmptySurface();
 
     surface.viewDepth = p.depth;
-    if(surface.viewDepth == BACKGROUND_DEPTH)
+    if(surface.viewDepth == BACKGROUND_DEPTH){
+        emission = GetEnvironmentRadiance(ray.Direction);
         return surface;
+    }
 
     GetGeometryFromHit(
         p.primitiveId, 
@@ -65,4 +67,5 @@ RAB_Surface GetSurface(RayDesc ray, out vec3 emission) {
     surface.worldPos = ray.Origin + ray.Direction * p.depth;
     surface.viewDir = ray.Direction;
     surface.diffuseProbability = getSurfaceDiffuseProbability(surface);
+    return surface;
 }

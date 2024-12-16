@@ -13,29 +13,35 @@ layout(location = 0) rayPayloadEXT Payload p;
 #include "Hit.glsl"
 #include "GBufferHelpers.glsl"
 
-const int maxBounces = 3;
+const int maxBounces = 5;
 const int maxSamples = 12;
 void main() {
     ivec2 pixel_pos = ivec2(gl_LaunchIDEXT.xy);
-    
-    RAB_RandomSamplerState rng = RAB_InitRandomSampler(pixelPosition, 1);
-    RayDesc ray = setupPrimaryRay(pixel_pos, g_Const.view);
+
+    RAB_RandomSamplerState rng = RAB_InitRandomSampler(pixel_pos, 1);
     vec3 radiance = vec3(0.0);
-    vec3 emission;
 
     for(int s = 0; s < maxSamples; s++){
-        vec3 total_brdf = vec3(1.0);
+        vec3 throughput = vec3(1.0);
+        RayDesc ray = setupPrimaryRay(pixel_pos, g_Const.view);
+        ray.TMin = 0.001;
         for(int i = 0; i < maxBounces; i++){
+            vec3 emission;
             RAB_Surface surface = GetSurface(ray, emission);
 
-            SplitBrdf brdf = EvaluateBrdf(surface, ray.Origin);
-            radiance += total_brdf * emission * 12;
-			total_brdf *= brdf.demodulatedDiffuse * surface.diffuseAlbedo;
+            if(p.geometryIndex == ~0u) {
+                emission = GetEnvironmentRadiance(ray.Direction);
+                radiance += throughput * emission;
+                break;
+            }
+            
+            radiance += throughput * emission * 12;
+			throughput *= surface.diffuseAlbedo;
             
             RAB_GetSurfaceBrdfSample(surface, rng, ray.Direction);
             ray.Origin = surface.worldPos;
         }
     }
 
-    StoreShadingOutput(ivec2(pixel_pos), radiance / float(maxSamples), vec3(0.0), 1.0, true);
+    StoreShadingOutput(ivec2(pixel_pos), radiance / float(maxSamples), vec3(0.0), true);
 }

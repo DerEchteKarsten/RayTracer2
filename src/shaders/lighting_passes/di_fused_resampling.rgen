@@ -91,7 +91,6 @@ void main() {
         ivec2(gl_LaunchIDEXT.xy), 
         diffuse, 
         specular, 
-        lightDistance, 
-        true
+        g_Const.enableRestirDI == 1
     );
 }

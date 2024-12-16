@@ -241,16 +241,10 @@ float Lambert(vec3 normal, vec3 lightIncident)
 
 float2 directionToEquirectUV(float3 normalizedDirection)
 {
-    float elevation = asin(normalizedDirection.y);
-    float azimuth = 0;
-    if (abs(normalizedDirection.y) < 1.0)
-        azimuth = atan2(normalizedDirection.z, normalizedDirection.x);
+    float u = (0.5 + atan2(normalizedDirection.z, normalizedDirection.x)/(2*PI));
+    float v = (0.5 - asin(normalizedDirection.y)/PI);
 
-    float2 uv;
-    uv.x = azimuth / (2 * RTXDI_PI) - 0.25;
-    uv.y = 0.5 - elevation / RTXDI_PI;
-
-    return uv;
+    return vec2(u, v);
 }
 
 

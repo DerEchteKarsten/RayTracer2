@@ -14,6 +14,9 @@ glam = "0.28.0"
 gltf = "1.0"
 gpu-allocator = { version = "0.27", default-features = false, features = ["vulkan"] }
 image = "0.25.1"
+imgui = { version = "0.12.0", features = ["docking"] }
+imgui-rs-vulkan-renderer = "1.16.0"
+imgui-winit-support = "0.13.0"
 log = "0.4.20"
 memoffset = "0.9.0"
 ndarray = "0.16.1"

@@ -15,6 +15,7 @@ layout(location = 0) rayPayloadEXT Payload p;
 #include "GBufferHelpers.glsl"
 #include "ShaderParameters.glsl"
 #include "ShadingHelpers.glsl"
+#include "Hit.glsl"
 
 const uint numPrimaryLocalLightSamples = 1;
 const uint numPrimaryInfiniteLightSamples = 1;
@@ -60,7 +61,7 @@ void main() {
     secondarySurface.viewDir = normalize(primarySurface.worldPos - secondarySurface.worldPos);
 
     //Shade the secondary surface.
-    if (isValidSecondarySurface && !isEnvironmentMap)
+    if (isValidSecondarySurface && !isEnvironmentMap && g_Const.enableRestirDI == 1)
     {
         RTXDI_SampleParameters sampleParams = RTXDI_InitSampleParameters(
             numPrimaryLocalLightSamples,
@@ -114,6 +115,17 @@ void main() {
             radiance *= c_MaxIndirectRadiance / indirectLuminance;
     }
 
+    if(g_Const.enableRestirDI == 0) {
+        RayDesc ray;
+        ray.Origin = secondarySurface.worldPos;
+        ray.TMin = 0.001;
+        ray.TMax = 1000.0;
+        RAB_GetSurfaceBrdfSample(secondarySurface, rng, ray.Direction);
+        vec3 emission;
+        GetSurface(ray, emission);
+        radiance = emission * 12 * secondarySurface.diffuseAlbedo;
+    }
+
     RTXDI_GIReservoir reservoir = RTXDI_EmptyGIReservoir();
 
     // // For delta reflection rays, just output the shading result in this shader
@@ -139,6 +151,6 @@ void main() {
 
         specular = DemodulateSpecular(primarySurface.specularF0, specular);
 
-        StoreShadingOutput(ivec2(pixelPosition), diffuse, specular, 0, false);
+        StoreShadingOutput(ivec2(pixelPosition), diffuse, specular, false);
     }
 }

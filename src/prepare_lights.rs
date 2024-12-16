@@ -189,7 +189,7 @@ impl PrepareLightsTasks {
                 {
                     continue;
                 }
-                log::debug!("{:?}",  geometry.emission);
+                log::debug!("{:?}", geometry.emission);
                 geometry_to_light[geometry_index] = light_buffer_offset;
                 let triangle_count = model.index_counts[geometry_index] / 3;
                 log::debug!("{:?}", triangle_count);

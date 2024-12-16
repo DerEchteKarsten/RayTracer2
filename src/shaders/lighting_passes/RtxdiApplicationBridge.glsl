@@ -618,10 +618,13 @@ bool RAB_AreMaterialsSimilar(RAB_Surface a, RAB_Surface b)
 
 float3 GetEnvironmentRadiance(float3 direction)
 {
-    float2 uv = directionToEquirectUV(direction);
-    vec3 environmentRadiance = texture(SkyBox, uv).rgb;
-
-    return environmentRadiance;
+    if(g_Const.environment == 1) {
+        float2 uv = directionToEquirectUV(direction);
+        vec3 environmentRadiance = texture(SkyBox, uv).rgb;
+        return environmentRadiance;
+    }else {
+        return vec3(0.0);
+    }
 }
 
 uint getLightIndex(uint geometryIndex, uint primitiveIndex)

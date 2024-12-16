@@ -233,19 +233,42 @@ pub struct RTXDI_RISBufferSegmentParameters {
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
+struct SceneConstants {
+    pub enable_environment_map: u32,
+    pub pad1: u32,
+    pub pad2: u32,
+    pub pad3: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
 pub struct GConst {
     pub view: PlanarViewConstants,
     pub prev_view: PlanarViewConstants,
     pub runtime_params: RTXDI_RuntimeParameters,
-    pub light_buffer_params: RTXDI_LightBufferParameters,
+
+    pub enable_brdf_indirect: u32,
+    pub enable_brdf_additive_blend: u32,
+    pub enable_accumulation: u32,
+    pub frame: u32,
 
     pub restir_gi: ReSTIRGI_Parameters,
     pub restir_di: ReSTIRDI_Parameters,
+
+    pub enable_restir_di: u32,
+    pub enable_restir_gi: u32,
+    pub refrence_mode: u32,
+    pub textures: u32,
+
+    pub blend_factor: f32,
+    pub enable_spatial_resampling: u32,
+    pub enable_temporal_resampling: u32,
+    pub environment: u32,
+
+    pub light_buffer_params: RTXDI_LightBufferParameters,
     pub local_lights_risbuffer_segment_params: RTXDI_RISBufferSegmentParameters,
     pub environment_light_risbuffer_segment_params: RTXDI_RISBufferSegmentParameters,
 
     pub environment_pdf_texture_size: UVec2,
     pub local_light_pdf_texture_size: UVec2,
-
-    pub count: UVec4,
 }

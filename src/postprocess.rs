@@ -126,8 +126,7 @@ impl PostProcessPass {
         let source_descriptors = ctx.allocate_descriptor_sets(&pool, &source_layout, 2)?;
         let target_descriptors =
             ctx.allocate_descriptor_sets(&pool, &target_layout, ctx.swapchain.images.len() as u32)?;
-        let static_descriptor =
-            ctx.allocate_descriptor_sets(&pool, &static_layout, 1)?[0];
+        let static_descriptor = ctx.allocate_descriptor_sets(&pool, &static_layout, 1)?[0];
 
         for i in 0..2 {
             let writes = [
@@ -219,7 +218,7 @@ impl PostProcessPass {
             layout,
             source_descriptors,
             target_descriptors,
-            static_descriptor
+            static_descriptor,
         })
     }
 

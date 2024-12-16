@@ -62,28 +62,27 @@ void StoreShadingOutput(
     ivec2 pixelPosition,
     vec3 diffuse,
     vec3 specular,
-    float lightDistance,
     bool isFirstPass
     )
 {
-    float diffuseHitT = lightDistance;
-    float specularHitT = lightDistance;
+    if (g_Const.enableAccumulation == 1){
+        vec4 priorDiffuse = imageLoad(DiffuseLighting, pixelPosition);
+        vec4 priorSpecular = imageLoad(SpecularLighting, pixelPosition);
 
-    if (!isFirstPass)
+        diffuse = mix(priorDiffuse.rgb, diffuse, g_Const.blendFactor);
+        specular = mix(priorDiffuse.rgb, diffuse, g_Const.blendFactor);
+    }else if (!isFirstPass)
     {
         vec4 priorDiffuse = imageLoad(DiffuseLighting, pixelPosition);
         vec4 priorSpecular = imageLoad(SpecularLighting, pixelPosition);
 
-        if (calcLuminance(diffuse) > calcLuminance(priorDiffuse.rgb) || lightDistance == 0)
-            diffuseHitT = priorDiffuse.w;
-
-        if (calcLuminance(specular) > calcLuminance(priorSpecular.rgb) || lightDistance == 0)
-            specularHitT = priorSpecular.w;
-        
         diffuse += priorDiffuse.rgb;
         specular += priorSpecular.rgb;
     }
 
-    imageStore(DiffuseLighting, pixelPosition, vec4(diffuse, diffuseHitT));
-    imageStore(SpecularLighting, pixelPosition, vec4(specular, specularHitT));
+
+    imageStore(DiffuseLighting, pixelPosition, vec4(diffuse, 0.0));
+    imageStore(SpecularLighting, pixelPosition, vec4(specular, 0.0));
+        
+       
 }
