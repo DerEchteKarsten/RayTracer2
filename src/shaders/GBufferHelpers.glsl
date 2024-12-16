@@ -26,21 +26,6 @@ RayDesc setupPrimaryRay(uvec2 pixelPosition, PlanarViewConstants view)
     return ray;
 }
 
-ivec2 ClampSamplePositionIntoView(ivec2 pixelPosition, PlanarViewConstants view)
-{
-    int width = int(view.viewportSize.x);
-    int height = int(view.viewportSize.y);
-
-    // Reflect the position across the screen edges.
-    // Compared to simple clamping, this prevents the spread of colorful blobs from screen edges.
-    if (pixelPosition.x < 0) pixelPosition.x = -pixelPosition.x;
-    if (pixelPosition.y < 0) pixelPosition.y = -pixelPosition.y;
-    if (pixelPosition.x >= width) pixelPosition.x = 2 * width - pixelPosition.x - 1;
-    if (pixelPosition.y >= height) pixelPosition.y = 2 * height - pixelPosition.y - 1;
-
-    return pixelPosition;
-}
-
 vec3 getMotionVector(
     PlanarViewConstants view,
     PlanarViewConstants viewPrev,

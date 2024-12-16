@@ -583,7 +583,9 @@ RTXDI_DIReservoir RTXDI_SampleBrdf(
             o_selectedSample = candidateSample;
         }
     }
-
+        state.lightData = 100;
+    state.weightSum = 1000.0;
+    state.targetPdf = 1.0;
     RTXDI_FinalizeResampling(state, 1.0, sampleParams.numMisSamples);
     state.M = 1;
 
@@ -637,12 +639,13 @@ localSample);
 
     RTXDI_DIReservoir state = RTXDI_EmptyDIReservoir();
     RTXDI_CombineDIReservoirs(state, localReservoir, 0.5, localReservoir.targetPdf);
-    bool selectInfinite = RTXDI_CombineDIReservoirs(state, infiniteReservoir, RAB_GetNextRandom(rng), infiniteReservoir.targetPdf);
+     bool selectInfinite = RTXDI_CombineDIReservoirs(state, infiniteReservoir, RAB_GetNextRandom(rng), infiniteReservoir.targetPdf);
 #if RTXDI_ENABLE_PRESAMPLING
     bool selectEnvironment = RTXDI_CombineDIReservoirs(state, environmentReservoir, RAB_GetNextRandom(rng), environmentReservoir.targetPdf);
 #endif // RTXDI_ENABLE_PRESAMPLING
+
     bool selectBrdf = RTXDI_CombineDIReservoirs(state, brdfReservoir, RAB_GetNextRandom(rng), brdfReservoir.targetPdf);
-    
+
     RTXDI_FinalizeResampling(state, 1.0, 1.0);
     state.M = 1;
 

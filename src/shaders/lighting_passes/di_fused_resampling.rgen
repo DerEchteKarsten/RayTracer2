@@ -34,16 +34,23 @@ void main() {
     RAB_LightSample lightSample;
     RTXDI_DIReservoir reservoir = RTXDI_SampleLightsForSurface(rng, tileRng, surface,
         sampleParams, g_Const.lightBufferParams, g_Const.restirDI.initialSamplingParams.localLightSamplingMode,
-        g_Const.localLightsRISBufferSegmentParams, g_Const.environmentLightRISBufferSegmentParams,
+      //  g_Const.localLightsRISBufferSegmentParams, g_Const.environmentLightRISBufferSegmentParams,
     lightSample);
+    
+    StoreShadingOutput(
+        ivec2(gl_LaunchIDEXT.xy), 
+        vec3(reservoir.lightData & RTXDI_DIReservoir_LightIndexMask), 
+        vec3(0.0), 
+        g_Const.enableRestirDI == 1
+    );
 
-    if (g_Const.restirDI.initialSamplingParams.enableInitialVisibility == 1 && RTXDI_IsValidDIReservoir(reservoir))
-    {
-        if (!RAB_GetConservativeVisibility(surface, lightSample))
-        {
-            RTXDI_StoreVisibilityInDIReservoir(reservoir, vec3(0), true);
-        }
-    }
+    // if (g_Const.restirDI.initialSamplingParams.enableInitialVisibility == 1 && RTXDI_IsValidDIReservoir(reservoir))
+    // {
+    //     if (!RAB_GetConservativeVisibility(surface, lightSample))
+    //     {
+    //          RTXDI_StoreVisibilityInDIReservoir(reservoir, vec3(0), true);
+    //     }
+    // }
 
     ivec2 temporalSamplePixelPos = ivec2(-1);
 
@@ -66,10 +73,8 @@ void main() {
     stparams.uniformRandomNumber = g_Const.restirDI.temporalResamplingParams.uniformRandomNumber;
     stparams.discountNaiveSamples = false;
 
-    reservoir = RTXDI_DISpatioTemporalResampling(pixelPosition, surface, reservoir,
-            rng, params, g_Const.restirDI.reservoirBufferParams, stparams, temporalSamplePixelPos, lightSample);
-
-    imageStore(TemporalSamplePositions, ivec2(gl_LaunchIDEXT.xy), ivec4(temporalSamplePixelPos, 0, 0));
+    // reservoir = RTXDI_DISpatioTemporalResampling(pixelPosition, surface, reservoir,
+    //         rng, params, g_Const.restirDI.reservoirBufferParams, stparams, temporalSamplePixelPos, lightSample);
 
     vec3 diffuse = vec3(0);
     vec3 specular = vec3(0);
@@ -81,16 +86,11 @@ void main() {
         ShadeSurfaceWithLightSample(reservoir, surface, lightSample,
             /* previousFrameTLAS = */ false, /* enableVisibilityReuse = */ true, diffuse, specular, lightDistance);
 
-        
+        diffuse = lightSample.radiance;
         specular = DemodulateSpecular(surface.specularF0, specular);
     }
 
     RTXDI_StoreDIReservoir(reservoir, g_Const.restirDI.reservoirBufferParams, gl_LaunchIDEXT.xy, g_Const.restirDI.bufferIndices.shadingInputBufferIndex);
 
-    StoreShadingOutput(
-        ivec2(gl_LaunchIDEXT.xy), 
-        diffuse, 
-        specular, 
-        g_Const.enableRestirDI == 1
-    );
+
 }

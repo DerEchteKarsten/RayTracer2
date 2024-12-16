@@ -115,6 +115,8 @@ void main()
     uint lightBufferPtr = task.lightBufferOffset + triangleIdx;
     t_LightDataBuffer[lightBufferPtr] = lightInfo;
 
+    debugPrintfEXT("%f", unpackLightRadiance(lightInfo.logRadiance));
+
     float emissiveFlux = getPower(lightInfo);
 
     uvec2 pdfTexturePosition = RTXDI_LinearIndexToZCurve(lightBufferPtr);

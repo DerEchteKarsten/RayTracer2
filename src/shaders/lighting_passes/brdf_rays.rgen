@@ -131,7 +131,7 @@ void main()
         GetGeometryFromHit(p.primitiveId, p.geometryIndex, p.uv, normal, specularF0, roughness, color, emission);
 
         if (includeEmissiveComponent)
-            radiance += emission;
+            radiance += emission * 12;
 
         secondarySurface.position = ray.Origin + ray.Direction * p.depth;
         secondarySurface.normal = (dot(normal, ray.Direction) < 0) ? normal : -normal;

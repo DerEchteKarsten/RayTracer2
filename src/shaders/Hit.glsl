@@ -37,7 +37,7 @@ void GetGeometryFromHit(
     }
 
     specularF0 = mix(vec3(0.0), color, geometryInfo.metallicFactor);
-    roughness = geometryInfo.roughness;
+    roughness = 1.0;//geometryInfo.roughness;
     emission = geometryInfo.emission.xyz;
 }
 

@@ -248,7 +248,7 @@ bool RTXDI_StreamSample(
 {
     // What's the current weight
     float risWeight = targetPdf * invSourcePdf;
-
+    
     // Add one sample to the counter
     reservoir.M += 1;
 

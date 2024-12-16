@@ -8,7 +8,8 @@
 #extension GL_EXT_shader_explicit_arithmetic_types : enable
 #define RTXDI_GLSL
 
-// #define RTXDI_GI_ALLOWED_BIAS_CORRECTION RTXDI_BIAS_CORRECTION_RAY_TRACED
+#define RTXDI_GI_ALLOWED_BIAS_CORRECTION RTXDI_BIAS_CORRECTION_RAY_TRACED
+#define RTXDI_ENABLE_PRESAMPLING 0
 
 #include "ShaderParameters.glsl"
 #include "packing.glsl"
@@ -35,7 +36,7 @@ layout(binding = 5, set = 1, rgba16f) uniform image2D GBufferEmissive;
 
 
 layout(binding = 0, set = 0, rgba32f) uniform  image2D MotionVectors;
-#if !COMPUTE
+#ifndef COMPUTE
 layout(binding = 1, set = 0) uniform accelerationStructureEXT SceneBVH;
 #endif
 layout(binding = 2, set = 0) uniform Uniform {ResamplingConstants g_Const;};
@@ -52,18 +53,16 @@ layout(binding = 11, set = 0) buffer GeomToLight {uint GeometryInstanceToLight[]
 layout(binding = 12, set = 0) buffer DIReservoirBuffer {RTXDI_PackedDIReservoir DIReservoirs[];};
 layout(binding = 13, set = 0, rgba16f) uniform image2D DiffuseLighting;
 layout(binding = 14, set = 0, rgba16f) uniform image2D SpecularLighting;
-layout(binding = 15, set = 0, rg16i) uniform iimage2D TemporalSamplePositions;
-layout(binding = 16, set = 0) buffer ReservoirBuffer {RTXDI_PackedGIReservoir GIReservoirs[];};
-layout(binding = 17, set = 0) buffer risBuffer {uvec2 RisBuffer[];};
-layout(binding = 18, set = 0) buffer risLightDataBuffer {uvec4 RisLightDataBuffer[];};
-layout(binding = 19, set = 0) buffer secondaryGBuffer {SecondaryGBufferData SecondaryGBuffer[];};
-layout(binding = 20, set = 0) uniform sampler2D textures[];
+layout(binding = 15, set = 0) buffer ReservoirBuffer {RTXDI_PackedGIReservoir GIReservoirs[];};
+layout(binding = 16, set = 0) buffer risBuffer {uvec2 RisBuffer[];};
+layout(binding = 17, set = 0) buffer risLightDataBuffer {uvec4 RisLightDataBuffer[];};
+layout(binding = 18, set = 0) buffer secondaryGBuffer {SecondaryGBufferData SecondaryGBuffer[];};
+layout(binding = 19, set = 0) uniform sampler2D textures[];
 
 #define RTXDI_RIS_BUFFER RisBuffer 
 #define RTXDI_GI_RESERVOIR_BUFFER GIReservoirs
 #define RTXDI_NEIGHBOR_OFFSETS_BUFFER Neighbors
 #define RTXDI_LIGHT_RESERVOIR_BUFFER DIReservoirs
-#define RTXDI_ENABLE_PRESAMPLING 1
 #define PolymorphicLightInfo RAB_LightInfo;
 #define RandomSamplerState RAB_RandomSamplerState;
 
@@ -132,10 +131,11 @@ vec3 tangentToWorld(RAB_Surface surface, vec3 h)
 
 float getSurfaceDiffuseProbability(RAB_Surface surface)
 {
-    float diffuseWeight = calcLuminance(surface.diffuseAlbedo);
-    float specularWeight = calcLuminance(Schlick_Fresnel(surface.specularF0, dot(surface.viewDir, surface.normal)));
-    float sumWeights = diffuseWeight + specularWeight;
-    return sumWeights < 1e-7f ? 1.f : (diffuseWeight / sumWeights);
+    // float diffuseWeight = calcLuminance(surface.diffuseAlbedo);
+    // float specularWeight = calcLuminance(Schlick_Fresnel(surface.specularF0, dot(surface.viewDir, surface.normal)));
+    // float sumWeights = diffuseWeight + specularWeight;
+    // return sumWeights < 1e-7f ? 1.f : (diffuseWeight / sumWeights);
+    return 1.0;
 }
 
 struct SplitBrdf
@@ -221,7 +221,7 @@ bool GetConservativeVisibility(RAB_Surface surface, float3 samplePosition)
     RayDesc ray = setupVisibilityRay(surface, samplePosition);
     trace(ray);
 
-    #if !COMPUTE
+    #ifndef COMPUTE
     return p.geometryIndex == ~0u;
     #else
     return false;
@@ -654,7 +654,7 @@ bool RAB_TraceRayForLocalLight(float3 origin, float3 direction, float tMin, floa
     bool hitAnything;
 
     trace(ray);
-    #if !COMPUTE
+    #ifndef COMPUTE
     hitAnything = p.geometryIndex != ~0u;
     hitUV = p.uv;
     o_lightIndex = getLightIndex(p.geometryIndex, p.primitiveId);

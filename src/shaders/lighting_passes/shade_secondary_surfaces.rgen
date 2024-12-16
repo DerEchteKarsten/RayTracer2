@@ -74,7 +74,7 @@ void main() {
         RAB_LightSample lightSample;
         RTXDI_DIReservoir reservoir = RTXDI_SampleLightsForSurface(rng, tileRng, secondarySurface,
             sampleParams, g_Const.lightBufferParams, g_Const.restirDI.initialSamplingParams.localLightSamplingMode,
-        g_Const.localLightsRISBufferSegmentParams, g_Const.environmentLightRISBufferSegmentParams,
+       // g_Const.localLightsRISBufferSegmentParams, g_Const.environmentLightRISBufferSegmentParams,
         lightSample);
 
         float4 secondaryClipPos = g_Const.view.matWorldToClip * float4(secondaryGBufferData.worldPos, 1.0);
@@ -123,7 +123,7 @@ void main() {
         RAB_GetSurfaceBrdfSample(secondarySurface, rng, ray.Direction);
         vec3 emission;
         GetSurface(ray, emission);
-        radiance = emission * 12 * secondarySurface.diffuseAlbedo;
+        radiance += emission * 12 * secondarySurface.diffuseAlbedo;
     }
 
     RTXDI_GIReservoir reservoir = RTXDI_EmptyGIReservoir();

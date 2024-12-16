@@ -1498,8 +1498,6 @@ impl Image {
             image_buffer
         };
 
-        log::debug!("TODO: Mip Levels");
-
         let texture_image = Self::new_2d(
             &renderer.device,
             &mut renderer.allocator,

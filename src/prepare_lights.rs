@@ -179,7 +179,6 @@ impl PrepareLightsTasks {
     ) {
         unsafe {
             let mut geometry_to_light = vec![0xffffffffu32; model.geometry_infos.len()];
-            // log::debug!("{}");
             let mut light_tasks = vec![];
             let mut light_buffer_offset = 0;
             for (geometry_index, geometry) in model.geometry_infos.iter().enumerate() {
@@ -189,10 +188,8 @@ impl PrepareLightsTasks {
                 {
                     continue;
                 }
-                log::debug!("{:?}", geometry.emission);
                 geometry_to_light[geometry_index] = light_buffer_offset;
                 let triangle_count = model.index_counts[geometry_index] / 3;
-                log::debug!("{:?}", triangle_count);
                 light_tasks.push(PrepareLightsTask {
                     geometry_index: geometry_index as u32,
                     light_buffer_offset,

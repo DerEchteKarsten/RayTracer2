@@ -32,7 +32,6 @@ pub struct RenderResources {
     pub g_buffers: [GBuffer; 2],
     pub diffuse_lighting: ImageAndView,
     pub specular_lighting: ImageAndView,
-    pub temporal_sample_position: ImageAndView,
     pub secondary_gbuffer: Buffer,
 }
 
@@ -306,13 +305,6 @@ impl RenderResources {
                 vk::Format::R16G16B16A16_SFLOAT,
             )
             .unwrap();
-        let temporal_sample_position = ctx
-            .create_storage_image(
-                WINDOW_SIZE.x as u32,
-                WINDOW_SIZE.y as u32,
-                vk::Format::R16G16_SINT,
-            )
-            .unwrap();
 
         let secondary_gbuffer = ctx
             .create_buffer(
@@ -344,7 +336,6 @@ impl RenderResources {
             local_light_pdf_sampler,
             diffuse_lighting,
             specular_lighting,
-            temporal_sample_position,
             secondary_gbuffer,
         }
     }

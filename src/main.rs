@@ -62,7 +62,11 @@ fn main() {
     let model_thread = std::thread::spawn(|| gltf::load_file("./src/models/box.glb").unwrap());
     let image_thread = std::thread::spawn(|| image::open("./src/models/skybox2.exr").unwrap());
 
-    SimpleLogger::new().init().unwrap();
+    SimpleLogger::new()
+        .with_level(log::LevelFilter::Debug)
+        .with_colors(true)
+        .init()
+        .unwrap();
 
     let device_extensions: [&CStr; 11] = [
         swapchain::NAME,
@@ -240,12 +244,12 @@ fn main() {
                 temporal_resampling_output_buffer_index: 0,
                 spatial_resampling_input_buffer_index: 0,
                 spatial_resampling_output_buffer_index: 1,
-                final_shading_input_buffer_index: if RESAMPLING { 1 } else { 0 },
+                final_shading_input_buffer_index: 0,
                 pad1: 0,
                 pad2: 0,
             },
             final_shading_params: ReSTIRGI_FinalShadingParameters {
-                enable_final_mis: 0,
+                enable_final_mis: 1,
                 enable_final_visibility: 0,
                 pad1: 0,
                 pad2: 0,
@@ -307,12 +311,12 @@ fn main() {
         restir_di: ReSTIRDI_Parameters {
             reservoir_buffer_params,
             buffer_indices: ReSTIRDI_BufferIndices {
-                shading_input_buffer_index: 1,
+                shading_input_buffer_index: 0,
                 temporal_resampling_input_buffer_index: 1,
                 temporal_resampling_output_buffer_index: 0,
                 spatial_resampling_input_buffer_index: 0,
                 spatial_resampling_output_buffer_index: 1,
-                initial_sampling_output_buffer_index: 1,
+                initial_sampling_output_buffer_index: 0,
                 pad1: 0,
                 pad2: 0,
             },
@@ -322,14 +326,14 @@ fn main() {
                 num_primary_environment_samples: 0,
                 num_primary_brdf_samples: 1,
                 brdf_cutoff: 0.0,
-                enable_initial_visibility: 1,
-                environment_map_importance_sampling: 1,
-                local_light_sampling_mode: 2,
+                enable_initial_visibility: 0,
+                environment_map_importance_sampling: 0,
+                local_light_sampling_mode: 0,
             },
             temporal_resampling_params: ReSTIRDI_TemporalResamplingParameters {
                 temporal_depth_threshold: 0.1,
                 temporal_normal_threshold: 0.3,
-                max_history_length: 100,
+                max_history_length: 5,
                 temporal_bias_correction: 2,
                 enable_permutation_sampling: 0,
                 permutation_sampling_threshold: 0.0,
@@ -352,10 +356,10 @@ fn main() {
             },
             shading_params: ReSTIRDI_ShadingParameters {
                 enable_final_visibility: 0,
-                reuse_final_visibility: 1,
+                reuse_final_visibility: 0,
                 final_visibility_max_age: 10,
-                final_visibility_max_distance: 1000.0,
-                enable_denoiser_input_packing: 1,
+                final_visibility_max_distance: 1000.0,  
+                enable_denoiser_input_packing: 0,
                 pad1: 0,
                 pad2: 0,
                 pad3: 0,
@@ -376,23 +380,23 @@ fn main() {
             },
             environment_light_params: RTXDI_EnvironmentLightBufferParameters {
                 light_present: 1,
-                light_index: model.lights,
+                light_index: model.lights +1,
                 pad1: 0,
                 pad2: 0,
             },
         },
         enable_accumulation: 0,
-        enable_brdf_additive_blend: 0,
-        enable_brdf_indirect: 0,
+        enable_brdf_additive_blend: 1,
+        enable_brdf_indirect: 1,
         enable_restir_di: 0,
-        enable_restir_gi: 0,
+        enable_restir_gi: 1,
         frame: 0,
         refrence_mode: 0,
-        textures: 0,
+        textures: 1,
         blend_factor: 0.1,
-        enable_spatial_resampling: 1,
-        enable_temporal_resampling: 1,
-        environment: 1,
+        enable_spatial_resampling: 0,
+        enable_temporal_resampling: 0,
+        environment: 0,
     };
 
     let prepare_lights = PrepareLightsTasks::new(
@@ -511,7 +515,6 @@ fn main() {
                         // sleep(Duration::from_millis(30));
 
                         let image_index = ctx.await_next_frame().unwrap();
-                        println!("next frame --------------------------------");
 
                         frame += 1;
                         let ui = imgui.frame();
@@ -529,33 +532,97 @@ fn main() {
                                     "Frame: {}, Swapchain Image: {}", frame, image_index
                                 ));
 
-                                ui.separator();
-                                ui.checkbox_flags("Refrence Mode", &mut g_const.refrence_mode, 0x1);
-                                ui.checkbox_flags("Accumulation", &mut g_const.enable_accumulation, 0x1);
-                                ui.checkbox_flags("Textures", &mut g_const.textures, 0x1);
-                                ui.checkbox_flags("RestirDI", &mut g_const.enable_restir_di, 0x1);
-                                ui.checkbox_flags("RestirGI", &mut g_const.enable_restir_gi, 0x1);
+                                if ui.collapsing_header("Passes", TreeNodeFlags::DEFAULT_OPEN | TreeNodeFlags::OPEN_ON_ARROW | TreeNodeFlags::OPEN_ON_DOUBLE_CLICK) {
+                                    ui.checkbox_flags("Refrence Mode", &mut g_const.refrence_mode, 0x1);
+                                    ui.checkbox_flags("RestirDI", &mut g_const.enable_restir_di, 0x1);
+                                    ui.checkbox_flags("RestirGI", &mut g_const.enable_restir_gi, 0x1);
+                                    ui.separator();
+                                    ui.checkbox_flags("Environment", &mut g_const.environment, 0x1);
+                                    ui.checkbox_flags("Textures", &mut g_const.textures, 0x1);
+                                    ui.separator();
+                                    ui.checkbox_flags("Spatial Resampling", &mut g_const.enable_spatial_resampling, 0x1);
+                                    ui.checkbox_flags("Temporal Resampling", &mut g_const.enable_temporal_resampling, 0x1);
+                                }
                                 
-                                ui.separator();
-                                ui.checkbox_flags("Environment", &mut g_const.environment, 0x1);
-
-                                ui.separator();
-                                ui.checkbox_flags("Spatial Resampling", &mut g_const.enable_spatial_resampling, 0x1);
-                                ui.checkbox_flags("Temporal Resampling", &mut g_const.enable_temporal_resampling, 0x1);
-
-                                ui.separator();
-                                ui.checkbox("Override Blend Factor", &mut override_blend_factor);
-                                ui.input_float("Blend Factor", &mut g_const.blend_factor).build();
                                 
-                                ui.separator();
-                                ui.checkbox_flags("Brdf Additive Blend", &mut g_const.enable_brdf_additive_blend, 0x1);
-                                ui.checkbox_flags("Brdf Indirect", &mut g_const.enable_brdf_indirect, 0x1);
-
-                                ui.separator();
-                                ui.checkbox_flags("Checker Board Field", &mut g_const.runtime_params.active_checkerboard_field, 0x1);
-                                ui.input_int("Neighbor Offset Mask", unsafe { std::mem::transmute(&mut g_const.runtime_params.neighbor_offset_mask) }).build();
-
+                                if ui.collapsing_header("Accumulation##2", TreeNodeFlags::DEFAULT_OPEN | TreeNodeFlags::OPEN_ON_ARROW | TreeNodeFlags::OPEN_ON_DOUBLE_CLICK) {
+                                    ui.checkbox_flags("Accumulation##1", &mut g_const.enable_accumulation, 0x1);
+                                    if g_const.enable_accumulation == 1 {
+                                        ui.checkbox("Override Blend Factor", &mut override_blend_factor);
+                                        if override_blend_factor {
+                                            ui.input_float("Blend Factor", &mut g_const.blend_factor).build();
+                                        }
+                                    }
+                                }
                                 
+                                if ui.collapsing_header("Restir GI", TreeNodeFlags::OPEN_ON_ARROW | TreeNodeFlags::OPEN_ON_DOUBLE_CLICK) {
+                                    ui.checkbox_flags("Checker Board Field", &mut g_const.runtime_params.active_checkerboard_field, 0x1);
+                                    ui.input_int("Neighbor Offset Mask", unsafe { std::mem::transmute(&mut g_const.runtime_params.neighbor_offset_mask) }).build();
+
+                                    ui.separator();
+                                    ui.checkbox_flags("Enable Final MIS", &mut g_const.restir_gi.final_shading_params.enable_final_mis, 0x1);
+                                    ui.checkbox_flags("Enable Final Visibility", &mut g_const.restir_gi.final_shading_params.enable_final_visibility, 0x1);
+                                    
+                                    ui.separator();
+                                    ui.checkbox_flags("Brdf Additive Blend", &mut g_const.enable_brdf_additive_blend, 0x1);
+                                    ui.checkbox_flags("Brdf Indirect", &mut g_const.enable_brdf_indirect, 0x1);
+                                    
+                                    ui.separator();
+                                    ui.input_int("Num Spatial Sampels", unsafe { std::mem::transmute(&mut g_const.restir_gi.spatial_resampling_params.num_spatial_samples) }).build();
+                                    ui.input_int("Spatial Bias Correction Mode", unsafe { std::mem::transmute(&mut g_const.restir_gi.spatial_resampling_params.spatial_bias_correction_mode) }).build();
+                                    ui.input_float("Spatial Depth Threshold", &mut g_const.restir_gi.spatial_resampling_params.spatial_depth_threshold).build();
+                                    ui.input_float("Spatial Normal Threshold", &mut g_const.restir_gi.spatial_resampling_params.spatial_normal_threshold).build();
+                                    ui.input_float("Spatial Sampling Radius", &mut g_const.restir_gi.spatial_resampling_params.spatial_sampling_radius).build();
+
+                                    ui.separator();
+                                    ui.input_int("Temporal Bias Correction Mode", unsafe { std::mem::transmute(&mut g_const.restir_gi.temporal_resampling_params.temporal_bias_correction_mode) }).build();
+                                    ui.input_float("Temporal Depth Threshold", &mut g_const.restir_gi.temporal_resampling_params.depth_threshold).build();
+                                    ui.input_float("Temporal Normal Threshold", &mut g_const.restir_gi.temporal_resampling_params.normal_threshold).build();
+                                    ui.checkbox_flags("Enable Fallback Sampling", &mut g_const.restir_gi.temporal_resampling_params.enable_fallback_sampling, 0x1);
+                                    ui.checkbox_flags("Enable Permutation Sampling", &mut g_const.restir_gi.temporal_resampling_params.enable_permutation_sampling, 0x1);
+                                    ui.input_int("Max History Length", unsafe { std::mem::transmute(&mut g_const.restir_gi.temporal_resampling_params.max_history_length) }).build();
+                                    ui.input_int("Max Reservoir Age", unsafe { std::mem::transmute(&mut g_const.restir_gi.temporal_resampling_params.max_reservoir_age) }).build();
+                                    ui.input_int("Random Number", unsafe { std::mem::transmute(&mut g_const.restir_gi.temporal_resampling_params.uniform_random_number) }).build();
+    
+                                    ui.separator();
+                                    ui.input_int("Secondary Surface Output", unsafe { std::mem::transmute(&mut g_const.restir_gi.buffer_indices.secondary_surface_re_stirdioutput_buffer_index) }).build();
+                                    ui.input_int("Temporal Input", unsafe { std::mem::transmute(&mut g_const.restir_gi.buffer_indices.temporal_resampling_input_buffer_index) }).build();
+                                    ui.input_int("Temporal Output", unsafe { std::mem::transmute(&mut g_const.restir_gi.buffer_indices.temporal_resampling_output_buffer_index) }).build();
+                                    ui.input_int("Spatial Input", unsafe { std::mem::transmute(&mut g_const.restir_gi.buffer_indices.spatial_resampling_input_buffer_index) }).build();
+                                    ui.input_int("Spatial Output", unsafe { std::mem::transmute(&mut g_const.restir_gi.buffer_indices.spatial_resampling_output_buffer_index) }).build();
+                                    ui.input_int("Final Shading Input", unsafe { std::mem::transmute(&mut g_const.restir_gi.buffer_indices.final_shading_input_buffer_index) }).build();
+                                }
+
+                                if ui.collapsing_header("Restir DI", TreeNodeFlags::OPEN_ON_ARROW | TreeNodeFlags::OPEN_ON_DOUBLE_CLICK) {
+                                    ui.input_int("Num Spatial Sampels##2", unsafe { std::mem::transmute(&mut g_const.restir_di.spatial_resampling_params.num_spatial_samples) }).build();
+                                    ui.input_int("Bias Correction##2", unsafe { std::mem::transmute(&mut g_const.restir_di.spatial_resampling_params.spatial_bias_correction)}).build();
+                                    ui.input_float("Spatial Depth Threshold##2", &mut g_const.restir_di.spatial_resampling_params.spatial_depth_threshold).build();
+                                    ui.input_float("Spatial Normal Threshold##2", &mut g_const.restir_di.spatial_resampling_params.spatial_normal_threshold).build();
+                                    ui.input_float("Spatial Sampling Radius##2", &mut g_const.restir_di.spatial_resampling_params.spatial_sampling_radius).build();
+                                    ui.checkbox_flags("Discount Naive Samples##2", &mut g_const.restir_di.spatial_resampling_params.discount_naive_samples, 0x1);
+                                    ui.input_int("Neighbor Offset Mask##2", unsafe { std::mem::transmute(&mut g_const.restir_di.spatial_resampling_params.neighbor_offset_mask) }).build();
+                                    ui.input_int("Disocclusion Boost Samples##2", unsafe { std::mem::transmute(&mut g_const.restir_di.spatial_resampling_params.num_disocclusion_boost_samples) }).build();
+    
+                                    ui.separator();
+                                    ui.input_int("Temporal Bias Correction Mode##2", unsafe { std::mem::transmute(&mut g_const.restir_di.temporal_resampling_params.temporal_bias_correction) }).build();
+                                    ui.input_float("Temporal Depth Threshold##2", &mut g_const.restir_di.temporal_resampling_params.temporal_depth_threshold).build();
+                                    ui.input_float("Temporal Normal Threshold##2", &mut g_const.restir_di.temporal_resampling_params.temporal_normal_threshold).build();
+                                    ui.checkbox_flags("Enable Permutation Sampling##2", &mut g_const.restir_di.temporal_resampling_params.enable_permutation_sampling, 0x1);
+                                    ui.input_int("Max History Length##2", unsafe { std::mem::transmute(&mut g_const.restir_di.temporal_resampling_params.max_history_length) }).build();
+                                    ui.input_int("Random Number##2", unsafe { std::mem::transmute(&mut g_const.restir_di.temporal_resampling_params.uniform_random_number) }).build();
+                                    ui.checkbox_flags("Discard Invisible Samples##2", &mut g_const.restir_di.temporal_resampling_params.discard_invisible_samples, 0x1);
+                                    ui.input_float("Permutation Sampling Threshold##2", &mut g_const.restir_di.temporal_resampling_params.permutation_sampling_threshold).build();
+
+                                    ui.separator();
+                                    ui.input_float("Brdf Cutoff", &mut g_const.restir_di.initial_sampling_params.brdf_cutoff).build();
+                                    ui.checkbox_flags("Initial Visibility", &mut g_const.restir_di.initial_sampling_params.enable_initial_visibility, 0x1);
+                                    ui.checkbox_flags("Environment Importance Sampling", &mut g_const.restir_di.initial_sampling_params.environment_map_importance_sampling, 0x1);
+                                    ui.input_int("Local Light Sampling Mode", unsafe { std::mem::transmute(&mut g_const.restir_di.initial_sampling_params.local_light_sampling_mode) }).build();
+                                    ui.input_int("Num Brdf Samples", unsafe { std::mem::transmute(&mut g_const.restir_di.initial_sampling_params.num_primary_brdf_samples) }).build();
+                                    ui.input_int("Num Environment Samples", unsafe { std::mem::transmute(&mut g_const.restir_di.initial_sampling_params.num_primary_environment_samples) }).build();
+                                    ui.input_int("Num Infinite Light Samples", unsafe { std::mem::transmute(&mut g_const.restir_di.initial_sampling_params.num_primary_infinite_light_samples) }).build();
+                                    ui.input_int("Num Local Light Samples", unsafe { std::mem::transmute(&mut g_const.restir_di.initial_sampling_params.num_primary_local_light_samples) }).build();
+                                }
 
                             });
 
@@ -578,10 +645,9 @@ fn main() {
                         g_const.view = camera.planar_view_constants();
                         g_const.frame = frame as u32;
 
-                        println!(
-                            "{}: {:?}------------------------------------------",
-                            frame, frame_time
-                        );
+                        g_const.restir_di.buffer_indices.temporal_resampling_input_buffer_index ^= g_const.restir_di.buffer_indices.shading_input_buffer_index;
+                        g_const.restir_di.buffer_indices.shading_input_buffer_index ^= g_const.restir_di.buffer_indices.temporal_resampling_input_buffer_index;
+                        g_const.restir_di.buffer_indices.temporal_resampling_input_buffer_index ^= g_const.restir_di.buffer_indices.shading_input_buffer_index;
 
                         if frame_time.as_millis() > 16 {
                             log::error!("Over Frame Budget!!!!");

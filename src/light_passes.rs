@@ -200,8 +200,6 @@ impl LightPasses {
             vk::DescriptorSetLayoutBinding::default()
                 .descriptor_type(DescriptorType::STORAGE_IMAGE), // Specular Lighting
             vk::DescriptorSetLayoutBinding::default()
-                .descriptor_type(DescriptorType::STORAGE_IMAGE), // Temporal Sample Positions
-            vk::DescriptorSetLayoutBinding::default()
                 .descriptor_type(DescriptorType::STORAGE_BUFFER), // GI Reservoirs
             vk::DescriptorSetLayoutBinding::default()
                 .descriptor_type(DescriptorType::STORAGE_BUFFER), // RIS Buffer
@@ -340,10 +338,6 @@ impl LightPasses {
                     view: resources.specular_lighting.view,
                     layout: vk::ImageLayout::GENERAL,
                 },
-                WriteDescriptorSetKind::StorageImage {
-                    view: resources.temporal_sample_position.view,
-                    layout: vk::ImageLayout::GENERAL,
-                },
                 WriteDescriptorSetKind::StorageBuffer {
                     buffer: resources.gi_reservoir_buffer.inner,
                 },
@@ -444,7 +438,7 @@ impl LightPasses {
                     &[vk::WriteDescriptorSet::default()
                         .dst_array_element(i as u32)
                         .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                        .dst_binding(20)
+                        .dst_binding(19)
                         .dst_set(static_set.clone())
                         .image_info(&[img_info])],
                     &[],
@@ -613,7 +607,7 @@ impl LightPasses {
 
                 if g_const.enable_restir_di == 1 {
                     self.di_fused_resampling_pass.execute(ctx, cmd);
-
+                    
                     ctx.memory_barrier(
                         cmd,
                         vk::PipelineStageFlags2::ALL_COMMANDS,
