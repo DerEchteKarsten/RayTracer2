@@ -27,13 +27,13 @@ void main() {
 
         vec3 motionVector = getMotionVector(g_Const.view, g_Const.prevView, 
             worldPos, worldPos);
-        
+
         imageStore(GBufferDepth, pixelCord, vec4(p.depth)); 
         imageStore(GBufferNormals, pixelCord, uvec4(ndirToOctUnorm32(normal))); 
         imageStore(GBufferGeoNormals, pixelCord, uvec4(ndirToOctUnorm32(normal))); 
         imageStore(GBufferDiffuseAlbedo, pixelCord, uvec4(Pack_R11G11B10_UFLOAT(color))); 
         imageStore(GBufferSpecularRough, pixelCord, uvec4(Pack_R8G8B8A8_Gamma_UFLOAT(vec4(specularF0, roughness)))); 
-        imageStore(GBufferEmissive, pixelCord, vec4(emission, 0.0));
+        imageStore(GBufferEmissive, pixelCord, vec4(emission * 12, 0.0));
         imageStore(MotionVectors, pixelCord, vec4(motionVector, 0.0));
     }else {
         imageStore(GBufferDepth, pixelCord, vec4(BACKGROUND_DEPTH)); 

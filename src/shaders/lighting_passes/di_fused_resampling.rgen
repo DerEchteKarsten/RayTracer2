@@ -37,20 +37,13 @@ void main() {
       //  g_Const.localLightsRISBufferSegmentParams, g_Const.environmentLightRISBufferSegmentParams,
     lightSample);
     
-    StoreShadingOutput(
-        ivec2(gl_LaunchIDEXT.xy), 
-        vec3(reservoir.lightData & RTXDI_DIReservoir_LightIndexMask), 
-        vec3(0.0), 
-        g_Const.enableRestirDI == 1
-    );
-
-    // if (g_Const.restirDI.initialSamplingParams.enableInitialVisibility == 1 && RTXDI_IsValidDIReservoir(reservoir))
-    // {
-    //     if (!RAB_GetConservativeVisibility(surface, lightSample))
-    //     {
-    //          RTXDI_StoreVisibilityInDIReservoir(reservoir, vec3(0), true);
-    //     }
-    // }
+    if (g_Const.restirDI.initialSamplingParams.enableInitialVisibility == 1 && RTXDI_IsValidDIReservoir(reservoir))
+    {
+        if (!RAB_GetConservativeVisibility(surface, lightSample))
+        {
+             RTXDI_StoreVisibilityInDIReservoir(reservoir, vec3(0), true);
+        }
+    }
 
     ivec2 temporalSamplePixelPos = ivec2(-1);
 
@@ -92,5 +85,10 @@ void main() {
 
     RTXDI_StoreDIReservoir(reservoir, g_Const.restirDI.reservoirBufferParams, gl_LaunchIDEXT.xy, g_Const.restirDI.bufferIndices.shadingInputBufferIndex);
 
-
+    StoreShadingOutput(
+        ivec2(gl_LaunchIDEXT.xy), 
+        diffuse, 
+        specular, 
+        g_Const.enableRestirDI == 1
+    );
 }

@@ -177,14 +177,15 @@ impl PrepareLightsTasks {
         geometry_to_light_buffer_and_staging: (&Buffer, &Buffer),
         model: &Model,
     ) {
+        //0xffffffffu32
         unsafe {
             let mut geometry_to_light = vec![0xffffffffu32; model.geometry_infos.len()];
             let mut light_tasks = vec![];
             let mut light_buffer_offset = 0;
             for (geometry_index, geometry) in model.geometry_infos.iter().enumerate() {
                 if geometry.emission[0] == 0.0
-                    && geometry.emission[1] == 0.0
-                    && geometry.emission[2] == 0.0
+                && geometry.emission[1] == 0.0
+                && geometry.emission[2] == 0.0
                 {
                     continue;
                 }

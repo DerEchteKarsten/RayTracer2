@@ -583,9 +583,7 @@ RTXDI_DIReservoir RTXDI_SampleBrdf(
             o_selectedSample = candidateSample;
         }
     }
-        state.lightData = 100;
-    state.weightSum = 1000.0;
-    state.targetPdf = 1.0;
+
     RTXDI_FinalizeResampling(state, 1.0, sampleParams.numMisSamples);
     state.M = 1;
 

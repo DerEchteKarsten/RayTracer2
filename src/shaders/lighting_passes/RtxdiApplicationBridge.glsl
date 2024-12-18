@@ -69,7 +69,6 @@ layout(binding = 19, set = 0) uniform sampler2D textures[];
 #include "rtxdi/GIReservoir.hlsli"
 #include "Helpers.glsl"
 
-const bool environmentMapImportanceSampling = true;
 const bool kSpecularOnly = false;
 
 void trace(RayDesc ray) {
@@ -397,7 +396,7 @@ float2 RAB_GetEnvironmentMapRandXYFromDir(float3 worldDir)
 // relative to all the other possible directions, based on the environment map pdf texture.
 float RAB_EvaluateEnvironmentMapSamplingPdf(float3 L)
 {
-    if (!environmentMapImportanceSampling)
+    if (g_Const.restirDI.initialSamplingParams.environmentMapImportanceSampling == 0)
         return 1.0;
 
     float2 uv = RAB_GetEnvironmentMapRandXYFromDir(L);
@@ -519,9 +518,9 @@ RAB_LightSample RAB_SamplePolymorphicLight(RAB_LightInfo lightInfo, RAB_Surface 
     RAB_LightSample lightSample;
     lightSample.position = pls.position;
     lightSample.normal = pls.normal;
-    lightSample.radiance = pls.radiance;
-    lightSample.solidAnglePdf = pls.solidAnglePdf;
-    lightSample.lightType = getLightType(lightInfo);
+    lightSample.radiance = vec3(14.0);//pls.radiance;
+    lightSample.solidAnglePdf = 1.0;//pls.solidAnglePdf;
+    lightSample.lightType = kTriangle;//getLightType(lightInfo);
     return lightSample;
 }
 
@@ -629,9 +628,7 @@ float3 GetEnvironmentRadiance(float3 direction)
 
 uint getLightIndex(uint geometryIndex, uint primitiveIndex)
 {
-    uint lightIndex = RTXDI_InvalidLightIndex;
-    uint geometryInstanceIndex = geometryIndex;
-    lightIndex = GeometryInstanceToLight[geometryInstanceIndex];
+    uint lightIndex = GeometryInstanceToLight[geometryIndex];
     if (lightIndex != RTXDI_InvalidLightIndex)
       lightIndex += primitiveIndex;
     return lightIndex;
@@ -643,6 +640,7 @@ bool RAB_TraceRayForLocalLight(float3 origin, float3 direction, float tMin, floa
     out uint o_lightIndex, out float2 o_randXY)
 {
     o_randXY = vec2(0);
+    o_lightIndex = RTXDI_InvalidLightIndex;
 
     RayDesc ray;
     ray.Origin = origin;
@@ -656,8 +654,10 @@ bool RAB_TraceRayForLocalLight(float3 origin, float3 direction, float tMin, floa
     trace(ray);
     #ifndef COMPUTE
     hitAnything = p.geometryIndex != ~0u;
-    hitUV = p.uv;
-    o_lightIndex = getLightIndex(p.geometryIndex, p.primitiveId);
+    if(hitAnything){
+        hitUV = p.uv;
+        o_lightIndex = getLightIndex(p.geometryIndex, p.primitiveId);
+    }
     #endif
 
     if (o_lightIndex != RTXDI_InvalidLightIndex)

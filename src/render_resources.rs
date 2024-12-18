@@ -152,7 +152,7 @@ impl RenderResources {
             .create_buffer(
                 BufferUsageFlags::STORAGE_BUFFER | BufferUsageFlags::TRANSFER_DST,
                 MemoryLocation::GpuOnly,
-                model.geometry_infos.len() as u64,
+                model.geometry_infos.len() as u64 * 4,
                 None,
             )
             .unwrap();
@@ -160,7 +160,7 @@ impl RenderResources {
             .create_buffer(
                 BufferUsageFlags::STORAGE_BUFFER | BufferUsageFlags::TRANSFER_SRC,
                 MemoryLocation::CpuToGpu,
-                model.geometry_infos.len() as u64,
+                model.geometry_infos.len() as u64 * 4,
                 None,
             )
             .unwrap();
@@ -176,7 +176,7 @@ impl RenderResources {
             .create_buffer(
                 vk::BufferUsageFlags::STORAGE_BUFFER,
                 MemoryLocation::GpuOnly,
-                size_of::<u32>() as u64 * 8 * WINDOW_SIZE.x as u64 * WINDOW_SIZE.y as u64,
+                model.lights as u64 * 36,
                 None,
             )
             .unwrap();

@@ -70,8 +70,8 @@ float unpackLightRadiance(uint logRadiance)
 float3 unpackLightColor(RAB_LightInfo lightInfo)
 {
     float3 color = Unpack_R8G8B8_UFLOAT(lightInfo.colorTypeAndFlags);
-    float radiance = unpackLightRadiance(lightInfo.logRadiance & 0xffff);
-    return color * radiance.xxx;
+    float radiance = unpackLightRadiance(lightInfo.logRadiance & 0xffff); //TODO
+    return color * vec3(radiance);
 }
 
 void packLightColor(float3 radiance, inout RAB_LightInfo lightInfo)
@@ -183,7 +183,7 @@ float getPointLightWeightForVolume(in const float3 volumeCenter, in const float 
     return calcLuminance(self.flux) / square(distance);
 }
 
-static PointLight CreatePointLight(in const RAB_LightInfo lightInfo)
+PointLight CreatePointLight(in const RAB_LightInfo lightInfo)
 {
     PointLight pointLight;
 
@@ -237,7 +237,7 @@ PolymorphicLightSample calcDirectionalLightSample(in const float2 random, in con
 
 // Helper methods
 
-static DirectionalLight CreateDirectionalLight(in const RAB_LightInfo lightInfo)
+DirectionalLight CreateDirectionalLight(in const RAB_LightInfo lightInfo)
 {
     DirectionalLight directionalLight;
 
@@ -273,7 +273,7 @@ float calcTriangleSolidAnglePdf(in const float3 viewerPosition,
     L /= Ldist;
 
     const float areaPdf = 1.0 / self.surfaceArea;
-    const float sampleCosTheta = saturate(dot(L, -lightSampleNormal));
+    const float sampleCosTheta = clamp(dot(L, -lightSampleNormal), 0.0, 1.0);
 
     return pdfAtoW(areaPdf, Ldist, sampleCosTheta);
 }
@@ -317,7 +317,7 @@ float getTriangleWeightForVolume(in const float3 volumeCenter, in const float vo
 
 // Helper methods
 
-static TriangleLight CreateTriangleLight(in const RAB_LightInfo lightInfo)
+TriangleLight CreateTriangleLight(in const RAB_LightInfo lightInfo)
 {
     TriangleLight triLight;
 
@@ -412,7 +412,7 @@ PolymorphicLightSample calcEnvironmentLightSample(in const float2 random, in con
 
 // Helper methods
 
-static EnvironmentLight CreateEnvironmentLight(in const RAB_LightInfo lightInfo)
+EnvironmentLight CreateEnvironmentLight(in const RAB_LightInfo lightInfo)
 {
     EnvironmentLight envLight;
 
