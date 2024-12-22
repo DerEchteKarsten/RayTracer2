@@ -151,7 +151,7 @@ struct PointLight
     // Interface methods
 };
 
-PolymorphicLightSample calcPointLightSample(in const float3 viewerPosition, inout PointLight self)
+PolymorphicLightSample calcPointLightSample(in const float3 viewerPosition, PointLight self)
 {
     const float3 lightVector = self.position - viewerPosition;
     
@@ -205,7 +205,7 @@ struct DirectionalLight
 };
 // Interface methods
 
-PolymorphicLightSample calcDirectionalLightSample(in const float2 random, in const float3 viewerPosition, inout DirectionalLight self)
+PolymorphicLightSample calcDirectionalLightSample(in const float2 random, in const float3 viewerPosition, DirectionalLight self)
 {
     const float2 diskSample = SampleDisk(random);
 
@@ -263,22 +263,22 @@ struct TriangleLight
     // Interface methods
 };
 
-float calcTriangleSolidAnglePdf(in const float3 viewerPosition,
-                        in const float3 lightSamplePosition,
-                        in const float3 lightSampleNormal,
-                        inout TriangleLight self)
+float calcTriangleSolidAnglePdf(float3 viewerPosition,
+                        float3 lightSamplePosition,
+                        float3 lightSampleNormal,
+                        TriangleLight self)
 {
     float3 L = lightSamplePosition - viewerPosition;
     float Ldist = length(L);
     L /= Ldist;
 
-    const float areaPdf = 1.0 / self.surfaceArea;
-    const float sampleCosTheta = clamp(dot(L, -lightSampleNormal), 0.0, 1.0);
+    float areaPdf = 1.0 / self.surfaceArea;
+    float sampleCosTheta = clamp(dot(L, -lightSampleNormal), 0.0, 1.0);
 
     return pdfAtoW(areaPdf, Ldist, sampleCosTheta);
 }
 
-PolymorphicLightSample calcTriangleSample(in const float2 random, in const float3 viewerPosition, inout TriangleLight self)
+PolymorphicLightSample calcTriangleSample(in float2 random, in float3 viewerPosition, TriangleLight self)
 {
     PolymorphicLightSample result;
 
@@ -294,7 +294,7 @@ PolymorphicLightSample calcTriangleSample(in const float2 random, in const float
 }
 
 
-float getTrianglePower(inout TriangleLight self)
+float getTrianglePower(TriangleLight self)
 {
     return self.surfaceArea * RTXDI_PI * calcLuminance(self.radiance);
 }
@@ -325,8 +325,7 @@ TriangleLight CreateTriangleLight(in const RAB_LightInfo lightInfo)
     triLight.edge2 = octToNdirUnorm32(lightInfo.direction2) * f16tof32(lightInfo.scalars >> 16);
     triLight.base = lightInfo.center - (triLight.edge1 + triLight.edge2) / 3.0;
     triLight.radiance = unpackLightColor(lightInfo);
-
-    float3 lightNormal = cross(triLight.edge1, triLight.edge2);
+    float3 lightNormal = cross(triLight.edge1, triLight.edge2); 
     float lightNormalLength = length(lightNormal);
 
     if(lightNormalLength > 0.0)
@@ -366,7 +365,7 @@ struct EnvironmentLight
     uint2 textureSize;
 };
 
-PolymorphicLightSample calcEnvironmentLightSample(in const float2 random, in const float3 viewerPosition, inout EnvironmentLight self)
+PolymorphicLightSample calcEnvironmentLightSample(in const float2 random, in const float3 viewerPosition, EnvironmentLight self)
 {
     PolymorphicLightSample lightSample;
 
@@ -428,30 +427,18 @@ EnvironmentLight CreateEnvironmentLight(in const RAB_LightInfo lightInfo)
 
 
 PolymorphicLightSample calcSample(
-    in const RAB_LightInfo lightInfo, 
-    in const float2 random, 
-    in const float3 viewerPosition)
+    RAB_LightInfo lightInfo, 
+    float2 random, 
+    float3 viewerPosition)
 {
     PolymorphicLightSample lightSample;
 
     switch (getLightType(lightInfo))
     {
-        case kPoint:       
-            PointLight plight = CreatePointLight(lightInfo);
-            lightSample = calcPointLightSample(viewerPosition, plight); 
-        break;
-        case kTriangle:    
-            TriangleLight tlight = CreateTriangleLight(lightInfo);
-            lightSample = calcTriangleSample(random, viewerPosition, tlight); 
-        break;
-        case kDirectional: 
-            DirectionalLight dlight = CreateDirectionalLight(lightInfo);
-            lightSample = calcDirectionalLightSample(random, viewerPosition, dlight); 
-        break;
-        case kEnvironment: 
-            EnvironmentLight elight = CreateEnvironmentLight(lightInfo);
-            lightSample = calcEnvironmentLightSample(random, viewerPosition, elight); 
-        break;
+        case kPoint:       lightSample = calcPointLightSample(viewerPosition, CreatePointLight(lightInfo)); break;
+        case kTriangle:    lightSample = calcTriangleSample(random, viewerPosition, CreateTriangleLight(lightInfo)); break;
+        case kDirectional: lightSample = calcDirectionalLightSample(random, viewerPosition, CreateDirectionalLight(lightInfo)); break;
+        case kEnvironment: lightSample = calcEnvironmentLightSample(random, viewerPosition, CreateEnvironmentLight(lightInfo)); break;
     }
 
     if (lightSample.solidAnglePdf > 0)
@@ -459,6 +446,7 @@ PolymorphicLightSample calcSample(
         lightSample.radiance *= evaluateLightShaping(unpackLightShaping(lightInfo),
             viewerPosition, lightSample.position);
     }
+
 
     return lightSample;
 }
@@ -469,11 +457,9 @@ float getPower(
     switch (getLightType(lightInfo))
     {
     case kPoint:       
-        PointLight plight = CreatePointLight(lightInfo);
-        return getPointLightPower(plight);
-    case kTriangle:    
-        TriangleLight tlight = CreateTriangleLight(lightInfo);
-        return getTrianglePower(tlight);
+        return getPointLightPower(CreatePointLight(lightInfo));
+    case kTriangle:
+        return getTrianglePower(CreateTriangleLight(lightInfo));
     case kDirectional: 
     
         return 0; // infinite lights don't go into the local light PDF map

@@ -64,12 +64,12 @@ void main() {
     if (isValidSecondarySurface && !isEnvironmentMap && g_Const.enableRestirDI == 1)
     {
         RTXDI_SampleParameters sampleParams = RTXDI_InitSampleParameters(
-            numPrimaryLocalLightSamples,
-            numPrimaryInfiniteLightSamples,
-            numPrimaryEnvironmentSamples,
-            0,      // numBrdfSamples
+            0,// numPrimaryLocalLightSamples,
+            0,// numPrimaryInfiniteLightSamples,
+            0,// numPrimaryEnvironmentSamples,
+            1,      // numBrdfSamples
             0.f,    // brdfCutoff 
-            0.f);   // brdfMinRayT
+            0.001f);   // brdfMinRayT
 
         RAB_LightSample lightSample;
         RTXDI_DIReservoir reservoir = RTXDI_SampleLightsForSurface(rng, tileRng, secondarySurface,
@@ -80,26 +80,27 @@ void main() {
         float4 secondaryClipPos = g_Const.view.matWorldToClip * float4(secondaryGBufferData.worldPos, 1.0);
         secondaryClipPos.xyz /= secondaryClipPos.w;
 
-        if (all(bvec2(abs(secondaryClipPos.x) < 1.0, abs(secondaryClipPos.y) < 1.0)) && secondaryClipPos.w > 0)
-        {
-            int2 secondaryPixelPos = int2(secondaryClipPos.xy * g_Const.view.clipToWindowScale + g_Const.view.clipToWindowBias);
-            secondarySurface.viewDepth = secondaryClipPos.w;
+        // if (all(bvec2(abs(secondaryClipPos.x) < 1.0, abs(secondaryClipPos.y) < 1.0)) && secondaryClipPos.w > 0)
+        // {
+        //     int2 secondaryPixelPos = int2(secondaryClipPos.xy * g_Const.view.clipToWindowScale + g_Const.view.clipToWindowBias);
+        //     secondarySurface.viewDepth = secondaryClipPos.w;
 
-            RTXDI_DISpatialResamplingParameters sparams;
-            sparams.sourceBufferIndex = g_Const.restirDI.bufferIndices.shadingInputBufferIndex;
-            sparams.numSamples = g_Const.restirDI.spatialResamplingParams.numSpatialSamples;
-            sparams.numDisocclusionBoostSamples = 0;
-            sparams.targetHistoryLength = 0;
-            sparams.biasCorrectionMode = g_Const.restirDI.spatialResamplingParams.spatialBiasCorrection;
-            sparams.samplingRadius = g_Const.restirDI.spatialResamplingParams.spatialSamplingRadius;
-            sparams.depthThreshold = g_Const.restirDI.spatialResamplingParams.spatialDepthThreshold;
-            sparams.normalThreshold = g_Const.restirDI.spatialResamplingParams.spatialNormalThreshold;
-            sparams.enableMaterialSimilarityTest = false;
-            sparams.discountNaiveSamples = false;
+        //     RTXDI_DISpatialResamplingParameters sparams;
+        //     sparams.sourceBufferIndex = g_Const.restirDI.bufferIndices.shadingInputBufferIndex;
+        //     sparams.numSamples = g_Const.restirDI.spatialResamplingParams.numSpatialSamples;
+        //     sparams.numDisocclusionBoostSamples = 0;
+        //     sparams.targetHistoryLength = 0;
+        //     sparams.biasCorrectionMode = g_Const.restirDI.spatialResamplingParams.spatialBiasCorrection;
+        //     sparams.samplingRadius = g_Const.restirDI.spatialResamplingParams.spatialSamplingRadius;
+        //     sparams.depthThreshold = g_Const.restirDI.spatialResamplingParams.spatialDepthThreshold;
+        //     sparams.normalThreshold = g_Const.restirDI.spatialResamplingParams.spatialNormalThreshold;
+        //     sparams.enableMaterialSimilarityTest = false;
+        //     sparams.discountNaiveSamples = false;
 
-            reservoir = RTXDI_DISpatialResampling(secondaryPixelPos, secondarySurface, reservoir,
-                rng, params, g_Const.restirDI.reservoirBufferParams, sparams, lightSample);
-        }
+        //     reservoir = RTXDI_DISpatialResampling(secondaryPixelPos, secondarySurface, reservoir,
+        //         rng, params, g_Const.restirDI.reservoirBufferParams, sparams, lightSample);
+
+        // }
 
         float3 indirectDiffuse = vec3(0);
         float3 indirectSpecular = vec3(0);
@@ -123,7 +124,7 @@ void main() {
         RAB_GetSurfaceBrdfSample(secondarySurface, rng, ray.Direction);
         vec3 emission;
         GetSurface(ray, emission);
-        radiance += emission * 12 * secondarySurface.diffuseAlbedo;
+        radiance += emission * secondarySurface.diffuseAlbedo;
     }
 
     RTXDI_GIReservoir reservoir = RTXDI_EmptyGIReservoir();

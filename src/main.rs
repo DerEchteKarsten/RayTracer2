@@ -644,7 +644,8 @@ fn main() {
                         g_const.prev_view = g_const.view;
                         g_const.view = camera.planar_view_constants();
                         g_const.frame = frame as u32;
-
+                        g_const.restir_gi.temporal_resampling_params.uniform_random_number = rand::random();
+                        g_const.restir_di.temporal_resampling_params.uniform_random_number = rand::random();
                         g_const.restir_di.buffer_indices.temporal_resampling_input_buffer_index ^= g_const.restir_di.buffer_indices.shading_input_buffer_index;
                         g_const.restir_di.buffer_indices.shading_input_buffer_index ^= g_const.restir_di.buffer_indices.temporal_resampling_input_buffer_index;
                         g_const.restir_di.buffer_indices.temporal_resampling_input_buffer_index ^= g_const.restir_di.buffer_indices.shading_input_buffer_index;

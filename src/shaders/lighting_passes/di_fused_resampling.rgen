@@ -61,7 +61,7 @@ void main() {
     stparams.numDisocclusionBoostSamples = g_Const.restirDI.spatialResamplingParams.numDisocclusionBoostSamples;
     stparams.samplingRadius = g_Const.restirDI.spatialResamplingParams.spatialSamplingRadius;
     stparams.enableVisibilityShortcut = g_Const.restirDI.temporalResamplingParams.discardInvisibleSamples == 1;
-    stparams.enablePermutationSampling = false;
+    stparams.enablePermutationSampling = g_Const.restirDI.temporalResamplingParams.enablePermutationSampling == 1;
     stparams.enableMaterialSimilarityTest = true;
     stparams.uniformRandomNumber = g_Const.restirDI.temporalResamplingParams.uniformRandomNumber;
     stparams.discountNaiveSamples = false;
@@ -79,7 +79,6 @@ void main() {
         ShadeSurfaceWithLightSample(reservoir, surface, lightSample,
             /* previousFrameTLAS = */ false, /* enableVisibilityReuse = */ true, diffuse, specular, lightDistance);
 
-        diffuse = lightSample.radiance;
         specular = DemodulateSpecular(surface.specularF0, specular);
     }
 

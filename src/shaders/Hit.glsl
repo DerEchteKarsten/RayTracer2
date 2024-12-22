@@ -38,7 +38,7 @@ void GetGeometryFromHit(
 
     specularF0 = mix(vec3(0.0), color, geometryInfo.metallicFactor);
     roughness = 1.0;//geometryInfo.roughness;
-    emission = geometryInfo.emission.xyz;
+    emission = geometryInfo.emission.xyz * 12.0;
 }
 
 RAB_Surface GetSurface(RayDesc ray, out vec3 emission) {

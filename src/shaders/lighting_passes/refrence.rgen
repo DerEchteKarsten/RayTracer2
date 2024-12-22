@@ -35,7 +35,7 @@ void main() {
                 break;
             }
             
-            radiance += throughput * emission * 12;
+            radiance += throughput * emission;
 			throughput *= surface.diffuseAlbedo;
             
             RAB_GetSurfaceBrdfSample(surface, rng, ray.Direction);

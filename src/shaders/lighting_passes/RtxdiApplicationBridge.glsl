@@ -518,9 +518,9 @@ RAB_LightSample RAB_SamplePolymorphicLight(RAB_LightInfo lightInfo, RAB_Surface 
     RAB_LightSample lightSample;
     lightSample.position = pls.position;
     lightSample.normal = pls.normal;
-    lightSample.radiance = vec3(14.0);//pls.radiance;
-    lightSample.solidAnglePdf = 1.0;//pls.solidAnglePdf;
-    lightSample.lightType = kTriangle;//getLightType(lightInfo);
+    lightSample.radiance = pls.radiance;
+    lightSample.solidAnglePdf = pls.solidAnglePdf;
+    lightSample.lightType = getLightType(lightInfo);
     return lightSample;
 }
 

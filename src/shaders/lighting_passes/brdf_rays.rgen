@@ -15,7 +15,6 @@ layout(location = 0) rayPayloadEXT Payload p;
 #include "ShaderParameters.glsl"
 #include "Hit.glsl"
 
-const bool enableIndirectEmissiveSurfaces = true; 
 
 void main() 
 {	
@@ -122,7 +121,7 @@ void main()
     // Include the emissive component of surfaces seen with BRDF rays if requested (i.e. when Direct Lighting mode
     // is set to BRDF) or on delta reflection rays because those bypass ReSTIR GI and direct specular lighting,
     // and we need to see reflections of lamps and the sky in mirrors.
-    const bool includeEmissiveComponent = enableIndirectEmissiveSurfaces || (isSpecularRay && isDeltaSurface);
+    const bool includeEmissiveComponent = g_Const.enableRestirDI == 0 || (isSpecularRay && isDeltaSurface);
 
     if (p.geometryIndex != ~0u)
     {
@@ -131,7 +130,7 @@ void main()
         GetGeometryFromHit(p.primitiveId, p.geometryIndex, p.uv, normal, specularF0, roughness, color, emission);
 
         if (includeEmissiveComponent)
-            radiance += emission * 12;
+            radiance += emission;
 
         secondarySurface.position = ray.Origin + ray.Direction * p.depth;
         secondarySurface.normal = (dot(normal, ray.Direction) < 0) ? normal : -normal;
