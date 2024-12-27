@@ -150,7 +150,7 @@ fn main() {
     let model = Model::from_gltf(&mut ctx, model).unwrap();
     log::trace!("Model Loaded");
 
-    let model_mat = Mat4::from_scale(vec3(0.1, 0.1, 0.1));
+    let model_mat = Mat4::IDENTITY;
     let tlas = {
         let instaces = &[model.instance(model_mat)];
 

@@ -109,6 +109,10 @@ void main()
     triLight.edge1 = positions[1] - positions[0];
     triLight.edge2 = positions[2] - positions[0];
     triLight.radiance = radiance;
+    debugPrintfEXT("%v3f", triLight.base);
+    debugPrintfEXT("%v3f", triLight.edge1);
+    debugPrintfEXT("%v3f", triLight.edge2);
+
 
     RAB_LightInfo lightInfo = StoreTriangleLight(triLight);
 

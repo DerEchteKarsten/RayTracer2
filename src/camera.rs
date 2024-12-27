@@ -8,7 +8,7 @@ use winit::{
 
 use crate::{shader_params::PlanarViewConstants, WINDOW_SIZE};
 
-const MOVE_SPEED: f32 = 3.0;
+const MOVE_SPEED: f32 = 30.0;
 const ANGLE_PER_POINT: f32 = 1.0;
 
 const UP: Vec3 = vec3(0.0, -1.0, 0.0);
